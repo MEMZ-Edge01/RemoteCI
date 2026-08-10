@@ -1,0 +1,45 @@
+# ── .NET ──────────────────────────────────────────────
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+packages/
+artifacts/
+.vs/
+# ClassIsland 插件打包产物（可重新生成）
+*.cipx
+cipx/
+
+# ── Android / Gradle ─────────────────────────────────
+*.apk
+*.aab
+*.ap_
+*.dex
+wearos/.gradle/
+wearos/build/
+wearos/**/build/
+wearos/local.properties
+wearos/.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ── IDE / OS ─────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Runtime / logs ───────────────────────────────────
+*.log
+*.pid
+*.seed
+*.pid.lock
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

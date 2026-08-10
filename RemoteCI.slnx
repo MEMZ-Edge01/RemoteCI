@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/plugin/">
+    <Project Path="plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj" />
+  </Folder>
+  <Folder Name="/server/">
+    <Project Path="server/RemoteCI.Server/RemoteCI.Server.csproj" />
+  </Folder>
+  <Folder Name="/server/tests/">
+    <Project Path="server/tests/RemoteCI.Server.Tests/RemoteCI.Server.Tests.csproj" />
+  </Folder>
+  <Folder Name="/shared/">
+    <Project Path="shared/RemoteCI.Shared/RemoteCI.Shared.csproj" />
+  </Folder>
+</Solution>

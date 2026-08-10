@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RemoteCI.Shared</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <!-- 协议库仅依赖 BCL，保持零第三方依赖，降低维护与合规负担 -->
+  </PropertyGroup>
+
+</Project>
