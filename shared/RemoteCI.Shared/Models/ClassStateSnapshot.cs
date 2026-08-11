@@ -53,6 +53,15 @@ public sealed class ClassStateSnapshot
     [JsonPropertyName("isHibernateAvailable")]
     public bool IsHibernateAvailable { get; set; }
 
+    [JsonPropertyName("isVolumeControlAvailable")]
+    public bool IsVolumeControlAvailable { get; set; }
+
+    [JsonPropertyName("volumePercent")]
+    public int VolumePercent { get; set; }
+
+    [JsonPropertyName("isMuted")]
+    public bool IsMuted { get; set; }
+
     [JsonPropertyName("generatedAt")]
     public DateTimeOffset GeneratedAt { get; set; } = DateTimeOffset.UtcNow;
 }

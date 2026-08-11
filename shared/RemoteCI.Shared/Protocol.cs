@@ -90,6 +90,7 @@ public enum CommandKind
     ClearNotifications = 3,
     SetMainMenuVisibility = 4,
     Power = 5,
+    Volume = 6,
 }
 
 public enum PowerActionKind
@@ -106,7 +107,7 @@ public static class CommandPermissions
     {
         CommandKind.ChangeSchedule => UserPermissions.ManageSchedule,
         CommandKind.SendNotification or CommandKind.ClearNotifications => UserPermissions.SendNotifications,
-        CommandKind.SetMainMenuVisibility or CommandKind.Power => UserPermissions.SystemControl,
+        CommandKind.SetMainMenuVisibility or CommandKind.Power or CommandKind.Volume => UserPermissions.SystemControl,
         _ => UserPermissions.None,
     };
 }

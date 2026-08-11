@@ -32,6 +32,7 @@ object Protocol {
     const val CMD_CLEAR_NOTIFICATIONS = 3
     const val CMD_SET_MAIN_MENU_VISIBILITY = 4
     const val CMD_POWER = 5
+    const val CMD_VOLUME = 6
     const val POWER_SHUTDOWN = 1
     const val POWER_RESTART = 2
     const val POWER_SLEEP = 3
@@ -78,6 +79,9 @@ data class ClassStateSnapshot(
     @SerialName("isMainMenuVisible") val isMainMenuVisible: Boolean = true,
     @SerialName("isSleepAvailable") val isSleepAvailable: Boolean = false,
     @SerialName("isHibernateAvailable") val isHibernateAvailable: Boolean = false,
+    @SerialName("isVolumeControlAvailable") val isVolumeControlAvailable: Boolean = false,
+    @SerialName("volumePercent") val volumePercent: Int = 0,
+    @SerialName("isMuted") val isMuted: Boolean = false,
     @SerialName("generatedAt") val generatedAt: String? = null,
 )
 
@@ -147,6 +151,13 @@ data class CommandMessage(
     val notification: NotificationRequest? = null,
     @SerialName("mainMenuVisible") val mainMenuVisible: Boolean? = null,
     @SerialName("powerAction") val powerAction: Int? = null,
+    val volume: VolumeControlRequest? = null,
+)
+
+@Serializable
+data class VolumeControlRequest(
+    val level: Int? = null,
+    val muted: Boolean? = null,
 )
 
 @Serializable

@@ -52,6 +52,7 @@ object ConnectionManager {
     private var webSocket: WebSocket? = null
     private var activeJob: Job? = null
     private var refreshJob: Job? = null
+    private var volumeJob: Job? = null
     private var desiredSettings: WatchSettings? = null
     private var accessToken: String? = null
     private var generation = 0
@@ -77,6 +78,7 @@ object ConnectionManager {
         desiredSettings = settings
         activeJob?.cancel()
         refreshJob?.cancel()
+        volumeJob?.cancel()
         webSocket?.close(1000, "switch")
         webSocket = null
         state.value = State.Connecting
@@ -117,6 +119,7 @@ object ConnectionManager {
         desiredSettings = null
         activeJob?.cancel()
         refreshJob?.cancel()
+        volumeJob?.cancel()
         webSocket?.close(1000, "disconnect")
         webSocket = null
         accessToken = null
@@ -190,6 +193,28 @@ object ConnectionManager {
     fun sendPowerAction(action: Int) {
         sendCommand(
             CommandMessage(command = Protocol.CMD_POWER, powerAction = action),
+            Protocol.PERMISSION_SYSTEM_CONTROL,
+        )
+    }
+
+    fun setVolume(level: Int) {
+        // 表冠会高频产生事件，只发送短时间内的最后一个值，避免淹没 WebSocket 命令队列。
+        volumeJob?.cancel()
+        volumeJob = scope.launch {
+            delay(80)
+            sendCommand(
+                CommandMessage(
+                    command = Protocol.CMD_VOLUME,
+                    volume = VolumeControlRequest(level = level.coerceIn(0, 100)),
+                ),
+                Protocol.PERMISSION_SYSTEM_CONTROL,
+            )
+        }
+    }
+
+    fun setMuted(muted: Boolean) {
+        sendCommand(
+            CommandMessage(command = Protocol.CMD_VOLUME, volume = VolumeControlRequest(muted = muted)),
             Protocol.PERMISSION_SYSTEM_CONTROL,
         )
     }

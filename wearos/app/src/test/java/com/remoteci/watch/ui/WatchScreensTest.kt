@@ -104,6 +104,14 @@ class WatchScreensTest {
     }
 
     @Test
+    fun `rotary volume follows Wear OS direction and clamps`() {
+        assertEquals(52, adjustVolumeForRotary(50, 1f))
+        assertEquals(48, adjustVolumeForRotary(50, -1f))
+        assertEquals(100, adjustVolumeForRotary(100, 1f))
+        assertEquals(0, adjustVolumeForRotary(0, -1f))
+    }
+
+    @Test
     fun `only schedule managers can see next class details`() {
         assertFalse(canViewExtendedSchedule(UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)))
         assertTrue(

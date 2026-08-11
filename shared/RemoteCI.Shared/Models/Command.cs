@@ -23,10 +23,25 @@ public sealed class CommandMessage
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PowerActionKind? PowerAction { get; set; }
 
+    [JsonPropertyName("volume")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public VolumeControlRequest? Volume { get; set; }
+
     /// <summary>接入端覆盖此字段，插件只信任经服务端或本地挑战认证后的身份。</summary>
     [JsonPropertyName("requestedBy")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public UserProfile? RequestedBy { get; set; }
+}
+
+public sealed class VolumeControlRequest
+{
+    [JsonPropertyName("level")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Level { get; set; }
+
+    [JsonPropertyName("muted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Muted { get; set; }
 }
 
 public sealed class CommandResult

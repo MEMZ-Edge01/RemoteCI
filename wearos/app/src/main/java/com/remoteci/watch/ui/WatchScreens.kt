@@ -3,6 +3,7 @@ package com.remoteci.watch.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -24,6 +25,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.List
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.EditNotifications
 import androidx.compose.material.icons.rounded.NotificationsOff
@@ -36,6 +39,7 @@ import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +51,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -392,6 +399,7 @@ internal fun ControlScreen(
     onOpenNotification: () -> Unit,
     onClearNotifications: () -> Unit,
     onToggleMainMenu: () -> Unit,
+    onOpenVolume: () -> Unit,
     onOpenPower: () -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = "控制") {
@@ -409,6 +417,14 @@ internal fun ControlScreen(
             onToggleMainMenu,
         )
     }
+    item {
+        ActionButton(
+            "音量",
+            if (snapshot?.isMuted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
+            canControlSystem && snapshot?.isVolumeControlAvailable == true,
+            onOpenVolume,
+        )
+    }
     item { ActionButton("电源", Icons.Rounded.PowerSettingsNew, canControlSystem, onOpenPower) }
     if (!resultText.isNullOrBlank()) item { Hint(resultText) }
     item { BackButton(onBack) }
@@ -419,6 +435,63 @@ internal fun shouldShowClearNotifications(snapshot: ClassStateSnapshot?): Boolea
 
 internal fun mainMenuActionLabel(snapshot: ClassStateSnapshot?): String =
     if (snapshot?.isMainMenuVisible == false) "显示主菜单" else "隐藏主菜单"
+
+@Composable
+internal fun VolumeScreen(
+    volumePercent: Int,
+    muted: Boolean,
+    available: Boolean,
+    onVolumeChange: (Int) -> Unit,
+    onMutedChange: (Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
+    var localVolume by remember(volumePercent) { mutableStateOf(volumePercent.coerceIn(0, 100)) }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    WatchList(title = "音量") {
+        item { Hint(if (muted) "当前已静音 · 音量 $localVolume%" else "当前音量 $localVolume%") }
+        item {
+            Slider(
+                value = localVolume.toFloat(),
+                onValueChange = { localVolume = it.toInt().coerceIn(0, 100) },
+                onValueChangeFinished = { onVolumeChange(localVolume) },
+                valueRange = 0f..100f,
+                enabled = available,
+                modifier = Modifier.fillMaxWidth(.78f)
+                    .focusRequester(focusRequester)
+                    .onRotaryScrollEvent { event ->
+                        val adjusted = adjustVolumeForRotary(localVolume, event.verticalScrollPixels)
+                        if (adjusted != localVolume) {
+                            localVolume = adjusted
+                            onVolumeChange(adjusted)
+                        }
+                        true
+                    }
+                    .focusable(),
+            )
+        }
+        item { Hint("可触摸拖动，也可旋转表冠调节") }
+        item {
+            ActionButton(
+                if (muted) "取消静音" else "静音",
+                if (muted) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff,
+                available,
+                onClick = { onMutedChange(!muted) },
+            )
+        }
+        item { BackButton(onBack) }
+    }
+}
+
+internal fun adjustVolumeForRotary(current: Int, verticalScrollPixels: Float): Int {
+    val step = when {
+        verticalScrollPixels > 0 -> 2
+        verticalScrollPixels < 0 -> -2
+        else -> 0
+    }
+    return (current + step).coerceIn(0, 100)
+}
 
 @Composable
 internal fun PowerScreen(

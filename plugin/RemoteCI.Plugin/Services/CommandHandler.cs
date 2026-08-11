@@ -57,6 +57,7 @@ public sealed class CommandHandler
                 CommandKind.ClearNotifications => await HandleClearNotificationsAsync(),
                 CommandKind.SetMainMenuVisibility => await HandleMainMenuVisibilityAsync(command.MainMenuVisible),
                 CommandKind.Power => HandlePowerAction(command.PowerAction),
+                CommandKind.Volume => HandleVolume(command.Volume),
                 _ => Failure(CommandResultCodes.InvalidRequest, $"未知指令：{command.Command}"),
             };
         }
@@ -186,6 +187,23 @@ public sealed class CommandHandler
             PowerActionKind.Sleep => "Windows 即将进入睡眠",
             PowerActionKind.Hibernate => "Windows 即将进入休眠",
             _ => "电源操作已提交",
+        });
+    }
+
+    private CommandResult HandleVolume(VolumeControlRequest? request)
+    {
+        if (request is null || request is { Level: null, Muted: null })
+            return Failure(CommandResultCodes.InvalidRequest, "缺少音量控制参数");
+        if (request.Level is < 0 or > 100)
+            return Failure(CommandResultCodes.InvalidRequest, "音量必须在 0-100 之间");
+
+        _hostControl.SetVolume(request.Level, request.Muted);
+        HostStateChanged?.Invoke();
+        return Success(request.Muted switch
+        {
+            true => "电脑已静音",
+            false => "电脑已取消静音",
+            _ => $"电脑音量已调至 {request.Level}%",
         });
     }
 

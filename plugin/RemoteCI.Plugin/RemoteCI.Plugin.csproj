@@ -30,6 +30,8 @@
     </PackageReference>
     <!-- Fleck：嵌入式 WebSocket 服务器（MIT），用于局域网直连，不依赖 ASP.NET Core 运行时 -->
     <PackageReference Include="Fleck" Version="1.2.0" />
+    <!-- NAudio.Wasapi：通过 Windows Core Audio 读取和控制默认播放设备的主音量。 -->
+    <PackageReference Include="NAudio.Wasapi" Version="2.3.0" />
   </ItemGroup>
 
   <ItemGroup>

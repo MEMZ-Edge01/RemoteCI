@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using Avalonia.Threading;
 using ClassIsland.Core.Abstractions.Services;
 using Microsoft.Extensions.Logging;
+using NAudio.CoreAudioApi;
 using RemoteCI.Shared;
 
 namespace RemoteCI.Plugin.Services;
@@ -24,6 +25,41 @@ public sealed class ClassIslandHostControlService(
     public bool IsSleepAvailable => OperatingSystem.IsWindows();
 
     public bool IsHibernateAvailable => OperatingSystem.IsWindows() && NativeMethods.IsPwrHibernateAllowed();
+
+    public bool TryGetVolumeState(out int volumePercent, out bool muted)
+    {
+        volumePercent = 0;
+        muted = false;
+        if (!OperatingSystem.IsWindows()) return false;
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            volumePercent = (int)Math.Round(device.AudioEndpointVolume.MasterVolumeLevelScalar * 100);
+            muted = device.AudioEndpointVolume.Mute;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "无法读取 Windows 默认播放设备音量");
+            return false;
+        }
+    }
+
+    public void SetVolume(int? level, bool? muted)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("音量控制仅支持 Windows");
+        if (level is null && muted is null)
+            throw new ArgumentException("缺少音量或静音状态");
+        if (level is < 0 or > 100)
+            throw new ArgumentOutOfRangeException(nameof(level), "音量必须在 0-100 之间");
+
+        using var enumerator = new MMDeviceEnumerator();
+        using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+        if (level is { } value) device.AudioEndpointVolume.MasterVolumeLevelScalar = value / 100f;
+        if (muted is { } isMuted) device.AudioEndpointVolume.Mute = isMuted;
+    }
 
     public async Task ClearNotificationsAsync()
     {

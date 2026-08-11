@@ -31,6 +31,7 @@ private enum class Screen {
     Control,
     Notification,
     Power,
+    Volume,
     Settings,
     ConnectionSettings,
     NotificationSettings,
@@ -101,7 +102,8 @@ fun RemoteCiApp(context: Context) {
         ) screen = Screen.Home
         if (user != null && !user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) && screen == Screen.Notification)
             screen = Screen.Home
-        if (user != null && !user.has(Protocol.PERMISSION_SYSTEM_CONTROL) && screen == Screen.Power)
+        if (user != null && !user.has(Protocol.PERMISSION_SYSTEM_CONTROL) &&
+            screen in listOf(Screen.Power, Screen.Volume))
             screen = Screen.Home
         if (user != null && !user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) &&
             !user.has(Protocol.PERMISSION_SYSTEM_CONTROL) && screen == Screen.Control)
@@ -123,6 +125,7 @@ fun RemoteCiApp(context: Context) {
             Screen.ScheduleDatePicker -> Screen.ScheduleOverview
             Screen.Notification -> Screen.Control
             Screen.Power -> Screen.Control
+            Screen.Volume -> Screen.Control
             Screen.ConnectionSettings, Screen.NotificationSettings -> Screen.Settings
             else -> Screen.Home
         }
@@ -240,6 +243,7 @@ fun RemoteCiApp(context: Context) {
             onToggleMainMenu = {
                 ConnectionManager.setMainMenuVisible(!(displayedSnapshot?.isMainMenuVisible ?: true))
             },
+            onOpenVolume = { screen = Screen.Volume },
             onOpenPower = { screen = Screen.Power },
             onBack = { screen = Screen.Home },
         )
@@ -248,6 +252,15 @@ fun RemoteCiApp(context: Context) {
             sleepAvailable = displayedSnapshot?.isSleepAvailable == true,
             hibernateAvailable = displayedSnapshot?.isHibernateAvailable == true,
             onPowerAction = ConnectionManager::sendPowerAction,
+            onBack = { screen = Screen.Control },
+        )
+
+        Screen.Volume -> VolumeScreen(
+            volumePercent = displayedSnapshot?.volumePercent ?: 0,
+            muted = displayedSnapshot?.isMuted == true,
+            available = displayedSnapshot?.isVolumeControlAvailable == true,
+            onVolumeChange = ConnectionManager::setVolume,
+            onMutedChange = ConnectionManager::setMuted,
             onBack = { screen = Screen.Control },
         )
 

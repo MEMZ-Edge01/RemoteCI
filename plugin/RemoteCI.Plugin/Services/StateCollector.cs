@@ -60,6 +60,7 @@ public sealed class StateCollector
     {
         var currentSubject = SubjectName(_lessons.CurrentSubject);
         var nextSubject = SubjectName(_lessons.NextClassSubject);
+        var hasVolume = _hostControl.TryGetVolumeState(out var volumePercent, out var isMuted);
         return new ClassStateSnapshot
         {
             ScheduleDate = DateTime.Today.ToString("yyyy-MM-dd"),
@@ -78,6 +79,9 @@ public sealed class StateCollector
             IsMainMenuVisible = _hostControl.IsMainMenuVisible,
             IsSleepAvailable = _hostControl.IsSleepAvailable,
             IsHibernateAvailable = _hostControl.IsHibernateAvailable,
+            IsVolumeControlAvailable = hasVolume,
+            VolumePercent = volumePercent,
+            IsMuted = isMuted,
             GeneratedAt = DateTimeOffset.UtcNow,
         };
     }

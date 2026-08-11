@@ -10,6 +10,7 @@ public sealed class CommandPermissionsTests
     [InlineData(CommandKind.ClearNotifications, UserPermissions.SendNotifications)]
     [InlineData(CommandKind.SetMainMenuVisibility, UserPermissions.SystemControl)]
     [InlineData(CommandKind.Power, UserPermissions.SystemControl)]
+    [InlineData(CommandKind.Volume, UserPermissions.SystemControl)]
     public void ControlCommands_UseExpectedPermission(CommandKind command, UserPermissions expected)
     {
         Assert.Equal(expected, CommandPermissions.Required(command));
