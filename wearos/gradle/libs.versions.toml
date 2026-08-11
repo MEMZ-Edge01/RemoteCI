@@ -18,6 +18,7 @@ compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
+compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
 # Wear Compose Material 1.6 已移除 TextField；文本输入改用标准 Compose Material3
 #（版本由 compose-bom 管理，与 wear Material 主题共存，API 签名一致）。
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }

@@ -16,6 +16,10 @@ public sealed class Envelope
     [JsonPropertyName("messageId")]
     public string MessageId { get; set; } = Guid.NewGuid().ToString("N");
 
+    [JsonPropertyName("replyToMessageId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReplyToMessageId { get; set; }
+
     [JsonPropertyName("timestamp")]
     public DateTimeOffset Timestamp { get; set; } = DateTimeOffset.UtcNow;
 
@@ -32,11 +36,29 @@ public sealed class Envelope
     public static Envelope StatePush(object payload) =>
         New(Protocol.MessageTypeStatePush, payload);
 
+    public static Envelope ScheduleSync(object payload) =>
+        New(Protocol.MessageTypeScheduleSync, payload);
+
     public static Envelope EventNotify(object payload) =>
         New(Protocol.MessageTypeEventNotify, payload);
 
     public static Envelope Command(object payload) =>
         New(Protocol.MessageTypeCommand, payload);
+
+    public static Envelope CommandResult(object payload) =>
+        New(Protocol.MessageTypeCommandResult, payload);
+
+    public static Envelope AuthChallenge(object payload) =>
+        New(Protocol.MessageTypeAuthChallenge, payload);
+
+    public static Envelope AuthProof(object payload) =>
+        New(Protocol.MessageTypeAuthProof, payload);
+
+    public static Envelope AuthState(object payload) =>
+        New(Protocol.MessageTypeAuthState, payload);
+
+    public static Envelope AccountSync(object payload) =>
+        New(Protocol.MessageTypeAccountSync, payload);
 
     private static Envelope New(string type, object payload) => new()
     {

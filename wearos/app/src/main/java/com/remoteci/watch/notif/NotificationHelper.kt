@@ -13,7 +13,10 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.remoteci.watch.R
 import com.remoteci.watch.data.ClassEvent
+import com.remoteci.watch.data.EventHistory
 import com.remoteci.watch.data.Protocol
+import com.remoteci.watch.data.WatchSettings
+import com.remoteci.watch.data.receives
 
 /**
  * 通知+振动助手：课程事件到达时发系统通知并振动。
@@ -33,7 +36,8 @@ object NotificationHelper {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    fun notify(context: Context, event: ClassEvent) {
+    fun handle(context: Context, event: ClassEvent, settings: WatchSettings, history: EventHistory) {
+        if (!history.markIfNew(event) || !settings.receives(event)) return
         // Android 13+ 需要通知权限
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -46,7 +50,9 @@ object NotificationHelper {
             Protocol.EVENT_ON_CLASS -> "上课了"
             Protocol.EVENT_ON_BREAKING -> "课间休息"
             Protocol.EVENT_AFTER_SCHOOL -> "放学啦"
-            else -> "课表更新"
+            Protocol.EVENT_SCHEDULE_CHANGED -> "课表已更新"
+            Protocol.EVENT_CUSTOM -> event.subject ?: "RemoteCI 通知"
+            else -> "RemoteCI"
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -57,7 +63,7 @@ object NotificationHelper {
             .setAutoCancel(true)
             .build()
 
-        NotificationManagerCompat.from(context).notify(event.event, notification)
+        NotificationManagerCompat.from(context).notify(event.id.ifBlank { event.message.orEmpty() }.hashCode(), notification)
         vibrate(context)
     }
 

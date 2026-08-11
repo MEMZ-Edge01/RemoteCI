@@ -1,85 +1,118 @@
 namespace RemoteCI.Shared;
 
-/// <summary>
-/// 协议级常量。协议 v1 冻结后，任何新增字段必须保持可选，不得破坏老客户端解析。
-/// </summary>
+/// <summary>三端共同使用的 v2 协议常量。</summary>
 public static class Protocol
 {
-    /// <summary>当前协议版本号。</summary>
-    public const int Version = 1;
+    public const int Version = 2;
 
-    /// <summary>WebSocket 消息类型：状态推送。</summary>
     public const string MessageTypeStatePush = "state_push";
-
-    /// <summary>WebSocket 消息类型：课程事件通知。</summary>
+    public const string MessageTypeScheduleSync = "schedule_sync";
     public const string MessageTypeEventNotify = "event_notify";
-
-    /// <summary>WebSocket 消息类型：控制指令。</summary>
     public const string MessageTypeCommand = "command";
+    public const string MessageTypeCommandResult = "command_result";
+    public const string MessageTypeAuthChallenge = "auth_challenge";
+    public const string MessageTypeAuthProof = "auth_proof";
+    public const string MessageTypeAuthState = "auth_state";
+    public const string MessageTypeAccountSync = "account_sync";
 
-    /// <summary>WebSocket 查询参数中携带认证 token 的参数名。</summary>
     public const string QueryToken = "token";
-
-    /// <summary>HTTP 请求头中携带认证 token 的请求头名。</summary>
     public const string HeaderAuthorization = "Authorization";
-
-    /// <summary>认证 scheme 前缀（Bearer）。</summary>
     public const string BearerScheme = "Bearer";
 }
 
-/// <summary>
-/// 连接角色：插件（数据提供方）或手表（数据消费方）。
-/// </summary>
 public enum PeerRole
 {
     Plugin = 1,
     Watch = 2,
 }
 
+public enum UserRole
+{
+    User = 1,
+    Admin = 2,
+}
+
 /// <summary>
-/// 课程时间状态，与 ClassIsland 的 TimeState 语义对齐。
+/// 有效权限位。管理员的有效权限固定为 All；普通用户至少拥有 ViewCurrentCourse。
 /// </summary>
+[Flags]
+public enum UserPermissions
+{
+    None = 0,
+    ViewCurrentCourse = 1 << 0,
+    AccessWebUi = 1 << 1,
+    ManageUsers = 1 << 2,
+    SendNotifications = 1 << 3,
+    ManageSchedule = 1 << 4,
+    SystemControl = 1 << 5,
+    All = ViewCurrentCourse | AccessWebUi | ManageUsers | SendNotifications | ManageSchedule | SystemControl,
+}
+
+public static class RolePermissions
+{
+    public static UserPermissions Effective(UserRole role, UserPermissions granted) => role == UserRole.Admin
+        ? UserPermissions.All
+        : UserPermissions.ViewCurrentCourse | (granted & ~UserPermissions.ViewCurrentCourse);
+
+    public static bool Has(UserProfileLike user, UserPermissions permission) =>
+        (Effective(user.Role, user.GrantedPermissions) & permission) == permission;
+}
+
+/// <summary>供共享权限计算使用的小接口，避免服务端实体依赖传输模型。</summary>
+public interface UserProfileLike
+{
+    UserRole Role { get; }
+    UserPermissions GrantedPermissions { get; }
+}
+
 public enum ClassStateKind
 {
-    /// <summary>未加载课表 / 未知状态。</summary>
     None = 0,
-
-    /// <summary>上课中。</summary>
     Class = 1,
-
-    /// <summary>课间休息。</summary>
     Breaking = 2,
-
-    /// <summary>已放学（超出今日时间表）。</summary>
     AfterSchool = 3,
+    PrepareClass = 4,
 }
 
-/// <summary>
-/// 课程事件类型，对应 ClassIsland LessonsService 事件。
-/// </summary>
 public enum ClassEventKind
 {
-    /// <summary>进入上课时间点。</summary>
     OnClass = 1,
-
-    /// <summary>进入课间休息时间点。</summary>
     OnBreaking = 2,
-
-    /// <summary>放学。</summary>
     OnAfterSchool = 3,
-
-    /// <summary>当前时间状态改变。</summary>
-    StateChanged = 4,
+    ScheduleChanged = 4,
+    Custom = 5,
 }
 
-/// <summary>
-/// 手表可发送的控制指令类型。
-/// </summary>
 public enum CommandKind
 {
-    /// <summary>切换周次（单双周/多周轮换）。参数：targetWeek（int，可空，缺省为自动切换）。</summary>
-    SwitchWeek = 1,
+    ChangeSchedule = 1,
+    SendNotification = 2,
+    ClearNotifications = 3,
+    SetMainMenuVisibility = 4,
+    Power = 5,
+}
 
-    /// <summary>临时换课。参数：from（string，源节次标识）、to（string，目标节次标识）。</summary>
-    TempSwapClass = 2,
+public enum PowerActionKind
+{
+    Shutdown = 1,
+    Restart = 2,
+    Sleep = 3,
+    Hibernate = 4,
+}
+
+public static class CommandPermissions
+{
+    public static UserPermissions Required(CommandKind command) => command switch
+    {
+        CommandKind.ChangeSchedule => UserPermissions.ManageSchedule,
+        CommandKind.SendNotification or CommandKind.ClearNotifications => UserPermissions.SendNotifications,
+        CommandKind.SetMainMenuVisibility or CommandKind.Power => UserPermissions.SystemControl,
+        _ => UserPermissions.None,
+    };
+}
+
+public enum ScheduleChangeMode
+{
+    Exchange = 1,
+    Replace = 2,
 }

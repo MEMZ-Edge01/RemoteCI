@@ -7,6 +7,10 @@ namespace RemoteCI.Shared.Models;
 /// </summary>
 public sealed class ClassEvent
 {
+    /// <summary>跨重连去重使用的稳定事件标识。</summary>
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
     [JsonPropertyName("event")]
     public ClassEventKind Event { get; set; }
 

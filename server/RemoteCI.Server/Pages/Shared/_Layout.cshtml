@@ -1,0 +1,69 @@
+@using Microsoft.AspNetCore.Identity
+@inject UserManager<AppUser> UserManager
+@{
+    var current = User.Identity?.IsAuthenticated == true ? await UserManager.GetUserAsync(User) : null;
+    var permissions = current is null ? UserPermissions.None : RolePermissions.Effective(current.Role, current.GrantedPermissions);
+    var currentPage = ViewContext.RouteData.Values["page"]?.ToString();
+    string NavClass(string page) => currentPage == page ? "nav-link active" : "nav-link";
+    string? CurrentPage(string page) => currentPage == page ? "page" : null;
+}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@ViewData["Title"] · RemoteCI</title>
+    <link rel="stylesheet" href="~/vendor/bootstrap-icons/font/bootstrap-icons.min.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/app.css" asp-append-version="true" />
+</head>
+<body class="@(current is null ? "auth-layout" : "app-layout")">
+    @if (current is not null)
+    {
+        <aside class="sidebar" aria-label="主导航">
+            <a class="brand" href="@(permissions.HasFlag(UserPermissions.AccessWebUi) ? Url.Page("/Index") : Url.Page("/Account"))">
+                <span class="brand-full">RemoteCI</span><span class="brand-compact" aria-hidden="true">RC</span><small>v2</small>
+            </a>
+            <nav class="side-nav">
+                @if (permissions.HasFlag(UserPermissions.AccessWebUi))
+                {
+                    <a class="@NavClass("/Index")" aria-current="@CurrentPage("/Index")" asp-page="/Index">
+                        <i class="bi bi-grid" aria-hidden="true"></i><span>概览</span>
+                    </a>
+                }
+                @if (permissions.HasFlag(UserPermissions.ManageSchedule))
+                {
+                    <a class="@NavClass("/Schedule")" aria-current="@CurrentPage("/Schedule")" asp-page="/Schedule">
+                        <i class="bi bi-calendar-week" aria-hidden="true"></i><span>七日课表</span>
+                    </a>
+                }
+                @if (permissions.HasFlag(UserPermissions.SendNotifications))
+                {
+                    <a class="@NavClass("/Notifications")" aria-current="@CurrentPage("/Notifications")" asp-page="/Notifications">
+                        <i class="bi bi-send" aria-hidden="true"></i><span>发送通知</span>
+                    </a>
+                }
+                @if (permissions.HasFlag(UserPermissions.ManageUsers))
+                {
+                    <a class="@NavClass("/Users")" aria-current="@CurrentPage("/Users")" asp-page="/Users">
+                        <i class="bi bi-people" aria-hidden="true"></i><span>人员权限</span>
+                    </a>
+                }
+                <a class="@NavClass("/Account")" aria-current="@CurrentPage("/Account")" asp-page="/Account">
+                    <i class="bi bi-person" aria-hidden="true"></i><span>个人账号</span>
+                </a>
+            </nav>
+            <form class="logout-form" method="post" asp-page="/Logout">
+                <button class="logout-button" type="submit" title="退出登录">
+                    <i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>退出</span>
+                </button>
+            </form>
+        </aside>
+    }
+    <main class="shell">
+        @if (TempData["Message"] is string message) { <div class="flash">@message</div> }
+        @if (TempData["Error"] is string error) { <div class="flash error">@error</div> }
+        @RenderBody()
+    </main>
+    <script src="~/app.js" asp-append-version="true" defer></script>
+</body>
+</html>

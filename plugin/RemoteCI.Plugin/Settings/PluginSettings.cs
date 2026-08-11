@@ -13,7 +13,7 @@ public sealed class PluginSettings : INotifyPropertyChanged
     private int _lanServerPort = 8765;
     private bool _enableCloud = true;
     private string _cloudServerUrl = "http://localhost:8080";
-    private string _pairCode = "remoteci-demo";
+    private string _pluginPairCode = string.Empty;
     private string? _cloudToken;
 
     /// <summary>是否启用局域网直连服务（手表同 WiFi 直连插件）。</summary>
@@ -44,14 +44,14 @@ public sealed class PluginSettings : INotifyPropertyChanged
         set => SetField(ref _cloudServerUrl, value);
     }
 
-    /// <summary>配对码：局域网与云端统一使用。</summary>
-    public string PairCode
+    /// <summary>WebUI 生成的一次性插件配对码；学生账号不使用此值。</summary>
+    public string PluginPairCode
     {
-        get => _pairCode;
-        set => SetField(ref _pairCode, value);
+        get => _pluginPairCode;
+        set => SetField(ref _pluginPairCode, value);
     }
 
-    /// <summary>云端配对后缓存的 token（服务端重启后失效，需重新配对）。</summary>
+    /// <summary>云端配对后缓存的长期插件凭据。</summary>
     public string? CloudToken
     {
         get => _cloudToken;

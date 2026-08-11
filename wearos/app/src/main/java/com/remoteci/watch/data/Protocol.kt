@@ -4,98 +4,219 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
-/**
- * 协议常量与数据模型。
- * 与仓库 shared/RemoteCI.Shared（C#）严格对齐：
- * 消息类型、枚举数值、JSON 字段名（小驼峰）都必须保持一致。
- */
 object Protocol {
-    const val VERSION = 1
-
+    const val VERSION = 2
     const val TYPE_STATE_PUSH = "state_push"
+    const val TYPE_SCHEDULE_SYNC = "schedule_sync"
     const val TYPE_EVENT_NOTIFY = "event_notify"
     const val TYPE_COMMAND = "command"
+    const val TYPE_COMMAND_RESULT = "command_result"
+    const val TYPE_AUTH_CHALLENGE = "auth_challenge"
+    const val TYPE_AUTH_PROOF = "auth_proof"
+    const val TYPE_AUTH_STATE = "auth_state"
 
-    // ClassStateKind（与 C# 枚举数值对齐）
     const val STATE_NONE = 0
     const val STATE_CLASS = 1
     const val STATE_BREAKING = 2
     const val STATE_AFTER_SCHOOL = 3
+    const val STATE_PREPARE_CLASS = 4
 
-    // ClassEventKind
     const val EVENT_ON_CLASS = 1
     const val EVENT_ON_BREAKING = 2
     const val EVENT_AFTER_SCHOOL = 3
-    const val EVENT_STATE_CHANGED = 4
+    const val EVENT_SCHEDULE_CHANGED = 4
+    const val EVENT_CUSTOM = 5
 
-    // CommandKind
-    const val CMD_SWITCH_WEEK = 1
-    const val CMD_TEMP_SWAP = 2
+    const val CMD_CHANGE_SCHEDULE = 1
+    const val CMD_SEND_NOTIFICATION = 2
+    const val CMD_CLEAR_NOTIFICATIONS = 3
+    const val CMD_SET_MAIN_MENU_VISIBILITY = 4
+    const val CMD_POWER = 5
+    const val POWER_SHUTDOWN = 1
+    const val POWER_RESTART = 2
+    const val POWER_SLEEP = 3
+    const val POWER_HIBERNATE = 4
+    const val CHANGE_EXCHANGE = 1
+    const val CHANGE_REPLACE = 2
+
+    const val ROLE_USER = 1
+    const val ROLE_ADMIN = 2
+    const val PERMISSION_VIEW_CURRENT = 1
+    const val PERMISSION_ACCESS_WEB_UI = 2
+    const val PERMISSION_MANAGE_USERS = 4
+    const val PERMISSION_SEND_NOTIFICATIONS = 8
+    const val PERMISSION_MANAGE_SCHEDULE = 16
+    const val PERMISSION_SYSTEM_CONTROL = 32
 }
 
-/** WebSocket 消息统一信封。 */
 @Serializable
 data class Envelope(
     @SerialName("protocolVersion") val protocolVersion: Int = Protocol.VERSION,
     val type: String,
     @SerialName("messageId") val messageId: String = "",
+    @SerialName("replyToMessageId") val replyToMessageId: String? = null,
     val timestamp: String = "",
-    val sender: String? = null,
+    val sender: Int? = null,
     val payload: JsonElement? = null,
 )
 
-/** 课表状态快照（state_push 载荷）。 */
 @Serializable
 data class ClassStateSnapshot(
+    @SerialName("scheduleDate") val scheduleDate: String? = null,
     @SerialName("currentSubject") val currentSubject: String? = null,
     @SerialName("nextClassSubject") val nextClassSubject: String? = null,
     @SerialName("currentState") val currentState: Int = Protocol.STATE_NONE,
     @SerialName("currentTimeLayoutItem") val currentTimeLayoutItem: String? = null,
     @SerialName("nextClassTimeLayoutItem") val nextClassTimeLayoutItem: String? = null,
     @SerialName("classPlanName") val classPlanName: String? = null,
-    @SerialName("weekRotation") val weekRotation: Int? = null,
     @SerialName("isClassPlanEnabled") val isClassPlanEnabled: Boolean = false,
     @SerialName("isClassPlanLoaded") val isClassPlanLoaded: Boolean = false,
     @SerialName("onClassLeftTime") val onClassLeftTime: String? = null,
     @SerialName("onBreakingLeftTime") val onBreakingLeftTime: String? = null,
     @SerialName("lessonConfirmed") val lessonConfirmed: Boolean = false,
+    @SerialName("isNotificationPlaying") val isNotificationPlaying: Boolean = false,
+    @SerialName("isMainMenuVisible") val isMainMenuVisible: Boolean = true,
+    @SerialName("isSleepAvailable") val isSleepAvailable: Boolean = false,
+    @SerialName("isHibernateAvailable") val isHibernateAvailable: Boolean = false,
     @SerialName("generatedAt") val generatedAt: String? = null,
 )
 
-/** 课程事件（event_notify 载荷），用于手表通知+振动。 */
+@Serializable
+data class ScheduleBundle(
+    @SerialName("fromDate") val fromDate: String = "",
+    @SerialName("generatedAt") val generatedAt: String? = null,
+    val days: List<ScheduleDay> = emptyList(),
+    val subjects: List<SubjectEntry> = emptyList(),
+)
+
+@Serializable
+data class ScheduleDay(
+    val date: String,
+    val revision: String,
+    @SerialName("classPlanName") val classPlanName: String? = null,
+    val enabled: Boolean = false,
+    val courses: List<CourseEntry> = emptyList(),
+)
+
+@Serializable
+data class CourseEntry(
+    val index: Int,
+    val label: String,
+    @SerialName("subjectId") val subjectId: String,
+    val subject: String,
+    @SerialName("startTime") val startTime: String? = null,
+    @SerialName("endTime") val endTime: String? = null,
+    val enabled: Boolean = true,
+)
+
+@Serializable
+data class SubjectEntry(val id: String, val name: String)
+
 @Serializable
 data class ClassEvent(
+    val id: String = "",
     val event: Int,
     val subject: String? = null,
     val message: String? = null,
     @SerialName("occurredAt") val occurredAt: String? = null,
 )
 
-/** 控制指令（command 载荷）。 */
+@Serializable
+data class ScheduleChangeRequest(
+    val date: String,
+    val mode: Int,
+    @SerialName("sourceIndex") val sourceIndex: Int,
+    @SerialName("targetIndex") val targetIndex: Int? = null,
+    @SerialName("replacementSubjectId") val replacementSubjectId: String? = null,
+    @SerialName("expectedRevision") val expectedRevision: String,
+)
+
+@Serializable
+data class NotificationRequest(
+    val title: String,
+    val message: String,
+    @SerialName("isNotificationEffectEnabled") val isNotificationEffectEnabled: Boolean = false,
+    @SerialName("isNotificationSoundEnabled") val isNotificationSoundEnabled: Boolean = false,
+    @SerialName("isSpeechEnabled") val isSpeechEnabled: Boolean = false,
+)
+
 @Serializable
 data class CommandMessage(
     val command: Int,
-    val parameters: Map<String, JsonElement> = emptyMap(),
-    val result: CommandResult? = null,
+    @SerialName("scheduleChange") val scheduleChange: ScheduleChangeRequest? = null,
+    val notification: NotificationRequest? = null,
+    @SerialName("mainMenuVisible") val mainMenuVisible: Boolean? = null,
+    @SerialName("powerAction") val powerAction: Int? = null,
 )
 
-/** 指令执行结果。 */
 @Serializable
 data class CommandResult(
     val success: Boolean = false,
-    val message: String? = null,
-)
-
-/** 云端配对请求/响应。 */
-@Serializable
-data class PairRequest(
-    @SerialName("pairCode") val pairCode: String,
-    val role: String,
+    val code: String = "",
+    val message: String = "",
+    @SerialName("scheduleRevision") val scheduleRevision: String? = null,
 )
 
 @Serializable
-data class PairResponse(
-    val token: String,
-    val role: String,
-    @SerialName("expiresAt") val expiresAt: String? = null,
+data class UserProfile(
+    val id: String = "",
+    val username: String = "",
+    @SerialName("displayName") val displayName: String = "",
+    val role: Int = Protocol.ROLE_USER,
+    @SerialName("grantedPermissions") val grantedPermissions: Int = 0,
+    val permissions: Int = Protocol.PERMISSION_VIEW_CURRENT,
+    val version: Long = 0,
+) {
+    val isAdmin: Boolean get() = role == Protocol.ROLE_ADMIN
+    fun has(permission: Int): Boolean = permissions and permission == permission
+}
+
+@Serializable
+data class LoginRequest(val username: String, val password: String, @SerialName("deviceName") val deviceName: String)
+
+@Serializable
+data class RefreshSessionRequest(
+    @SerialName("deviceSessionId") val deviceSessionId: String,
+    @SerialName("deviceSecret") val deviceSecret: String,
+)
+
+@Serializable
+data class AuthResponse(
+    @SerialName("accessToken") val accessToken: String,
+    @SerialName("accessExpiresAt") val accessExpiresAt: String,
+    @SerialName("deviceSessionId") val deviceSessionId: String,
+    @SerialName("deviceSecret") val deviceSecret: String,
+    @SerialName("deviceExpiresAt") val deviceExpiresAt: String,
+    val user: UserProfile,
+)
+
+@Serializable
+data class AuthChallenge(
+    @SerialName("challengeId") val challengeId: String,
+    val nonce: String,
+    @SerialName("expiresAt") val expiresAt: String,
+)
+
+@Serializable
+data class AuthProof(
+    @SerialName("challengeId") val challengeId: String,
+    @SerialName("deviceSessionId") val deviceSessionId: String,
+    @SerialName("clientNonce") val clientNonce: String,
+    val proof: String,
+)
+
+@Serializable
+data class AuthState(
+    val authenticated: Boolean,
+    val user: UserProfile? = null,
+    @SerialName("errorCode") val errorCode: String? = null,
+    val error: String? = null,
+)
+
+@Serializable
+data class PersistedDeviceSession(
+    val username: String,
+    @SerialName("deviceSessionId") val deviceSessionId: String,
+    @SerialName("deviceSecret") val deviceSecret: String,
+    @SerialName("deviceExpiresAt") val deviceExpiresAt: String,
 )

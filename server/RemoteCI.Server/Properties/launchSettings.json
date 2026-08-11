@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "RemoteCI.Server": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:57294;http://localhost:57295"
+    }
+  }
+}

@@ -13,8 +13,10 @@ android {
         applicationId = "com.remoteci.watch"
         minSdk = 30
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        testInstrumentationRunner =
+            "com.remoteci.watch.NetworkSecurityPolicyInstrumentation"
     }
 
     buildTypes {
@@ -49,6 +51,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.compose.foundation)
+    implementation(libs.compose.material.icons.extended)
     implementation(libs.compose.material3)
     implementation(libs.wear.compose.material)
     implementation(libs.wear.compose.navigation)
@@ -59,5 +62,6 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
+    testImplementation(kotlin("test"))
     debugImplementation(libs.compose.ui.tooling)
 }

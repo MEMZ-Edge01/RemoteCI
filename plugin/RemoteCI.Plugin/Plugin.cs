@@ -37,9 +37,13 @@ public class Plugin : PluginBase
         Settings.PropertyChanged += (_, _) => ConfigureFileHelper.SaveConfig(settingsPath, Settings);
 
         services.AddSingleton(Settings);
+        services.AddSingleton(new AccountMirror(Path.Combine(PluginConfigFolder, "Accounts.json")));
+        services.AddSingleton<ScheduleCatalog>();
+        services.AddSingleton<ClassIslandHostControlService>();
         services.AddSingleton<CommandHandler>();
         services.AddSingleton<StateCollector>();
         services.AddSingleton<RemoteCiService>();
+        services.AddNotificationProvider<RemoteNotificationProvider>();
         services.AddSettingsPage<RemoteCiSettingsPage>();
 
         var app = AppBase.Current;

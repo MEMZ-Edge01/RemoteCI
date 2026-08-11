@@ -5,6 +5,7 @@ namespace RemoteCI.Server.Services;
 public sealed class StateStore : IStateStore
 {
     private ClassStateSnapshot? _snapshot;
+    private ScheduleBundle? _schedule;
     private ClassEvent? _event;
     private readonly object _lock = new();
 
@@ -13,6 +14,12 @@ public sealed class StateStore : IStateStore
 
     public ClassStateSnapshot? GetLatestSnapshot() =>
         Get(_snapshot);
+
+    public void SaveSchedule(ScheduleBundle schedule) =>
+        Set(ref _schedule, schedule);
+
+    public ScheduleBundle? GetLatestSchedule() =>
+        Get(_schedule);
 
     public void SaveEvent(ClassEvent @event) =>
         Set(ref _event, @event);

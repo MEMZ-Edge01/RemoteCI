@@ -2,33 +2,59 @@ using System.Text.Json.Serialization;
 
 namespace RemoteCI.Shared.Models;
 
-/// <summary>
-/// 控制指令（command 载荷）：手表发起，服务端转发，插件执行。
-/// </summary>
 public sealed class CommandMessage
 {
     [JsonPropertyName("command")]
     public CommandKind Command { get; set; }
 
-    /// <summary>指令参数，结构随 command 类型变化（见 CommandKind 注释）。</summary>
-    [JsonPropertyName("parameters")]
-    public Dictionary<string, object> Parameters { get; set; } = new();
-
-    /// <summary>执行结果（插件回执，经服务端转发回发起端）。</summary>
-    [JsonPropertyName("result")]
+    [JsonPropertyName("scheduleChange")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public CommandResult? Result { get; set; }
+    public ScheduleChangeRequest? ScheduleChange { get; set; }
+
+    [JsonPropertyName("notification")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public NotificationRequest? Notification { get; set; }
+
+    [JsonPropertyName("mainMenuVisible")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? MainMenuVisible { get; set; }
+
+    [JsonPropertyName("powerAction")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PowerActionKind? PowerAction { get; set; }
+
+    /// <summary>接入端覆盖此字段，插件只信任经服务端或本地挑战认证后的身份。</summary>
+    [JsonPropertyName("requestedBy")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UserProfile? RequestedBy { get; set; }
 }
 
-/// <summary>
-/// 指令执行结果。
-/// </summary>
 public sealed class CommandResult
 {
     [JsonPropertyName("success")]
     public bool Success { get; set; }
 
+    [JsonPropertyName("code")]
+    public string Code { get; set; } = string.Empty;
+
     [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("scheduleRevision")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Message { get; set; }
+    public string? ScheduleRevision { get; set; }
+}
+
+public static class CommandResultCodes
+{
+    public const string Ok = "OK";
+    public const string InvalidRequest = "INVALID_REQUEST";
+    public const string Forbidden = "FORBIDDEN";
+    public const string Unauthorized = "UNAUTHORIZED";
+    public const string PluginOffline = "PLUGIN_OFFLINE";
+    public const string Timeout = "COMMAND_TIMEOUT";
+    public const string ScheduleStale = "SCHEDULE_STALE";
+    public const string ScheduleUnavailable = "SCHEDULE_UNAVAILABLE";
+    public const string SaveFailed = "SAVE_FAILED";
+    public const string InternalError = "INTERNAL_ERROR";
 }

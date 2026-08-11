@@ -1,63 +1,47 @@
 # RemoteCI
 
-为 [ClassIsland 2.x](https://classisland.tech/) 开发的课表手表联动系统：电脑上的 ClassIsland 将课表状态实时推送至手表（Wear OS），手表可查看当前课/下一节课/倒计时、接收上课/下课通知（通知+振动），并可反向切换单双周、临时换课。
+RemoteCI 是 ClassIsland 2.x、ASP.NET Core 服务端和 Wear OS 手表组成的课表联动系统，统一使用账号、设备会话和细粒度权限控制公网与局域网操作。
 
-> ⚠️ 本项目当前为 v0.1 demo：完整混合链路（局域网直连 + 云端中转）已打通，Tiles 小组件、小米 HyperOS 适配、watchOS 端等为后续迭代。
+## 已实现
 
-## 仓库结构（monorepo）
+- 服务端：ASP.NET Core Identity、SQLite 迁移、PBKDF2 密码哈希、1 小时访问令牌、30 天可撤销设备会话和完整 Razor WebUI。
+- 权限：管理员固定拥有全部权限；普通用户默认只查看当前课程，可附加 `AccessWebUi`、`ManageUsers`、`SendNotifications`、`ManageSchedule`。
+- 同步：服务端是账号与权限唯一真源，通过插件 WebSocket 自动同步不含密码的授权镜像；镜像离线超过 24 小时后只允许课程展示。
+- 局域网：手表不发送密码或云端访问令牌，使用设备会话派生验证器完成一次性 HMAC 挑战认证。
+- 课表：状态按秒推送，七日课表单独低频同步；支持指定日期交换两节课或替换科目，并用修订号防止并发覆盖。
+- 通知：WebUI 或手表发送的消息先由 ClassIsland 正式通知提供方显示，成功后再广播给手表。
+- 手表：设备密钥由 Android Keystore AES-GCM 保护；普通用户界面只显示当前课程，五类消息可按设备单独开关。
 
-| 目录 | 说明 |
+不存在真实 ClassIsland 写入能力的“切换单双周”功能已经移除。
+
+## 目录
+
+| 目录 | 内容 |
 | --- | --- |
-| `plugin/` | ClassIsland 2.x 插件（.NET 10，cipx 包） |
-| `server/` | ASP.NET Core 中转服务端（WebSocket + REST + token） |
-| `wearos/` | Wear OS 手表端（Kotlin + Compose for Wear OS） |
-| `shared/` | 插件与服务端共享的 C# 协议库 |
-| `docs/` | 架构、协议、部署、平台适配笔记 |
+| `shared/` | C# 协议 v2 与共享 DTO |
+| `server/` | ASP.NET Core 服务端、Razor WebUI、Identity/SQLite |
+| `plugin/` | ClassIsland 2.x 插件与 CIPX 构建 |
+| `wearos/` | Kotlin/Compose for Wear OS 应用 |
+| `docs/` | 协议、部署和平台说明 |
 
-## 架构概览
-
-```text
-┌─────────────┐   WebSocket(局域网)   ┌──────────────┐
-│ ClassIsland │◄────────────────────►│  Wear OS 手表 │
-│  插件(电脑)  │                      └──────┬───────┘
-└──────┬──────┘                             │
-       │ WebSocket(公网)                    │ WebSocket(公网)
-       ▼                                    ▼
-┌───────────────────────────────────────────────┐
-│  Server（NAS / 云服务器，Docker 部署）          │
-│  WebSocket 中转 + REST API + token 认证        │
-└───────────────────────────────────────────────┘
-```
-
-通信协议为平台无关的 JSON（见 [docs/protocol.md](docs/protocol.md)），手表端优先连接局域网内插件，失败或跨网时自动切换云端中转。
-
-## 快速开始
-
-### 环境要求
-
-- .NET 10 SDK（构建 shared/server/plugin）
-- Android Studio + Android SDK（API 33+）+ Wear OS 模拟器（构建/运行 wearos）
-- ClassIsland 2.x 本体（加载插件调试）
-
-### 构建
+## 构建与测试
 
 ```powershell
-# 服务端
-dotnet build server/RemoteCI.Server
+dotnet restore RemoteCI.slnx
+dotnet test RemoteCI.slnx -c Release --no-restore
 
-# 插件
-dotnet build plugin/RemoteCI.Plugin
+dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release
+dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release -p:CreateCipx=true
 
-# 手表端：用 Android Studio 打开 wearos/ 目录构建
-#   或命令行：cd wearos; .\dev.ps1 run（构建+安装+启动到模拟器）
-#   模拟器：AVD PixelWatch2_API35（Wear OS 5.1），启动见 docs/platform-notes.md
+cd wearos
+$env:JAVA_HOME="C:\path\to\jdk-17"
+.\gradlew.bat testDebugUnitTest assembleDebug
 ```
 
-详细部署见 [docs/deployment.md](docs/deployment.md)。
+手表构建需要 JDK 17 和 Android SDK；本机开发脚本见 `wearos/dev.ps1`。
 
-## 开源许可
+部署和首次配对见 [部署文档](docs/deployment.md)，消息格式见 [协议 v2](docs/protocol.md)。
 
-本项目整体基于 **GPLv3** 授权（见 [LICENSE](LICENSE)）。
+## 许可
 
-- 插件端基于 ClassIsland 2.x 开发：ClassIsland 本体为 GPLv3，`ClassIsland.PluginSdk` 等 SDK 库为 LGPLv3，本项目插件按 GPLv3 发布以满足上架 ClassIsland 插件市场的要求。
-- 第三方依赖清单与版权声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+项目使用 GPLv3，第三方依赖见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

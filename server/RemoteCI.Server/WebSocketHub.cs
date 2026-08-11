@@ -7,153 +7,206 @@ using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Server;
 
-/// <summary>
-/// WebSocket 中转端点（/ws?token=xxx）：
-/// 插件连接作为状态源（推送 state_push/event_notify），
-/// 手表连接作为订阅方（接收状态/事件、发送 command），
-/// command 及其回执由本中心双向转发。
-/// </summary>
 public static class WebSocketHub
 {
-    private const int ReceiveBufferSize = 64 * 1024;
+    private const int ReceiveBufferSize = 256 * 1024;
 
     public static async Task HandleAsync(
         HttpContext context,
-        ITokenService tokens,
+        IdentityCoordinator identities,
         PeerRegistry registry,
         IStateStore store,
         ILogger logger)
     {
-        var token = context.Request.Query[Protocol.QueryToken].ToString();
-        if (string.IsNullOrEmpty(token) || !tokens.TryValidate(token, out var role))
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            return;
-        }
-
         if (!context.WebSockets.IsWebSocketRequest)
         {
             context.Response.StatusCode = StatusCodes.Status400BadRequest;
             return;
         }
 
-        using var socket = await context.WebSockets.AcceptWebSocketAsync();
-        registry.Register(socket, role, out var connectionId);
-        logger.LogInformation("WebSocket connected: {Role} ({Id})", role, connectionId);
-
-        // 新手表连接时立即推送最近一次快照，保证打开即见当前状态。
-        if (role == PeerRole.Watch && store.GetLatestSnapshot() is { } snapshot)
+        var token = context.Request.Query[Protocol.QueryToken].ToString();
+        var principal = await identities.ValidateAnyTokenAsync(token, context.RequestAborted);
+        if (principal is null)
         {
-            await TrySendAsync(socket, Envelope.StatePush(snapshot));
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
         }
 
-        var buffer = new byte[ReceiveBufferSize];
+        using var socket = await context.WebSockets.AcceptWebSocketAsync();
+        var connectionId = registry.Register(socket, token, principal);
+        logger.LogInformation("WebSocket connected: {Role}/{User} ({Id})",
+            principal.PeerRole, principal.User?.Username ?? "plugin", connectionId);
+
+        if (principal.IsPlugin)
+        {
+            await registry.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(context.RequestAborted), context.RequestAborted);
+        }
+        else
+        {
+            await registry.SendToWatchAsync(connectionId, Envelope.AuthState(new AuthState
+            {
+                Authenticated = true,
+                User = principal.User,
+            }), context.RequestAborted);
+            if (store.GetLatestSnapshot() is { } snapshot)
+                await registry.SendToWatchAsync(connectionId, Envelope.StatePush(snapshot), context.RequestAborted);
+            if (store.GetLatestSchedule() is { } schedule)
+                await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSync(schedule), context.RequestAborted);
+        }
+
         try
         {
             while (socket.State == WebSocketState.Open)
             {
-                var result = await socket.ReceiveAsync(buffer, CancellationToken.None);
-                if (result.MessageType == WebSocketMessageType.Close)
+                var json = await ReceiveTextAsync(socket, context.RequestAborted);
+                if (json is null) break;
+                var envelope = JsonSerializer.Deserialize<Envelope>(json, JsonDefaults.Options);
+                if (envelope is null) continue;
+                if (envelope.ProtocolVersion != Protocol.Version)
                 {
+                    await registry.SendToWatchAsync(connectionId, Envelope.AuthState(new AuthState
+                    {
+                        Authenticated = false,
+                        ErrorCode = "PROTOCOL_VERSION_UNSUPPORTED",
+                        Error = $"需要协议 v{Protocol.Version}，当前为 v{envelope.ProtocolVersion}",
+                    }), context.RequestAborted);
                     break;
                 }
 
-                var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                var envelope = JsonSerializer.Deserialize<Envelope>(json, JsonDefaults.Options);
-                if (envelope is null)
-                {
-                    continue;
-                }
-
-                envelope.Sender = role;
-                await DispatchAsync(envelope, role, registry, store, logger);
+                principal = await identities.ValidateAnyTokenAsync(token, context.RequestAborted);
+                if (principal is null) break;
+                envelope.Sender = principal.PeerRole;
+                await DispatchAsync(envelope, principal, connectionId, registry, store, logger, context.RequestAborted);
             }
+        }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            // HTTP 请求结束。
         }
         catch (WebSocketException ex)
         {
-            logger.LogWarning("WebSocket error ({Role}/{Id}): {Message}", role, connectionId, ex.Message);
+            logger.LogWarning("WebSocket error ({Id}): {Message}", connectionId, ex.Message);
         }
         finally
         {
-            await registry.Unregister(connectionId);
-            logger.LogInformation("WebSocket disconnected: {Role} ({Id})", role, connectionId);
+            await registry.UnregisterAsync(connectionId);
+            logger.LogInformation("WebSocket disconnected: {Id}", connectionId);
         }
     }
 
     private static async Task DispatchAsync(
-        Envelope envelope, PeerRole role, PeerRegistry registry, IStateStore store, ILogger logger)
+        Envelope envelope,
+        AuthPrincipal principal,
+        Guid connectionId,
+        PeerRegistry registry,
+        IStateStore store,
+        ILogger logger,
+        CancellationToken ct)
     {
         switch (envelope.Type)
         {
-            case Protocol.MessageTypeStatePush when role == PeerRole.Plugin:
-            {
-                var snapshot = JsonSerializer.Deserialize<ClassStateSnapshot>(
-                    JsonSerializer.Serialize(envelope.Payload), JsonDefaults.Options);
-                if (snapshot is null)
+            case Protocol.MessageTypeStatePush when principal.IsPlugin:
+                if (ConvertPayload<ClassStateSnapshot>(envelope.Payload) is { } snapshot)
                 {
-                    return;
+                    store.SaveSnapshot(snapshot);
+                    await registry.SendSnapshotToWatchesAsync(snapshot, ct);
                 }
+                return;
 
-                store.SaveSnapshot(snapshot);
-                await registry.SendToWatchesAsync(envelope);
-                logger.LogInformation("State pushed to {Count} watch(es)", registry.WatchCount);
-                break;
-            }
-
-            case Protocol.MessageTypeEventNotify when role == PeerRole.Plugin:
-            {
-                var @event = JsonSerializer.Deserialize<ClassEvent>(
-                    JsonSerializer.Serialize(envelope.Payload), JsonDefaults.Options);
-                if (@event is null)
+            case Protocol.MessageTypeScheduleSync when principal.IsPlugin:
+                if (ConvertPayload<ScheduleBundle>(envelope.Payload) is { } schedule)
                 {
-                    return;
+                    store.SaveSchedule(schedule);
+                    await registry.SendScheduleToWatchesAsync(schedule, ct);
                 }
+                return;
 
-                store.SaveEvent(@event);
-                await registry.SendToWatchesAsync(envelope);
-                break;
-            }
+            case Protocol.MessageTypeEventNotify when principal.IsPlugin:
+                if (ConvertPayload<ClassEvent>(envelope.Payload) is { } value)
+                {
+                    store.SaveEvent(value);
+                    await registry.SendEventToWatchesAsync(value, ct);
+                }
+                return;
 
-            case Protocol.MessageTypeCommand when role == PeerRole.Watch:
-                await ForwardCommandToPluginAsync(envelope, registry, logger);
-                break;
+            case Protocol.MessageTypeCommandResult when principal.IsPlugin:
+                if (ConvertPayload<CommandResult>(envelope.Payload) is { } result)
+                    await registry.CompleteCommandAsync(envelope, result, ct);
+                return;
 
-            // 插件执行后的 command 回执（带 result），广播回所有手表。
-            case Protocol.MessageTypeCommand when role == PeerRole.Plugin:
-                await registry.SendToWatchesAsync(envelope);
-                break;
+            case Protocol.MessageTypeCommand when principal.User is not null:
+                await ForwardUserCommandAsync(envelope, principal.User, connectionId, registry, ct);
+                return;
 
             default:
-                logger.LogWarning("Unhandled message type '{Type}' from {Role}", envelope.Type, role);
-                break;
+                logger.LogWarning("Unhandled message type {Type} from {Role}", envelope.Type, principal.PeerRole);
+                return;
         }
     }
 
-    private static async Task ForwardCommandToPluginAsync(
-        Envelope envelope, PeerRegistry registry, ILogger logger)
+    private static async Task ForwardUserCommandAsync(
+        Envelope envelope, UserProfile user, Guid connectionId, PeerRegistry registry, CancellationToken ct)
     {
-        if (await registry.SendToPluginAsync(envelope))
+        var command = ConvertPayload<CommandMessage>(envelope.Payload);
+        if (command is null)
         {
+            await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "命令格式无效", ct);
             return;
         }
 
-        // 无插件在线：构造失败回执发回手表。
-        envelope.Payload = new CommandMessage
+        var required = CommandPermissions.Required(command.Command);
+        if (required == UserPermissions.None)
         {
-            Command = CommandKind.SwitchWeek,
-            Result = new CommandResult
+            await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "未知命令", ct);
+            return;
+        }
+        if (!user.Permissions.HasFlag(required))
+        {
+            await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.Forbidden, "权限不足", ct);
+            return;
+        }
+
+        command.RequestedBy = user;
+        envelope.Payload = command;
+        registry.RegisterWatchCommand(envelope.MessageId, connectionId);
+        if (!await registry.SendToPluginAsync(envelope, ct))
+            await registry.CompleteCommandAsync(new Envelope
+            {
+                Type = Protocol.MessageTypeCommandResult,
+                ReplyToMessageId = envelope.MessageId,
+                Payload = new CommandResult(),
+            }, new CommandResult
             {
                 Success = false,
-                Message = "插件未在线，指令未执行",
-            },
-        };
-        await registry.SendToWatchesAsync(envelope);
-        logger.LogWarning("Command dropped: no plugin online");
+                Code = CommandResultCodes.PluginOffline,
+                Message = "插件未在线，操作未执行",
+            }, ct);
     }
 
-    private static async Task TrySendAsync(WebSocket socket, object envelope)
+    private static Task SendFailureAsync(
+        Envelope request, Guid connectionId, PeerRegistry registry, string code, string message, CancellationToken ct) =>
+        registry.SendToWatchAsync(connectionId, new Envelope
+        {
+            Type = Protocol.MessageTypeCommandResult,
+            ReplyToMessageId = request.MessageId,
+            Payload = new CommandResult { Success = false, Code = code, Message = message },
+        }, ct);
+
+    private static T? ConvertPayload<T>(object? payload) => JsonSerializer.Deserialize<T>(
+        JsonSerializer.Serialize(payload), JsonDefaults.Options);
+
+    private static async Task<string?> ReceiveTextAsync(WebSocket socket, CancellationToken ct)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonDefaults.Options);
-        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+        var buffer = new byte[16 * 1024];
+        using var stream = new MemoryStream();
+        WebSocketReceiveResult result;
+        do
+        {
+            result = await socket.ReceiveAsync(buffer, ct);
+            if (result.MessageType == WebSocketMessageType.Close) return null;
+            stream.Write(buffer, 0, result.Count);
+            if (stream.Length > ReceiveBufferSize) throw new WebSocketException("消息过大");
+        } while (!result.EndOfMessage);
+        return Encoding.UTF8.GetString(stream.ToArray());
     }
 }

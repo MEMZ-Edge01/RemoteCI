@@ -1,5 +1,5 @@
-using System.Net.WebSockets;
 using System.Net.Http.Json;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using RemoteCI.Shared;
@@ -8,94 +8,154 @@ using Xunit;
 
 namespace RemoteCI.Server.Tests;
 
-/// <summary>
-/// WebSocket 中转集成测试：验证 插件→手表 状态推送、手表→插件 指令转发、
-/// 插件→手表 指令回执三条链路。
-/// </summary>
 public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
 
-    public WebSocketRelayTests(TestWebApplicationFactory factory)
-    {
-        _factory = factory;
-    }
+    public WebSocketRelayTests(TestWebApplicationFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task PluginPushesState_WatchReceivesIt()
+    public async Task PluginPushesCurrentStateAndSevenDaySchedule_AllWatchesReceiveBoth()
     {
-        var plugin = await ConnectAsync("plugin");
-        var watch = await ConnectAsync("watch");
-
-        var snapshot = new ClassStateSnapshot
+        using var plugin = await ConnectPluginAsync();
+        using var watch = await ConnectWatchAsync();
+        await SendAsync(plugin, Envelope.StatePush(new ClassStateSnapshot
         {
             CurrentSubject = "语文",
-            NextClassSubject = "数学",
             CurrentState = ClassStateKind.Class,
-            ClassPlanName = "高一(1)班课表",
             IsClassPlanLoaded = true,
-            IsClassPlanEnabled = true,
-        };
+        }));
+        await SendAsync(plugin, Envelope.ScheduleSync(new ScheduleBundle
+        {
+            FromDate = "2026-08-11",
+            Days = [new ScheduleDay
+            {
+                Date = "2026-08-11",
+                Revision = "revision-a",
+                Enabled = true,
+                Courses = [new CourseEntry { Index = 0, Label = "第 1 节", SubjectId = Guid.NewGuid(), Subject = "语文" }],
+            }],
+        }));
 
-        await SendAsync(plugin, Envelope.StatePush(snapshot));
-
-        var received = await ReceiveAsync<ClassStateSnapshot>(watch, Protocol.MessageTypeStatePush);
-        Assert.Equal("语文", received.CurrentSubject);
-        Assert.Equal("数学", received.NextClassSubject);
+        var state = await ReceivePayloadAsync<ClassStateSnapshot>(watch, Protocol.MessageTypeStatePush);
+        var schedule = await ReceivePayloadAsync<ScheduleBundle>(watch, Protocol.MessageTypeScheduleSync);
+        Assert.Equal("语文", state.CurrentSubject);
+        Assert.Equal("revision-a", schedule.Days.Single().Revision);
+        Assert.Single(schedule.Days.Single().Courses);
     }
 
     [Fact]
-    public async Task WatchSendsCommand_PluginReceivesIt()
+    public async Task AdminCommand_IsForwardedAndResultReturnsOnlyByCorrelationId()
     {
-        var plugin = await ConnectAsync("plugin");
-        var watch = await ConnectAsync("watch");
-
-        var command = new CommandMessage
+        using var plugin = await ConnectPluginAsync();
+        using var watch = await ConnectWatchAsync();
+        var request = Envelope.Command(new CommandMessage
         {
-            Command = CommandKind.SwitchWeek,
-            Parameters = new() { ["targetWeek"] = 2 },
-        };
-        await SendAsync(watch, Envelope.Command(command));
+            Command = CommandKind.ChangeSchedule,
+            ScheduleChange = new ScheduleChangeRequest
+            {
+                Date = "2026-08-11",
+                Mode = ScheduleChangeMode.Exchange,
+                SourceIndex = 0,
+                TargetIndex = 1,
+                ExpectedRevision = "revision-a",
+            },
+        });
+        await SendAsync(watch, request);
 
-        var received = await ReceiveAsync<CommandMessage>(plugin, Protocol.MessageTypeCommand);
-        Assert.Equal(CommandKind.SwitchWeek, received.Command);
-        Assert.Equal(2, ((JsonElement)received.Parameters["targetWeek"]).GetInt32());
+        var forwarded = await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeCommand);
+        var command = ConvertPayload<CommandMessage>(forwarded.Payload);
+        Assert.Equal(CommandKind.ChangeSchedule, command.Command);
+        Assert.Equal(UserRole.Admin, command.RequestedBy?.Role);
+
+        var result = new CommandResult { Success = true, Code = CommandResultCodes.Ok, Message = "已换课" };
+        await SendAsync(plugin, new Envelope
+        {
+            Type = Protocol.MessageTypeCommandResult,
+            ReplyToMessageId = forwarded.MessageId,
+            Payload = result,
+        });
+
+        var reply = await ReceiveEnvelopeAsync(watch, Protocol.MessageTypeCommandResult);
+        var received = ConvertPayload<CommandResult>(reply.Payload);
+        Assert.Equal(request.MessageId, reply.ReplyToMessageId);
+        Assert.True(received.Success);
+        Assert.Equal("已换课", received.Message);
     }
 
     [Fact]
-    public async Task PluginCommandResult_WatchReceivesAck()
+    public async Task OrdinaryUserCommand_IsRejectedBeforePluginExecution()
     {
-        var plugin = await ConnectAsync("plugin");
-        var watch = await ConnectAsync("watch");
+        var admin = await _factory.LoginAsync();
+        var create = await _factory.CreateClient().SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "ws.student",
+                DisplayName = "WebSocket 学生",
+                Password = "Student-Password-2026",
+            }));
+        create.EnsureSuccessStatusCode();
 
-        // 手表发指令
-        var command = new CommandMessage
+        using var watch = await ConnectWatchAsync("ws.student", "Student-Password-2026");
+        await SendAsync(watch, Envelope.Command(new CommandMessage
         {
-            Command = CommandKind.TempSwapClass,
-            Parameters = new() { ["from"] = "第1节", ["to"] = "第3节" },
-        };
-        await SendAsync(watch, Envelope.Command(command));
-
-        // 插件收到后回执成功
-        var received = await ReceiveAsync<CommandMessage>(plugin, Protocol.MessageTypeCommand);
-        received.Result = new CommandResult { Success = true, Message = "已换课" };
-        await SendAsync(plugin, Envelope.Command(received));
-
-        var ack = await ReceiveAsync<CommandMessage>(watch, Protocol.MessageTypeCommand);
-        Assert.True(ack.Result?.Success);
+            Command = CommandKind.SendNotification,
+            Notification = new NotificationRequest { Title = "x", Message = "x" },
+        }));
+        var result = await ReceivePayloadAsync<CommandResult>(watch, Protocol.MessageTypeCommandResult);
+        Assert.False(result.Success);
+        Assert.Equal(CommandResultCodes.Forbidden, result.Code);
     }
 
-    private async Task<WebSocket> ConnectAsync(string role)
+    [Fact]
+    public async Task PermissionChanges_PushVersionedPasswordFreeMirrorToPlugin()
     {
-        // 通过 REST 配对拿 token
-        var pairResponse = await _factory.CreateClient().PostAsJsonAsync("/api/pair",
-            new PairRequest { PairCode = TestWebApplicationFactory.TestPairCode, Role = role });
-        pairResponse.EnsureSuccessStatusCode();
-        var pair = (await pairResponse.Content.ReadFromJsonAsync<PairResponse>())!;
+        using var plugin = await ConnectPluginAsync();
+        var initialSync = await ReceivePayloadAsync<AccountSync>(plugin, Protocol.MessageTypeAccountSync);
+        var admin = await _factory.LoginAsync();
+        var create = await _factory.CreateClient().SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "sync.student",
+                DisplayName = "同步学生",
+                Password = "Sync-Student-Password-2026",
+                GrantedPermissions = UserPermissions.SendNotifications,
+            }));
+        create.EnsureSuccessStatusCode();
 
+        // 登录管理员也会创建新设备会话并推送一个镜像，因此按账号版本等待创建用户后的镜像。
+        AccountSync sync;
+        do
+        {
+            sync = await ReceivePayloadAsync<AccountSync>(plugin, Protocol.MessageTypeAccountSync);
+        }
+        while (sync.Version <= initialSync.Version || sync.Accounts.All(x => x.Username != "sync.student"));
+        var account = Assert.Single(sync.Accounts, x => x.Username == "sync.student");
+        Assert.Equal(UserPermissions.ViewCurrentCourse | UserPermissions.SendNotifications, account.EffectivePermissions);
+        var json = JsonSerializer.Serialize(sync, JsonDefaults.Options);
+        Assert.DoesNotContain("password", json, StringComparison.OrdinalIgnoreCase);
+        Assert.True(sync.Version > 0);
+    }
+
+    private async Task<WebSocket> ConnectPluginAsync() => await ConnectAsync(await _factory.GetPluginTokenAsync());
+
+    private async Task<WebSocket> ConnectWatchAsync(
+        string username = TestWebApplicationFactory.AdminUsername,
+        string password = TestWebApplicationFactory.AdminPassword) =>
+        await ConnectAsync((await _factory.LoginAsync(username, password)).AccessToken);
+
+    private async Task<WebSocket> ConnectAsync(string token)
+    {
         var client = _factory.Server.CreateWebSocketClient();
-        var uri = new Uri(_factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={pair.Token}");
-        return await client.ConnectAsync(uri, CancellationToken.None);
+        return await client.ConnectAsync(
+            new Uri(_factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(token)}"),
+            CancellationToken.None);
     }
 
     private static async Task SendAsync(WebSocket socket, Envelope envelope)
@@ -104,21 +164,22 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
         await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
     }
 
-    private static async Task<T> ReceiveAsync<T>(WebSocket socket, string expectedType)
+    private static async Task<T> ReceivePayloadAsync<T>(WebSocket socket, string expectedType) =>
+        ConvertPayload<T>((await ReceiveEnvelopeAsync(socket, expectedType)).Payload);
+
+    private static async Task<Envelope> ReceiveEnvelopeAsync(WebSocket socket, string expectedType)
     {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         while (true)
         {
-            var buffer = new byte[64 * 1024];
-            var result = await socket.ReceiveAsync(buffer, CancellationToken.None);
+            var buffer = new byte[256 * 1024];
+            var result = await socket.ReceiveAsync(buffer, timeout.Token);
             var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
             var envelope = JsonSerializer.Deserialize<Envelope>(json, JsonDefaults.Options)!;
-            if (envelope.Type != expectedType)
-            {
-                continue; // 跳过新手表连接时补发的 state_push 等消息
-            }
-
-            return JsonSerializer.Deserialize<T>(
-                JsonSerializer.Serialize(envelope.Payload), JsonDefaults.Options)!;
+            if (envelope.Type == expectedType) return envelope;
         }
     }
+
+    private static T ConvertPayload<T>(object? payload) => JsonSerializer.Deserialize<T>(
+        JsonSerializer.Serialize(payload), JsonDefaults.Options)!;
 }

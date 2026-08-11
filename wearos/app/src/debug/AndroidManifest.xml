@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- 仅存在于 debug APK，用于在模拟器稳定复现课程状态并进行视觉验收。 -->
+        <activity
+            android:name=".ui.HomeVisualQaActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault" />
+    </application>
+</manifest>

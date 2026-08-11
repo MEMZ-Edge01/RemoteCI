@@ -29,10 +29,10 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         _settings = settings;
 
         _lanCheck = new CheckBox { Content = "启用局域网直连服务", IsChecked = settings.EnableLanServer };
-        _portBox = new TextBox { Text = settings.LanServerPort.ToString(), PlaceholderText = "端口（默认 8765）" };
+        _portBox = new TextBox { Text = settings.LanServerPort.ToString(), Watermark = "端口（默认 8765）" };
         _cloudCheck = new CheckBox { Content = "启用云端中转", IsChecked = settings.EnableCloud };
-        _cloudUrlBox = new TextBox { Text = settings.CloudServerUrl, PlaceholderText = "云端地址，如 http://nas:8080" };
-        _pairCodeBox = new TextBox { Text = settings.PairCode, PlaceholderText = "配对码（局域网/云端统一）" };
+        _cloudUrlBox = new TextBox { Text = settings.CloudServerUrl, Watermark = "云端地址，如 http://nas:8080" };
+        _pairCodeBox = new TextBox { Text = settings.PluginPairCode, Watermark = "WebUI 生成的一次性插件配对码" };
 
         var saveButton = new Button { Content = "保存设置" };
         saveButton.Click += OnSaveClick;
@@ -45,7 +45,7 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
             Children =
             {
                 new TextBlock { Text = "RemoteCI 课表手表联动", FontSize = 20, FontWeight = Avalonia.Media.FontWeight.Bold },
-                new TextBlock { Text = "把课表状态推送到 Wear OS 手表，支持查看课程、通知提醒、切换周次。", TextWrapping = Avalonia.Media.TextWrapping.Wrap },
+                new TextBlock { Text = "把当前状态和七日课表推送到 Wear OS，支持按权限换课与发送通知。", TextWrapping = Avalonia.Media.TextWrapping.Wrap },
                 _lanCheck,
                 new StackPanel
                 {
@@ -61,7 +61,7 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
                 new StackPanel
                 {
                     Spacing = 6,
-                    Children = { new TextBlock { Text = "配对码" }, _pairCodeBox },
+                    Children = { new TextBlock { Text = "一次性插件配对码" }, _pairCodeBox },
                 },
                 saveButton,
                 _hint,
@@ -83,9 +83,7 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         _settings.CloudServerUrl = string.IsNullOrWhiteSpace(_cloudUrlBox.Text)
             ? "http://localhost:8080"
             : _cloudUrlBox.Text.Trim();
-        _settings.PairCode = string.IsNullOrWhiteSpace(_pairCodeBox.Text)
-            ? "remoteci-demo"
-            : _pairCodeBox.Text.Trim();
+        _settings.PluginPairCode = _pairCodeBox.Text?.Trim() ?? string.Empty;
 
         if (Plugin.Current is { } plugin)
         {

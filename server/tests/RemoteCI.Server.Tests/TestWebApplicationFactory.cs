@@ -1,25 +1,81 @@
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Server.Tests;
 
-/// <summary>
-/// 测试专用工厂：固定配对码、独立配置，避免影响真实配置。
-/// </summary>
 public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
 {
-    public const string TestPairCode = "test-pair";
+    public const string AdminUsername = "admin";
+    public const string AdminPassword = "Test-Admin-Password-2026";
+    public const string TestPairCode = "test-plugin-pair";
+    private readonly SemaphoreSlim _pluginGate = new(1, 1);
+    private string? _pluginToken;
+
+    public TestWebApplicationFactory() : this(null) { }
+
+    private TestWebApplicationFactory(string? databasePath)
+    {
+        DatabasePath = databasePath ?? Path.Combine(
+            Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "remoteci.db");
+    }
+
+    public string DatabasePath { get; }
+
+    public static TestWebApplicationFactory ForDatabase(string databasePath) => new(databasePath);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseSetting("Server:PairCode", TestPairCode);
-        builder.ConfigureAppConfiguration((_, config) =>
+        builder.UseEnvironment("Development");
+        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            config.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Server:PairCode"] = TestPairCode,
-            });
+            ["Server:DatabasePath"] = DatabasePath,
+            ["Server:BootstrapAdminUsername"] = AdminUsername,
+            ["Server:BootstrapAdminPassword"] = AdminPassword,
+            ["Server:BootstrapPluginPairCode"] = TestPairCode,
+            ["Server:AccessTokenTtl"] = "01:00:00",
+            ["Server:DeviceSessionTtl"] = "30.00:00:00",
+        }));
+    }
+
+    public async Task<AuthResponse> LoginAsync(string username = AdminUsername, string password = AdminPassword)
+    {
+        var response = await CreateClient().PostAsJsonAsync("/api/auth/login", new LoginRequest
+        {
+            Username = username,
+            Password = password,
+            DeviceName = "Integration Test",
         });
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<AuthResponse>())!;
+    }
+
+    public async Task<string> GetPluginTokenAsync()
+    {
+        if (_pluginToken is not null) return _pluginToken;
+        await _pluginGate.WaitAsync();
+        try
+        {
+            if (_pluginToken is not null) return _pluginToken;
+            var response = await CreateClient().PostAsJsonAsync("/api/plugin/pair", new PairRequest
+            {
+                PairCode = TestPairCode,
+                Role = "plugin",
+            });
+            response.EnsureSuccessStatusCode();
+            _pluginToken = (await response.Content.ReadFromJsonAsync<PairResponse>())!.Token;
+            return _pluginToken;
+        }
+        finally { _pluginGate.Release(); }
+    }
+
+    public static HttpRequestMessage Bearer(HttpMethod method, string path, string token, object? body = null)
+    {
+        var request = new HttpRequestMessage(method, path);
+        request.Headers.Authorization = new("Bearer", token);
+        if (body is not null) request.Content = JsonContent.Create(body);
+        return request;
     }
 }

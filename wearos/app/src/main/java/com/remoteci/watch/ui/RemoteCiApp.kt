@@ -1,261 +1,300 @@
 package com.remoteci.watch.ui
 
 import android.content.Context
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.material3.TextField
-import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
-import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
-import androidx.wear.compose.material.Button
-import androidx.wear.compose.material.MaterialTheme
-import androidx.wear.compose.material.Scaffold
-import androidx.wear.compose.material.Text
-import androidx.wear.compose.material.TimeText
-import com.remoteci.watch.data.ClassEvent
 import com.remoteci.watch.data.ConnectionManager
+import com.remoteci.watch.data.EventHistory
 import com.remoteci.watch.data.Protocol
+import com.remoteci.watch.data.ScheduleChangeRequest
 import com.remoteci.watch.data.SettingsStore
-import com.remoteci.watch.data.WatchSettings
+import com.remoteci.watch.data.SnapshotStore
 import com.remoteci.watch.notif.NotificationHelper
 
-private enum class Screen { Home, Control, Settings }
+private enum class Screen {
+    Login,
+    Home,
+    ScheduleOverview,
+    ScheduleDatePicker,
+    DayPicker,
+    Swap,
+    LessonPicker,
+    SubjectPicker,
+    Control,
+    Notification,
+    Power,
+    Settings,
+    ConnectionSettings,
+    NotificationSettings,
+}
 
-/** 应用根：导航 + 三页面 + 事件收集（通知）。 */
 @Composable
 fun RemoteCiApp(context: Context) {
     val settingsStore = remember { SettingsStore(context) }
+    val snapshotStore = remember { SnapshotStore(context) }
+    val eventHistory = remember { EventHistory(context) }
+    ConnectionManager.initialize(context)
+
     var settings by remember { mutableStateOf(settingsStore.load()) }
-    var screen by remember { mutableStateOf(Screen.Home) }
+    var screen by rememberSaveable {
+        mutableStateOf(if (ConnectionManager.hasSavedSession()) Screen.Home else Screen.Login)
+    }
+    var password by rememberSaveable { mutableStateOf("") }
+    var selectedDate by rememberSaveable { mutableStateOf<String?>(null) }
+    var swapMode by rememberSaveable { mutableStateOf(SwapMode.Exchange) }
+    var pickerTarget by rememberSaveable { mutableStateOf(LessonTarget.Source) }
+    var sourceIndex by rememberSaveable { mutableStateOf<Int?>(null) }
+    var targetIndex by rememberSaveable { mutableStateOf<Int?>(null) }
+    var replacementSubjectId by rememberSaveable { mutableStateOf<String?>(null) }
+    var noticeTitle by rememberSaveable { mutableStateOf("") }
+    var noticeMessage by rememberSaveable { mutableStateOf("") }
+    var noticeEffectEnabled by rememberSaveable { mutableStateOf(false) }
+    var noticeSoundEnabled by rememberSaveable { mutableStateOf(false) }
+    var noticeSpeechEnabled by rememberSaveable { mutableStateOf(false) }
+    var cachedSnapshot by remember { mutableStateOf(snapshotStore.load()) }
+    var cachedSchedule by remember { mutableStateOf(snapshotStore.loadSchedule()) }
 
     val connectionState by ConnectionManager.state.collectAsState()
-    val snapshot by ConnectionManager.snapshot.collectAsState()
+    val currentUser by ConnectionManager.currentUser.collectAsState()
+    val liveSnapshot by ConnectionManager.snapshot.collectAsState()
+    val liveSchedule by ConnectionManager.schedule.collectAsState()
     val commandResult by ConnectionManager.lastCommandResult.collectAsState()
+    val displayedSnapshot = liveSnapshot ?: cachedSnapshot
+    val displayedSchedule = liveSchedule ?: cachedSchedule
+    val currentSettings by rememberUpdatedState(settings)
+    val afterSchool = displayedSnapshot?.currentState == Protocol.STATE_AFTER_SCHOOL
+    val selectedDay = displayedSchedule?.days?.firstOrNull { it.date == selectedDate }
+    val lessons = remember(selectedDay) { buildLessonChoices(selectedDay) }
 
-    // 课程事件 → 通知+振动
     LaunchedEffect(Unit) {
-        ConnectionManager.events.collect { event: ClassEvent ->
-            NotificationHelper.notify(context, event)
+        if (ConnectionManager.hasSavedSession()) ConnectionManager.connect(settings)
+        ConnectionManager.events.collect { event ->
+            NotificationHelper.handle(context, event, currentSettings, eventHistory)
+        }
+    }
+    LaunchedEffect(liveSnapshot) {
+        liveSnapshot?.let { snapshotStore.save(it); cachedSnapshot = it }
+    }
+    LaunchedEffect(liveSchedule) {
+        liveSchedule?.let { snapshotStore.saveSchedule(it); cachedSchedule = it }
+    }
+    LaunchedEffect(currentUser) {
+        val user = currentUser
+        if (user != null && screen == Screen.Login) screen = Screen.Home
+        if (user != null && !user.has(Protocol.PERMISSION_MANAGE_SCHEDULE) &&
+            screen in listOf(
+                Screen.ScheduleOverview,
+                Screen.ScheduleDatePicker,
+                Screen.DayPicker,
+                Screen.Swap,
+                Screen.LessonPicker,
+                Screen.SubjectPicker,
+            )
+        ) screen = Screen.Home
+        if (user != null && !user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) && screen == Screen.Notification)
+            screen = Screen.Home
+        if (user != null && !user.has(Protocol.PERMISSION_SYSTEM_CONTROL) && screen == Screen.Power)
+            screen = Screen.Home
+        if (user != null && !user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) &&
+            !user.has(Protocol.PERMISSION_SYSTEM_CONTROL) && screen == Screen.Control)
+            screen = Screen.Home
+    }
+    LaunchedEffect(selectedDay) {
+        val enabled = lessons.filter { it.enabled }
+        if (enabled.none { it.index == sourceIndex }) sourceIndex = enabled.firstOrNull()?.index
+        if (enabled.none { it.index == targetIndex } || targetIndex == sourceIndex)
+            targetIndex = enabled.firstOrNull { it.index != sourceIndex }?.index
+        if (displayedSchedule?.subjects?.none { it.id == replacementSubjectId } != false)
+            replacementSubjectId = displayedSchedule?.subjects?.firstOrNull()?.id
+    }
+
+    BackHandler(enabled = screen !in listOf(Screen.Home, Screen.Login)) {
+        screen = when (screen) {
+            Screen.LessonPicker, Screen.SubjectPicker -> Screen.Swap
+            Screen.Swap -> Screen.DayPicker
+            Screen.ScheduleDatePicker -> Screen.ScheduleOverview
+            Screen.Notification -> Screen.Control
+            Screen.Power -> Screen.Control
+            Screen.ConnectionSettings, Screen.NotificationSettings -> Screen.Settings
+            else -> Screen.Home
         }
     }
 
-    Scaffold(timeText = { TimeText() }) {
-        when (screen) {
-            Screen.Home -> HomeScreen(
-                stateText = describeConnection(connectionState),
-                snapshot = snapshot,
-                onOpenControl = { screen = Screen.Control },
-                onOpenSettings = { screen = Screen.Settings },
-            )
+    when (screen) {
+        Screen.Login -> LoginScreen(
+            settings = settings,
+            password = password,
+            state = connectionState,
+            onSettingsChange = { settings = it },
+            onPasswordChange = { password = it },
+            onLogin = {
+                settingsStore.save(settings)
+                ConnectionManager.connect(settings, password)
+                password = ""
+            },
+        )
 
-            Screen.Control -> ControlScreen(
-                resultText = commandResult?.let { if (it.success) "✅ ${it.message}" else "❌ ${it.message}" },
-                onBack = { screen = Screen.Home },
-            )
+        Screen.Home -> HomeScreen(
+            connectionState = connectionState,
+            snapshot = displayedSnapshot,
+            user = currentUser,
+            onOpenScheduleOverview = {
+                selectedDate = initialScheduleDate(displayedSchedule, afterSchool)
+                screen = Screen.ScheduleOverview
+            },
+            onOpenScheduleChange = {
+                selectedDate = initialScheduleDate(displayedSchedule, afterSchool)
+                screen = Screen.DayPicker
+            },
+            onOpenNotification = { screen = Screen.Control },
+            onOpenSettings = { screen = Screen.Settings },
+            onRetryConnection = {
+                if (ConnectionManager.hasSavedSession()) ConnectionManager.connect(settings) else screen = Screen.Login
+            },
+        )
 
-            Screen.Settings -> SettingsScreen(
-                settings = settings,
-                stateText = describeConnection(connectionState),
-                onSettingsChange = { settings = it },
-                onConnect = { ConnectionManager.connect(settings) },
-                onDisconnect = { ConnectionManager.disconnect() },
-                onSave = { settingsStore.save(settings) },
-                onBack = { screen = Screen.Home },
-            )
-        }
-    }
-}
+        Screen.ScheduleOverview -> ScheduleOverviewScreen(
+            day = selectedDay,
+            onPickDate = { screen = Screen.ScheduleDatePicker },
+            onBack = { screen = Screen.Home },
+        )
 
-/** 主页：当前课/下一节/倒计时/周次 + 入口按钮。 */
-@Composable
-private fun HomeScreen(
-    stateText: String,
-    snapshot: com.remoteci.watch.data.ClassStateSnapshot?,
-    onOpenControl: () -> Unit,
-    onOpenSettings: () -> Unit,
-) {
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        state = rememberScalingLazyListState(),
-    ) {
-        item {
-            Text(
-                text = stateText,
-                style = MaterialTheme.typography.caption2,
-                textAlign = TextAlign.Center,
-            )
-        }
-        item {
-            Text(
-                text = snapshot?.currentSubject ?: "未加载课表",
-                style = MaterialTheme.typography.display1,
-                textAlign = TextAlign.Center,
-            )
-        }
-        item {
-            Text(
-                text = describeCurrentState(snapshot),
-                style = MaterialTheme.typography.title3,
-                textAlign = TextAlign.Center,
-            )
-        }
-        item {
-            Text(
-                text = "下一节：${snapshot?.nextClassSubject ?: "无"}\n${snapshot?.nextClassTimeLayoutItem ?: ""}",
-                style = MaterialTheme.typography.body2,
-                textAlign = TextAlign.Center,
-            )
-        }
-        item {
-            Text(
-                text = snapshot?.weekRotation?.let { "第 $it 周" } ?: "",
-                style = MaterialTheme.typography.body2,
-                textAlign = TextAlign.Center,
-            )
-        }
-        item {
-            Button(onClick = onOpenControl, modifier = Modifier.fillMaxSize()) {
-                Text("控制")
-            }
-        }
-        item {
-            Button(onClick = onOpenSettings, modifier = Modifier.fillMaxSize()) {
-                Text("设置")
-            }
-        }
-    }
-}
+        Screen.ScheduleDatePicker -> ScheduleDatePickerScreen(
+            bundle = displayedSchedule,
+            afterSchool = afterSchool,
+            onSelect = { day -> selectedDate = day.date; screen = Screen.ScheduleOverview },
+            onBack = { screen = Screen.ScheduleOverview },
+        )
 
-/** 控制页：切换周次 + 临时换课。 */
-@Composable
-private fun ControlScreen(resultText: String?, onBack: () -> Unit) {
-    var from by remember { mutableStateOf("") }
-    var to by remember { mutableStateOf("") }
+        Screen.DayPicker -> DayPickerScreen(
+            bundle = displayedSchedule,
+            afterSchool = afterSchool,
+            onSelect = { day -> selectedDate = day.date; screen = Screen.Swap },
+            onBack = { screen = Screen.Home },
+        )
 
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        state = rememberScalingLazyListState(),
-    ) {
-        item {
-            Button(
-                onClick = { ConnectionManager.sendCommand(Protocol.CMD_SWITCH_WEEK) },
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                Text("切换周次")
-            }
-        }
-        item { Text("临时换课", style = MaterialTheme.typography.title3) }
-        item {
-            TextField(
-                value = from,
-                onValueChange = { from = it },
-                placeholder = { Text("源节次，如 第1节") },
-                label = { Text("从") },
-            )
-        }
-        item {
-            TextField(
-                value = to,
-                onValueChange = { to = it },
-                placeholder = { Text("目标节次，如 第3节") },
-                label = { Text("到") },
-            )
-        }
-        item {
-            Button(
-                onClick = {
-                    ConnectionManager.sendCommand(
-                        Protocol.CMD_TEMP_SWAP,
-                        "from" to from.ifBlank { "?" },
-                        "to" to to.ifBlank { "?" },
-                    )
-                },
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                Text("发送换课")
-            }
-        }
-        item { Text(resultText ?: "", style = MaterialTheme.typography.body2) }
-        item {
-            Button(onClick = onBack, modifier = Modifier.fillMaxSize()) {
-                Text("返回")
-            }
-        }
-    }
-}
+        Screen.Swap -> SwapScreen(
+            day = selectedDay,
+            mode = swapMode,
+            sourceLesson = lessons.firstOrNull { it.index == sourceIndex },
+            targetLesson = lessons.firstOrNull { it.index == targetIndex },
+            replacementSubject = displayedSchedule?.subjects?.firstOrNull { it.id == replacementSubjectId }?.name,
+            connectionReady = connectionState is ConnectionManager.State.LanConnected ||
+                connectionState is ConnectionManager.State.CloudConnected,
+            resultText = commandResult?.let { if (it.success) "已完成：${it.message}" else "失败：${it.message}" },
+            onModeChange = { swapMode = it },
+            onPickSource = { pickerTarget = LessonTarget.Source; screen = Screen.LessonPicker },
+            onPickTarget = {
+                screen = if (swapMode == SwapMode.Exchange) {
+                    pickerTarget = LessonTarget.Target
+                    Screen.LessonPicker
+                } else Screen.SubjectPicker
+            },
+            onSubmit = {
+                val day = selectedDay ?: return@SwapScreen
+                val source = sourceIndex ?: return@SwapScreen
+                ConnectionManager.sendScheduleChange(
+                    ScheduleChangeRequest(
+                        date = day.date,
+                        mode = if (swapMode == SwapMode.Exchange) Protocol.CHANGE_EXCHANGE else Protocol.CHANGE_REPLACE,
+                        sourceIndex = source,
+                        targetIndex = if (swapMode == SwapMode.Exchange) targetIndex else null,
+                        replacementSubjectId = if (swapMode == SwapMode.Replace) replacementSubjectId else null,
+                        expectedRevision = day.revision,
+                    ),
+                )
+            },
+        )
 
-/** 设置页：配对码/云端地址/局域网 IP + 连接管理。 */
-@Composable
-private fun SettingsScreen(
-    settings: WatchSettings,
-    stateText: String,
-    onSettingsChange: (WatchSettings) -> Unit,
-    onConnect: () -> Unit,
-    onDisconnect: () -> Unit,
-    onSave: () -> Unit,
-    onBack: () -> Unit,
-) {
-    ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        state = rememberScalingLazyListState(),
-    ) {
-        item { Text("连接状态：$stateText", style = MaterialTheme.typography.caption2) }
-        item {
-            TextField(
-                value = settings.pairCode,
-                onValueChange = { onSettingsChange(settings.copy(pairCode = it)) },
-                placeholder = { Text("配对码") },
-                label = { Text("配对码") },
-            )
-        }
-        item {
-            TextField(
-                value = settings.cloudServerUrl,
-                onValueChange = { onSettingsChange(settings.copy(cloudServerUrl = it)) },
-                placeholder = { Text("http://10.0.2.2:8080") },
-                label = { Text("云端地址") },
-            )
-        }
-        item {
-            TextField(
-                value = settings.lanHost,
-                onValueChange = { onSettingsChange(settings.copy(lanHost = it)) },
-                placeholder = { Text("如 192.168.1.100") },
-                label = { Text("电脑局域网IP") },
-            )
-        }
-        item {
-            Button(
-                onClick = {
-                    onSave()
-                    onConnect()
-                },
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                Text("保存并连接")
-            }
-        }
-        item {
-            Button(onClick = onDisconnect, modifier = Modifier.fillMaxSize()) {
-                Text("断开")
-            }
-        }
-        item {
-            Button(onClick = onBack, modifier = Modifier.fillMaxSize()) {
-                Text("返回")
-            }
-        }
+        Screen.LessonPicker -> LessonPickerScreen(
+            title = if (pickerTarget == LessonTarget.Source) "选择原课" else "选择目标课",
+            lessons = lessons,
+            selectedIndex = if (pickerTarget == LessonTarget.Source) sourceIndex else targetIndex,
+            excludedIndex = if (pickerTarget == LessonTarget.Source) targetIndex else sourceIndex,
+            onSelect = {
+                if (pickerTarget == LessonTarget.Source) sourceIndex = it.index else targetIndex = it.index
+                screen = Screen.Swap
+            },
+        )
+
+        Screen.SubjectPicker -> SubjectPickerScreen(
+            subjects = displayedSchedule?.subjects.orEmpty(),
+            selectedSubjectId = replacementSubjectId,
+            onSelect = { replacementSubjectId = it.id; screen = Screen.Swap },
+        )
+
+        Screen.Control -> ControlScreen(
+            snapshot = displayedSnapshot,
+            user = currentUser,
+            resultText = commandResult?.let { if (it.success) "已完成：${it.message}" else "失败：${it.message}" },
+            onOpenNotification = { screen = Screen.Notification },
+            onClearNotifications = ConnectionManager::clearNotifications,
+            onToggleMainMenu = {
+                ConnectionManager.setMainMenuVisible(!(displayedSnapshot?.isMainMenuVisible ?: true))
+            },
+            onOpenPower = { screen = Screen.Power },
+            onBack = { screen = Screen.Home },
+        )
+
+        Screen.Power -> PowerScreen(
+            sleepAvailable = displayedSnapshot?.isSleepAvailable == true,
+            hibernateAvailable = displayedSnapshot?.isHibernateAvailable == true,
+            onPowerAction = ConnectionManager::sendPowerAction,
+            onBack = { screen = Screen.Control },
+        )
+
+        Screen.Notification -> NotificationScreen(
+            title = noticeTitle,
+            message = noticeMessage,
+            effectEnabled = noticeEffectEnabled,
+            soundEnabled = noticeSoundEnabled,
+            speechEnabled = noticeSpeechEnabled,
+            resultText = commandResult?.message,
+            onTitleChange = { noticeTitle = it },
+            onMessageChange = { noticeMessage = it },
+            onEffectEnabledChange = { noticeEffectEnabled = it },
+            onSoundEnabledChange = { noticeSoundEnabled = it },
+            onSpeechEnabledChange = { noticeSpeechEnabled = it },
+            onSend = {
+                ConnectionManager.sendNotification(
+                    noticeTitle,
+                    noticeMessage,
+                    noticeEffectEnabled,
+                    noticeSoundEnabled,
+                    noticeSpeechEnabled,
+                )
+            },
+            onBack = { screen = Screen.Control },
+        )
+
+        Screen.Settings -> SettingsScreen(
+            onOpenConnection = { screen = Screen.ConnectionSettings },
+            onOpenNotifications = { screen = Screen.NotificationSettings },
+            onBack = { screen = Screen.Home },
+        )
+
+        Screen.ConnectionSettings -> ConnectionSettingsScreen(
+            settings = settings,
+            stateText = describeConnection(connectionState),
+            onSettingsChange = { settings = it; settingsStore.save(it) },
+            onReconnect = { settingsStore.save(settings); ConnectionManager.connect(settings) },
+            onLogout = { ConnectionManager.logout(settings); screen = Screen.Login },
+            onBack = { screen = Screen.Settings },
+        )
+
+        Screen.NotificationSettings -> NotificationSettingsScreen(
+            settings = settings,
+            onSettingsChange = { settings = it; settingsStore.save(it) },
+            onBack = { screen = Screen.Settings },
+        )
     }
 }
 
@@ -267,14 +306,10 @@ private fun describeConnection(state: ConnectionManager.State): String = when (s
     is ConnectionManager.State.Error -> "错误：${state.message}"
 }
 
-private fun describeCurrentState(snapshot: com.remoteci.watch.data.ClassStateSnapshot?): String {
-    val base = when (snapshot?.currentState) {
-        Protocol.STATE_CLASS -> "上课中"
-        Protocol.STATE_BREAKING -> "课间休息"
-        Protocol.STATE_AFTER_SCHOOL -> "已放学"
-        else -> "待机"
-    }
-    val countdown = snapshot?.onClassLeftTime
-        ?: snapshot?.onBreakingLeftTime
-    return countdown?.let { "$base · $it" } ?: base
+internal fun describeClassState(snapshot: com.remoteci.watch.data.ClassStateSnapshot?): String = when (snapshot?.currentState) {
+    Protocol.STATE_CLASS -> "上课"
+    Protocol.STATE_PREPARE_CLASS -> "准备上课"
+    Protocol.STATE_BREAKING -> "下课"
+    Protocol.STATE_AFTER_SCHOOL -> "放学"
+    else -> "待机"
 }

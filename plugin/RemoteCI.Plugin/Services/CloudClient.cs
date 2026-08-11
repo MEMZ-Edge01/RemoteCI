@@ -1,7 +1,8 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
-using System.Net.Http.Json;
 using Microsoft.Extensions.Logging;
 using RemoteCI.Plugin.Settings;
 using RemoteCI.Shared;
@@ -9,49 +10,44 @@ using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Plugin.Services;
 
-/// <summary>
-/// 云端客户端：连接 RemoteCI 服务端（WebSocket），推送状态/事件，
-/// 接收经服务端转发的控制指令并回执。断线后每 5 秒自动重连。
-/// </summary>
+/// <summary>插件云端通道：长期插件凭据、版本化授权同步和真实命令回执。</summary>
 public sealed class CloudClient : IDisposable
 {
-    private const int ReconnectDelayMs = 5000;
-
+    private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(5);
     private readonly PluginSettings _settings;
-    private readonly CommandHandler _commandHandler;
+    private readonly AccountMirror _accounts;
+    private readonly CommandHandler _commands;
     private readonly ILogger<CloudClient> _logger;
     private readonly HttpClient _http = new();
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _cts;
     private volatile bool _running;
 
     public CloudClient(
         PluginSettings settings,
-        CommandHandler commandHandler,
+        AccountMirror accounts,
+        CommandHandler commands,
         ILogger<CloudClient> logger)
     {
         _settings = settings;
-        _commandHandler = commandHandler;
+        _accounts = accounts;
+        _commands = commands;
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken stoppingToken = default)
+    public Task StartAsync(CancellationToken stoppingToken = default)
     {
-        if (!_settings.EnableCloud)
-        {
-            return;
-        }
-
+        if (!_settings.EnableCloud) return Task.CompletedTask;
         _running = true;
         _cts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         _ = RunLoopAsync(_cts.Token);
+        return Task.CompletedTask;
     }
 
-    public async Task SendStateAsync(ClassStateSnapshot snapshot) =>
-        await SendAsync(Envelope.StatePush(snapshot));
-
-    public async Task SendEventAsync(ClassEvent @event) =>
-        await SendAsync(Envelope.EventNotify(@event));
+    public Task SendStateAsync(ClassStateSnapshot value) => SendAsync(Envelope.StatePush(value));
+    public Task SendScheduleAsync(ScheduleBundle value) => SendAsync(Envelope.ScheduleSync(value));
+    public Task SendEventAsync(ClassEvent value) => SendAsync(Envelope.EventNotify(value));
 
     private async Task RunLoopAsync(CancellationToken ct)
     {
@@ -69,105 +65,132 @@ public sealed class CloudClient : IDisposable
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "云端连接异常，{Delay}ms 后重连", ReconnectDelayMs);
+                if (IsAuthenticationFailure(ex))
+                {
+                    _settings.CloudToken = null;
+                    _logger.LogWarning("插件云端凭据已失效，请在 WebUI 生成新的一次性配对码");
+                }
+                else
+                {
+                    _logger.LogWarning(ex, "云端连接异常，{Delay} 秒后重连", ReconnectDelay.TotalSeconds);
+                }
                 DisposeSocket();
-                await Task.Delay(ReconnectDelayMs, ct);
+                await Task.Delay(ReconnectDelay, ct);
             }
         }
     }
 
-    /// <summary>用配对码换取云端 token（本地缓存，服务端重启失效时重新配对）。</summary>
     private async Task EnsureTokenAsync(CancellationToken ct)
     {
-        if (!string.IsNullOrEmpty(_settings.CloudToken))
-        {
-            return;
-        }
+        if (!string.IsNullOrWhiteSpace(_settings.CloudToken)) return;
+        if (string.IsNullOrWhiteSpace(_settings.PluginPairCode))
+            throw new InvalidOperationException("尚未配置一次性插件配对码");
 
         var response = await _http.PostAsJsonAsync(
-            $"{_settings.CloudServerUrl}/api/pair",
-            new PairRequest { PairCode = _settings.PairCode, Role = "plugin" },
+            $"{_settings.CloudServerUrl.TrimEnd('/')}/api/plugin/pair",
+            new PairRequest { PairCode = _settings.PluginPairCode, Role = "plugin" },
             ct);
+        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.Unauthorized)
+            throw new PluginAuthenticationException();
         response.EnsureSuccessStatusCode();
-        var pair = await response.Content.ReadFromJsonAsync<PairResponse>(cancellationToken: ct);
-        _settings.CloudToken = pair?.Token;
-        _logger.LogInformation("云端配对成功");
+        var pair = await response.Content.ReadFromJsonAsync<PairResponse>(cancellationToken: ct)
+            ?? throw new InvalidDataException("插件配对响应为空");
+        _settings.CloudToken = pair.Token;
+        _settings.PluginPairCode = string.Empty;
+        _logger.LogInformation("插件云端长期凭据已签发，一次性配对码已清除");
     }
 
     private async Task ConnectAsync(CancellationToken ct)
     {
         DisposeSocket();
         _ws = new ClientWebSocket();
-        var uri = new UriBuilder(_settings.CloudServerUrl) { Path = "/ws", Query = $"token={_settings.CloudToken}" }.Uri;
-        await _ws.ConnectAsync(uri, ct);
-        _logger.LogInformation("已连接云端服务端：{Uri}", uri);
+        var builder = new UriBuilder(_settings.CloudServerUrl)
+        {
+            Path = "/ws",
+            Query = $"token={Uri.EscapeDataString(_settings.CloudToken ?? string.Empty)}",
+        };
+        builder.Scheme = builder.Scheme == Uri.UriSchemeHttps ? "wss" : "ws";
+        await _ws.ConnectAsync(builder.Uri, ct);
+        _logger.LogInformation("已连接 RemoteCI 云端：{Host}", builder.Uri.Host);
     }
 
     private async Task ReceiveLoopAsync(CancellationToken ct)
     {
-        var buffer = new byte[64 * 1024];
+        var buffer = new byte[16 * 1024];
         while (_running && _ws is { State: WebSocketState.Open } && !ct.IsCancellationRequested)
         {
-            using var ms = new MemoryStream();
+            using var stream = new MemoryStream();
             WebSocketReceiveResult result;
             do
             {
                 result = await _ws.ReceiveAsync(buffer, ct);
-                ms.Write(buffer, 0, result.Count);
                 if (result.MessageType == WebSocketMessageType.Close)
                 {
-                    await _ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "server close", ct);
+                    if (result.CloseStatus == WebSocketCloseStatus.PolicyViolation)
+                        throw new PluginAuthenticationException();
                     return;
                 }
-            }
-            while (!result.EndOfMessage && result.Count > 0);
+                stream.Write(buffer, 0, result.Count);
+                if (stream.Length > 256 * 1024) throw new InvalidDataException("云端消息超过 256 KiB");
+            } while (!result.EndOfMessage);
 
-            var json = Encoding.UTF8.GetString(ms.ToArray());
-            await HandleMessageAsync(json, ct);
+            await HandleMessageAsync(Encoding.UTF8.GetString(stream.ToArray()), ct);
         }
     }
 
     private async Task HandleMessageAsync(string json, CancellationToken ct)
     {
         var envelope = JsonSerializer.Deserialize<Envelope>(json, JsonDefaults.Options);
-        if (envelope?.Type != Protocol.MessageTypeCommand)
+        if (envelope is null) return;
+        if (envelope.ProtocolVersion != Protocol.Version)
+            throw new InvalidDataException($"服务端协议为 v{envelope.ProtocolVersion}，插件要求 v{Protocol.Version}");
+
+        if (envelope.Type == Protocol.MessageTypeAccountSync)
         {
+            var sync = ConvertPayload<AccountSync>(envelope.Payload);
+            if (sync is not null)
+            {
+                _accounts.Apply(sync);
+                _logger.LogInformation("账号、权限和设备会话已同步到版本 {Version}", sync.Version);
+            }
             return;
         }
 
-        var command = JsonSerializer.Deserialize<CommandMessage>(
-            JsonSerializer.Serialize(envelope.Payload), JsonDefaults.Options);
-        if (command is null)
-        {
-            return;
-        }
-
-        command.Result = _commandHandler.Handle(command);
-        await SendAsync(Envelope.Command(command), ct);
+        if (envelope.Type != Protocol.MessageTypeCommand) return;
+        var command = ConvertPayload<CommandMessage>(envelope.Payload);
+        var result = command is null
+            ? new CommandResult { Success = false, Code = CommandResultCodes.InvalidRequest, Message = "命令格式无效" }
+            : await _commands.HandleAsync(command);
+        var response = Envelope.CommandResult(result);
+        response.ReplyToMessageId = envelope.MessageId;
+        await SendAsync(response, ct);
     }
 
     private async Task SendAsync(Envelope envelope, CancellationToken ct = default)
     {
-        if (_ws is not { State: WebSocketState.Open })
-        {
-            return; // 未连接时丢弃，等待重连循环
-        }
-
+        if (_ws is not { State: WebSocketState.Open }) return;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonDefaults.Options);
-        await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+        await _sendLock.WaitAsync(ct);
+        try
+        {
+            if (_ws is { State: WebSocketState.Open })
+                await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+        }
+        finally
+        {
+            _sendLock.Release();
+        }
     }
+
+    private static T? ConvertPayload<T>(object? payload) => JsonSerializer.Deserialize<T>(
+        JsonSerializer.Serialize(payload), JsonDefaults.Options);
+
+    private static bool IsAuthenticationFailure(Exception ex) => ex is PluginAuthenticationException ||
+        ex.Message.Contains("401", StringComparison.OrdinalIgnoreCase);
 
     private void DisposeSocket()
     {
-        try
-        {
-            _ws?.Dispose();
-        }
-        catch
-        {
-            // 忽略关闭异常
-        }
-
+        try { _ws?.Dispose(); } catch { /* 忽略关闭竞争。 */ }
         _ws = null;
     }
 
@@ -177,6 +200,9 @@ public sealed class CloudClient : IDisposable
         _cts?.Cancel();
         DisposeSocket();
         _http.Dispose();
+        _sendLock.Dispose();
         _cts?.Dispose();
     }
+
+    private sealed class PluginAuthenticationException : Exception;
 }

@@ -14,6 +14,7 @@
 | OkHttp | 手表端 HTTP/WebSocket 客户端 | Apache-2.0 | © Square, Inc. |
 | kotlinx.serialization | 手表端 JSON 序列化 | Apache-2.0 | © JetBrains |
 | kotlinx.coroutines | 手表端协程 | Apache-2.0 | © JetBrains |
+| [Bootstrap Icons](https://icons.getbootstrap.com/) | WebUI 导航与操作图标 | MIT | Copyright (c) 2019-2024 The Bootstrap Authors；许可证原文位于 `server/RemoteCI.Server/wwwroot/vendor/bootstrap-icons/LICENSE` |
 
 ## 合规约定
 

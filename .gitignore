@@ -11,6 +11,7 @@ artifacts/
 # ClassIsland 插件打包产物（可重新生成）
 *.cipx
 cipx/
+plugin/RemoteCI.Plugin/publish/
 
 # ── Android / Gradle ─────────────────────────────────
 *.apk
@@ -39,6 +40,7 @@ Thumbs.db
 *.log
 *.pid
 *.seed
+server/RemoteCI.Server/Data/*.db*
 *.pid.lock
 npm-debug.log*
 yarn-debug.log*

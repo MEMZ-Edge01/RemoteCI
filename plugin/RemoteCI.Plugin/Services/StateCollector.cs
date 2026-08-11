@@ -3,40 +3,36 @@ using ClassIsland.Core.Abstractions.Services;
 using ClassIsland.Shared.Enums;
 using ClassIsland.Shared.Models.Profile;
 using Microsoft.Extensions.Logging;
-using RemoteCI.Plugin.Settings;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Plugin.Services;
 
-/// <summary>
-/// 课表状态收集器：从 ClassIsland 的 ILessonsService 读取课表状态并生成协议快照。
-/// 订阅上课/下课/放学/状态改变事件产生通知，主计时器按 1 秒限流刷新倒计时。
-/// </summary>
+/// <summary>高频当前状态与低频七日课表分流收集器。</summary>
 public sealed class StateCollector
 {
     private readonly ILessonsService _lessons;
-    private readonly CommandHandler _commandHandler;
-    private readonly PluginSettings _settings;
+    private readonly ScheduleCatalog _schedules;
+    private readonly ClassIslandHostControlService _hostControl;
     private readonly ILogger<StateCollector> _logger;
-    private readonly Stopwatch _throttle = Stopwatch.StartNew();
+    private readonly Stopwatch _stateThrottle = Stopwatch.StartNew();
+    private readonly Stopwatch _scheduleThrottle = Stopwatch.StartNew();
+    private string? _lastScheduleSignature;
 
     public StateCollector(
         ILessonsService lessons,
-        CommandHandler commandHandler,
-        PluginSettings settings,
+        ScheduleCatalog schedules,
+        ClassIslandHostControlService hostControl,
         ILogger<StateCollector> logger)
     {
         _lessons = lessons;
-        _commandHandler = commandHandler;
-        _settings = settings;
+        _schedules = schedules;
+        _hostControl = hostControl;
         _logger = logger;
     }
 
-    /// <summary>生成了新的状态快照（转发给局域网/云端）。</summary>
     public event Action<ClassStateSnapshot>? SnapshotPushed;
-
-    /// <summary>课程事件发生（转发给局域网/云端，用于手表通知）。</summary>
+    public event Action<ScheduleBundle>? SchedulePushed;
     public event Action<ClassEvent>? EventOccurred;
 
     public void Start()
@@ -46,9 +42,9 @@ public sealed class StateCollector
         _lessons.OnAfterSchool += LessonsOnOnAfterSchool;
         _lessons.CurrentTimeStateChanged += LessonsOnCurrentTimeStateChanged;
         _lessons.PostMainTimerTicked += LessonsOnPostMainTimerTicked;
-
         PushSnapshot();
-        _logger.LogInformation("RemoteCI 状态收集已启动（配对码 {PairCode}）", _settings.PairCode);
+        PushSchedule(force: true);
+        _logger.LogInformation("RemoteCI v2 状态与七日课表收集已启动");
     }
 
     public void Stop()
@@ -60,113 +56,102 @@ public sealed class StateCollector
         _lessons.PostMainTimerTicked -= LessonsOnPostMainTimerTicked;
     }
 
-    /// <summary>构建当前状态快照。</summary>
     public ClassStateSnapshot BuildSnapshot()
     {
         var currentSubject = SubjectName(_lessons.CurrentSubject);
         var nextSubject = SubjectName(_lessons.NextClassSubject);
-
         return new ClassStateSnapshot
         {
+            ScheduleDate = DateTime.Today.ToString("yyyy-MM-dd"),
             CurrentSubject = currentSubject,
             NextClassSubject = nextSubject,
             CurrentState = MapState(_lessons.CurrentState),
             CurrentTimeLayoutItem = FormatTimeLayoutItem(_lessons.CurrentTimeLayoutItem, currentSubject),
             NextClassTimeLayoutItem = FormatTimeLayoutItem(_lessons.NextClassTimeLayoutItem, nextSubject),
             ClassPlanName = _lessons.CurrentClassPlan?.Name,
-            WeekRotation = _commandHandler.WeekOverride ?? ResolveCyclePosition(),
             IsClassPlanEnabled = _lessons.IsClassPlanEnabled,
             IsClassPlanLoaded = _lessons.IsClassPlanLoaded,
             OnClassLeftTime = _lessons.OnClassLeftTime,
             OnBreakingLeftTime = _lessons.OnBreakingTimeLeftTime,
             LessonConfirmed = _lessons.IsLessonConfirmed,
+            IsNotificationPlaying = _hostControl.IsNotificationPlaying,
+            IsMainMenuVisible = _hostControl.IsMainMenuVisible,
+            IsSleepAvailable = _hostControl.IsSleepAvailable,
+            IsHibernateAvailable = _hostControl.IsHibernateAvailable,
+            GeneratedAt = DateTimeOffset.UtcNow,
         };
     }
 
+    public ScheduleBundle BuildSchedule() => _schedules.BuildBundle();
+
+    public void ForceSchedulePush()
+    {
+        PushSchedule(force: true);
+        PushEvent(ClassEventKind.ScheduleChanged, null, "课表已更新", pushSnapshot: true);
+    }
+
+    public void ForceSnapshotPush() => PushSnapshot();
+
     private void PushSnapshot() => SnapshotPushed?.Invoke(BuildSnapshot());
 
-    private void PushEvent(ClassEventKind kind, string? subject, string message)
+    private void PushSchedule(bool force)
     {
-        EventOccurred?.Invoke(new ClassEvent
-        {
-            Event = kind,
-            Subject = subject,
-            Message = message,
-        });
-        PushSnapshot(); // 事件后立即刷新一次状态
+        var bundle = BuildSchedule();
+        var signature = string.Join('|', bundle.Days.Select(x => $"{x.Date}:{x.Revision}"));
+        if (!force && signature == _lastScheduleSignature) return;
+        _lastScheduleSignature = signature;
+        SchedulePushed?.Invoke(bundle);
+    }
+
+    private void PushEvent(ClassEventKind kind, string? subject, string message, bool pushSnapshot = true)
+    {
+        EventOccurred?.Invoke(new ClassEvent { Event = kind, Subject = subject, Message = message });
+        if (pushSnapshot) PushSnapshot();
     }
 
     private void LessonsOnOnClass(object? sender, EventArgs e) =>
         PushEvent(ClassEventKind.OnClass, SubjectName(_lessons.CurrentSubject), $"上课了：{SubjectName(_lessons.CurrentSubject)}");
 
     private void LessonsOnOnBreakingTime(object? sender, EventArgs e) =>
-        PushEvent(ClassEventKind.OnBreaking, null, "课间休息");
+        PushEvent(ClassEventKind.OnBreaking, null, "下课休息");
 
     private void LessonsOnOnAfterSchool(object? sender, EventArgs e) =>
         PushEvent(ClassEventKind.OnAfterSchool, null, "放学啦！");
 
-    private void LessonsOnCurrentTimeStateChanged(object? sender, EventArgs e) =>
-        PushEvent(ClassEventKind.StateChanged, SubjectName(_lessons.CurrentSubject), "课表状态已更新");
+    private void LessonsOnCurrentTimeStateChanged(object? sender, EventArgs e) => PushSnapshot();
 
     private void LessonsOnPostMainTimerTicked(object? sender, EventArgs e)
     {
-        // 主计时器每 50ms 触发一次，按 1 秒限流推送，保证手表倒计时刷新而不至于过载。
-        if (_throttle.ElapsedMilliseconds < 1000)
+        if (_stateThrottle.ElapsedMilliseconds >= 1000)
         {
-            return;
+            _stateThrottle.Restart();
+            PushSnapshot();
         }
-
-        _throttle.Restart();
-        PushSnapshot();
-    }
-
-    /// <summary>解析多周轮换中当前周的位置（ClassIsland 返回 1-based 位置集合）。</summary>
-    private int? ResolveCyclePosition()
-    {
-        try
+        if (_scheduleThrottle.Elapsed >= TimeSpan.FromSeconds(30))
         {
-            var positions = _lessons.GetCyclePositionsByDate();
-            return positions.Count > 0 ? positions[0] : null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "获取周次失败，按无轮换处理");
-            return null;
+            _scheduleThrottle.Restart();
+            PushSchedule(force: false);
         }
     }
 
     private static ClassStateKind MapState(TimeState state) => state switch
     {
         TimeState.OnClass => ClassStateKind.Class,
-        TimeState.PrepareOnClass => ClassStateKind.Class, // 预留状态，v0.1 近似为上课
+        TimeState.PrepareOnClass => ClassStateKind.PrepareClass,
         TimeState.Breaking => ClassStateKind.Breaking,
         TimeState.AfterSchool => ClassStateKind.AfterSchool,
         _ => ClassStateKind.None,
     };
 
-    /// <summary>科目显示名；空/后备科目视为无。</summary>
-    private static string? SubjectName(Subject? subject)
+    private static string? SubjectName(Subject? subject) => subject?.Name switch
     {
-        if (subject is null)
-        {
-            return null;
-        }
-
-        return subject.Name switch
-        {
-            "" => null,
-            "???" => null,
-            var name => name,
-        };
-    }
+        null or "" or "???" => null,
+        var name => name,
+    };
 
     private static string FormatTimeLayoutItem(TimeLayoutItem item, string? subjectName)
     {
-        if (item == TimeLayoutItem.Empty)
-        {
-            return string.Empty;
-        }
-
+        if (item == TimeLayoutItem.Empty) return string.Empty;
         var time = $"{item.StartTime:hh\\:mm}-{item.EndTime:hh\\:mm}";
         return item.TimeType switch
         {

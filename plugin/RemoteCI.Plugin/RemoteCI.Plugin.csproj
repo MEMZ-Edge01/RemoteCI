@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- ClassIsland 2.0.x 运行在 .NET 8；以最低共同运行时为基线可兼容后续 2.x 宿主。 -->
+    <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <EnableDynamicLoading>true</EnableDynamicLoading>
@@ -9,12 +10,23 @@
     <RootNamespace>RemoteCI.Plugin</RootNamespace>
     <LangVersion>latest</LangVersion>
     <AssemblyName>RemoteCI.Plugin</AssemblyName>
+    <!-- CIPX target 会压缩整个 OutputPath；将 publish 输出移出该目录，避免二次打包时嵌套 publish/。 -->
+    <PublishDir>$(BaseOutputPath)publish/$(Configuration)/$(TargetFramework)/</PublishDir>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- SDK 运行时由 ClassIsland 宿主提供，插件包内不携带，避免版本冲突 -->
-    <PackageReference Include="ClassIsland.PluginSdk" Version="2.1.1">
+    <!--
+      插件只使用 ClassIsland 2.0 公共 API，并以程序集版本为 2.0.0.0 的首个 2.x SDK 编译。
+      .NET 会允许较新的宿主程序集满足较低版本引用，从而覆盖整个 2.x 系列。
+      SDK 运行时由 ClassIsland 宿主提供，插件包内不携带，避免类型冲突。
+    -->
+    <PackageReference Include="ClassIsland.PluginSdk" Version="2.0.0-dev-v2">
       <ExcludeAssets>runtime; native</ExcludeAssets>
+    </PackageReference>
+    <!-- ClassIsland SDK 经 Avalonia 传入的 0.21.2 存在 GHSA-xrw6-gwf8-vvr9；固定到兼容分支的修复版。 -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3">
+      <ExcludeAssets>runtime; native</ExcludeAssets>
+      <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <!-- Fleck：嵌入式 WebSocket 服务器（MIT），用于局域网直连，不依赖 ASP.NET Core 运行时 -->
     <PackageReference Include="Fleck" Version="1.2.0" />
@@ -22,6 +34,10 @@
 
   <ItemGroup>
     <ProjectReference Include="../../shared/RemoteCI.Shared/RemoteCI.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RemoteCI.Plugin.Tests" />
   </ItemGroup>
 
   <ItemGroup>

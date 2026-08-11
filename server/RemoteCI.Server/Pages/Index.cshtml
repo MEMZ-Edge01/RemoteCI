@@ -1,0 +1,94 @@
+@page
+@model IndexModel
+@{ ViewData["Title"] = "任务工作区"; }
+
+<header class="workspace-head">
+    <h1>任务工作区</h1>
+    <div class="connection-summary">
+        <span class="connection-dot @(Model.PluginOnline ? "online" : "offline")" aria-hidden="true"></span>
+        <div>
+            <strong>@(Model.PluginOnline ? "插件在线" : "插件离线")</strong>
+            <small>@(Model.PluginOnline ? "连接正常，可以执行远程操作。" : "插件离线，换课和通知不会排队，提交时会直接失败。")</small>
+        </div>
+        <div class="connection-actions">
+            <form method="post" asp-page-handler="RetryConnection">
+                <button class="status-action" type="submit">重新检测连接</button>
+            </form>
+            @if (Model.Permissions.HasFlag(UserPermissions.ManageUsers))
+            {
+                <form method="post" asp-page-handler="PairCode">
+                    <button class="status-action" type="submit">生成插件配对码</button>
+                </form>
+            }
+        </div>
+    </div>
+</header>
+
+@if (Model.PairCode is not null)
+{
+    <div class="notice pair-code-notice">
+        <strong>一次性插件配对码</strong><code>@Model.PairCode</code><span>使用前持续有效，成功配对后立即作废。</span>
+        <button class="copy-button" type="button" data-copy-value="@Model.PairCode" aria-label="复制配对码" title="复制配对码">
+            <i class="bi bi-copy" aria-hidden="true"></i>
+        </button>
+    </div>
+}
+
+<section class="workspace-section">
+    <h2 class="section-title">当前课程与状态</h2>
+    <div class="current-state-card">
+        <div class="current-course">
+            <span class="feature-icon" aria-hidden="true"><i class="bi bi-book"></i></span>
+            <div><span>当前课程</span><strong>@(Model.Snapshot?.CurrentSubject ?? "暂无")</strong></div>
+        </div>
+        <dl class="state-details">
+            <div><dt>当前状态</dt><dd>@(Model.Snapshot?.CurrentState.ToString() ?? "未知")</dd></div>
+            <div><dt>时间段</dt><dd>@(Model.Snapshot?.CurrentTimeLayoutItem ?? "—")</dd></div>
+            <div><dt>课表</dt><dd>@(Model.Snapshot?.ClassPlanName ?? "—")</dd></div>
+            <div><dt>协议</dt><dd>v@(Protocol.Version)</dd></div>
+        </dl>
+    </div>
+</section>
+
+@if (Model.Permissions.HasFlag(UserPermissions.ManageSchedule) || Model.Permissions.HasFlag(UserPermissions.SendNotifications))
+{
+    <section class="workspace-section">
+        <h2 class="section-title">常用任务</h2>
+        <div class="task-grid">
+            @if (Model.Permissions.HasFlag(UserPermissions.ManageSchedule))
+            {
+                <a class="task-link" asp-page="/Schedule">
+                    <span class="feature-icon" aria-hidden="true"><i class="bi bi-calendar-week"></i></span>
+                    <span><strong>七日课表</strong><small>查看并管理未来七天的课程安排。</small></span>
+                    <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                </a>
+            }
+            @if (Model.Permissions.HasFlag(UserPermissions.SendNotifications))
+            {
+                <a class="task-link" asp-page="/Notifications">
+                    <span class="feature-icon" aria-hidden="true"><i class="bi bi-send"></i></span>
+                    <span><strong>发送通知</strong><small>向课堂发送文字通知。</small></span>
+                    <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                </a>
+            }
+        </div>
+    </section>
+}
+
+<section class="workspace-section system-section">
+    <h2 class="section-title">系统信息</h2>
+    <dl class="system-table">
+        <div><dt>在线手表</dt><dd>@Model.WatchConnections</dd></div>
+        <div><dt>账号</dt><dd>@Model.AccountCount</dd></div>
+        <div><dt>课表同步</dt><dd>@(Model.Schedule?.GeneratedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "暂无")</dd></div>
+        <div>
+            <dt>@(Model.PluginOnline ? "插件状态" : "插件离线")</dt>
+            <dd>@(Model.PluginOnline ? "在线" : "插件离线，换课和通知不会排队，提交时会直接失败。")</dd>
+        </div>
+    </dl>
+</section>
+
+<footer class="workspace-footer">
+    <span><strong>RemoteCI <small>v2</small></strong> 远程课堂控制系统</span>
+    <span>日期：@DateTimeOffset.Now.ToLocalTime().ToString("yyyy-MM-dd")</span>
+</footer>

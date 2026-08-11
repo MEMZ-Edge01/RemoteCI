@@ -1,0 +1,285 @@
+using System.Text.Json.Serialization;
+
+namespace RemoteCI.Shared.Models;
+
+public sealed class LoginRequest
+{
+    /// <summary>唯一登录 ID；为保持协议兼容，JSON 字段名仍为 username。</summary>
+    [JsonPropertyName("username")]
+    public string Username { get; set; } = string.Empty;
+
+    [JsonPropertyName("password")]
+    public string Password { get; set; } = string.Empty;
+
+    [JsonPropertyName("deviceName")]
+    public string DeviceName { get; set; } = "Wear OS";
+}
+
+public sealed class RefreshSessionRequest
+{
+    [JsonPropertyName("deviceSessionId")]
+    public Guid DeviceSessionId { get; set; }
+
+    [JsonPropertyName("deviceSecret")]
+    public string DeviceSecret { get; set; } = string.Empty;
+}
+
+public sealed class AuthResponse
+{
+    [JsonPropertyName("accessToken")]
+    public string AccessToken { get; set; } = string.Empty;
+
+    [JsonPropertyName("accessExpiresAt")]
+    public DateTimeOffset AccessExpiresAt { get; set; }
+
+    [JsonPropertyName("deviceSessionId")]
+    public Guid DeviceSessionId { get; set; }
+
+    /// <summary>仅在登录或续期响应中返回，服务端只持久化其 SHA-256 摘要。</summary>
+    [JsonPropertyName("deviceSecret")]
+    public string DeviceSecret { get; set; } = string.Empty;
+
+    [JsonPropertyName("deviceExpiresAt")]
+    public DateTimeOffset DeviceExpiresAt { get; set; }
+
+    [JsonPropertyName("user")]
+    public UserProfile User { get; set; } = new();
+}
+
+public sealed class UserProfile : UserProfileLike
+{
+    [JsonPropertyName("id")]
+    public Guid Id { get; set; }
+
+    /// <summary>唯一登录 ID。</summary>
+    [JsonPropertyName("username")]
+    public string Username { get; set; } = string.Empty;
+
+    /// <summary>用户可见的用户名，可重复，不参与登录。</summary>
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = string.Empty;
+
+    [JsonPropertyName("role")]
+    public UserRole Role { get; set; }
+
+    [JsonPropertyName("grantedPermissions")]
+    public UserPermissions GrantedPermissions { get; set; }
+
+    [JsonPropertyName("permissions")]
+    public UserPermissions Permissions { get; set; }
+
+    [JsonPropertyName("version")]
+    public long Version { get; set; }
+}
+
+public sealed class AuthChallenge
+{
+    [JsonPropertyName("challengeId")]
+    public string ChallengeId { get; set; } = string.Empty;
+
+    [JsonPropertyName("nonce")]
+    public string Nonce { get; set; } = string.Empty;
+
+    [JsonPropertyName("expiresAt")]
+    public DateTimeOffset ExpiresAt { get; set; }
+}
+
+/// <summary>局域网认证证明；不携带密码、设备密钥或云端访问令牌。</summary>
+public sealed class AuthProof
+{
+    [JsonPropertyName("challengeId")]
+    public string ChallengeId { get; set; } = string.Empty;
+
+    [JsonPropertyName("deviceSessionId")]
+    public Guid DeviceSessionId { get; set; }
+
+    [JsonPropertyName("clientNonce")]
+    public string ClientNonce { get; set; } = string.Empty;
+
+    [JsonPropertyName("proof")]
+    public string Proof { get; set; } = string.Empty;
+}
+
+public sealed class AuthState
+{
+    [JsonPropertyName("authenticated")]
+    public bool Authenticated { get; set; }
+
+    [JsonPropertyName("user")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public UserProfile? User { get; set; }
+
+    [JsonPropertyName("errorCode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ErrorCode { get; set; }
+
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+}
+
+/// <summary>服务端通过已认证插件连接下发的版本化授权镜像。</summary>
+public sealed class AccountSync
+{
+    [JsonPropertyName("version")]
+    public long Version { get; set; }
+
+    [JsonPropertyName("generatedAt")]
+    public DateTimeOffset GeneratedAt { get; set; }
+
+    [JsonPropertyName("accounts")]
+    public List<SyncedAccount> Accounts { get; set; } = [];
+
+    [JsonPropertyName("sessions")]
+    public List<SyncedDeviceSession> Sessions { get; set; } = [];
+}
+
+public sealed class SyncedAccount
+{
+    [JsonPropertyName("id")]
+    public Guid Id { get; set; }
+
+    [JsonPropertyName("username")]
+    public string Username { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = string.Empty;
+
+    [JsonPropertyName("role")]
+    public UserRole Role { get; set; }
+
+    [JsonPropertyName("grantedPermissions")]
+    public UserPermissions GrantedPermissions { get; set; }
+
+    [JsonPropertyName("effectivePermissions")]
+    public UserPermissions EffectivePermissions { get; set; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("version")]
+    public long Version { get; set; }
+
+    public UserProfile ToProfile() => new()
+    {
+        Id = Id,
+        Username = Username,
+        DisplayName = DisplayName,
+        Role = Role,
+        GrantedPermissions = GrantedPermissions,
+        Permissions = EffectivePermissions,
+        Version = Version,
+    };
+}
+
+public sealed class SyncedDeviceSession
+{
+    [JsonPropertyName("id")]
+    public Guid Id { get; set; }
+
+    [JsonPropertyName("userId")]
+    public Guid UserId { get; set; }
+
+    /// <summary>设备密钥的 SHA-256 摘要，作为局域网 HMAC 密钥使用。</summary>
+    [JsonPropertyName("verifier")]
+    public string Verifier { get; set; } = string.Empty;
+
+    [JsonPropertyName("expiresAt")]
+    public DateTimeOffset ExpiresAt { get; set; }
+}
+
+public sealed class DeviceSessionSummary
+{
+    [JsonPropertyName("id")]
+    public Guid Id { get; set; }
+
+    [JsonPropertyName("deviceName")]
+    public string DeviceName { get; set; } = string.Empty;
+
+    [JsonPropertyName("createdAt")]
+    public DateTimeOffset CreatedAt { get; set; }
+
+    [JsonPropertyName("lastSeenAt")]
+    public DateTimeOffset LastSeenAt { get; set; }
+
+    [JsonPropertyName("expiresAt")]
+    public DateTimeOffset ExpiresAt { get; set; }
+
+    [JsonPropertyName("current")]
+    public bool Current { get; set; }
+}
+
+public sealed class CreateUserRequest
+{
+    [JsonPropertyName("username")]
+    public string Username { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = string.Empty;
+
+    [JsonPropertyName("password")]
+    public string Password { get; set; } = string.Empty;
+
+    [JsonPropertyName("role")]
+    public UserRole Role { get; set; } = UserRole.User;
+
+    [JsonPropertyName("grantedPermissions")]
+    public UserPermissions GrantedPermissions { get; set; }
+}
+
+public sealed class UpdateUserRequest
+{
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = string.Empty;
+
+    [JsonPropertyName("role")]
+    public UserRole Role { get; set; }
+
+    [JsonPropertyName("grantedPermissions")]
+    public UserPermissions GrantedPermissions { get; set; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+}
+
+public sealed class ChangePasswordRequest
+{
+    [JsonPropertyName("currentPassword")]
+    public string CurrentPassword { get; set; } = string.Empty;
+
+    [JsonPropertyName("newPassword")]
+    public string NewPassword { get; set; } = string.Empty;
+}
+
+public sealed class ResetPasswordRequest
+{
+    [JsonPropertyName("password")]
+    public string Password { get; set; } = string.Empty;
+}
+
+public sealed class UserListItem
+{
+    [JsonPropertyName("id")]
+    public Guid Id { get; set; }
+
+    [JsonPropertyName("username")]
+    public string Username { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = string.Empty;
+
+    [JsonPropertyName("role")]
+    public UserRole Role { get; set; }
+
+    [JsonPropertyName("grantedPermissions")]
+    public UserPermissions GrantedPermissions { get; set; }
+
+    [JsonPropertyName("effectivePermissions")]
+    public UserPermissions EffectivePermissions { get; set; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+
+    [JsonPropertyName("updatedAt")]
+    public DateTimeOffset UpdatedAt { get; set; }
+}

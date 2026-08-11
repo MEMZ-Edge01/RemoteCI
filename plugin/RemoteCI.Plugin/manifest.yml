@@ -1,8 +1,8 @@
 id: remoteci.plugin
 name: RemoteCI
-description: 课表手表联动：把 ClassIsland 课表状态实时推送到 Wear OS 手表，手表可查看当前课/下一节课/倒计时，接收上课下课通知，并反向切换单双周。
+description: 为 ClassIsland 提供更丰富的远程控制功能
 entranceAssembly: "RemoteCI.Plugin.dll"
 url: https://github.com/MEMZ-Edge01/RemoteCI
-version: 0.1.0.0
+version: 0.2.0.0
 apiVersion: 2.0.0.0
 author: MEMZ-Edge01

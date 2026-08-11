@@ -10,6 +10,8 @@ public interface IStateStore
 {
     void SaveSnapshot(ClassStateSnapshot snapshot);
     ClassStateSnapshot? GetLatestSnapshot();
+    void SaveSchedule(ScheduleBundle schedule);
+    ScheduleBundle? GetLatestSchedule();
     void SaveEvent(ClassEvent @event);
     ClassEvent? GetLatestEvent();
 }

@@ -1,0 +1,8 @@
+@page
+@model AccountModel
+@{ ViewData["Title"] = "个人账号"; }
+<div class="page-head"><div><p class="eyebrow">个人安全</p><h1>@Model.CurrentUser.DisplayName</h1><p class="muted">ID：@Model.CurrentUser.UserName · @Model.CurrentUser.Role</p></div></div>
+<div class="two-column">
+    <section class="panel"><h2>修改密码</h2><form method="post" asp-page-handler="Password" class="stack"><div asp-validation-summary="All" class="validation"></div><label>当前密码<input asp-for="Password.CurrentPassword" type="password" autocomplete="current-password" /></label><label>新密码<input asp-for="Password.NewPassword" type="password" autocomplete="new-password" /></label><button type="submit">修改并撤销设备登录</button></form></section>
+    <section class="panel"><h2>已登录设备</h2>@if (Model.Sessions.Count == 0) { <p class="muted">暂无手表设备会话。</p> } else { <div class="list">@foreach (var session in Model.Sessions) { <article><div><strong>@session.DeviceName</strong><small>最近使用 @session.LastSeenAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</small></div><form method="post" asp-page-handler="Revoke"><input type="hidden" name="id" value="@session.Id" /><button class="danger ghost" type="submit">撤销</button></form></article> }</div> }</section>
+</div>

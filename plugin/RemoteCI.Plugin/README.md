@@ -1,21 +1,29 @@
-# RemoteCI 插件
+# RemoteCI ClassIsland 插件
 
-为 ClassIsland 2.x 开发的课表手表联动插件。
+插件从 ClassIsland 2.x 公共服务读取当前状态和未来七日课表，并负责执行有权限的远程换课与通知命令。
+
+## 安全边界
+
+- 插件从不接收或保存学生密码及密码哈希。
+- 云端使用一次性插件配对码换取长期插件凭据。
+- 局域网使用服务端同步的设备会话验证器进行一次性 HMAC 挑战认证。
+- 授权镜像超过 24 小时未更新时，所有管理命令都会被拒绝。
+- 所有命令在插件执行端再次鉴权，客户端隐藏按钮不构成安全控制。
 
 ## 功能
 
-- 将当前课/下一节课/倒计时/周次实时推送到 Wear OS 手表
-- 上课、下课、放学事件推送到手表（通知+振动）
-- 手表可切换单双周（v0.1 本地覆盖；v0.2 接入 ProfileService 真实换课）
+- 每秒推送当前课程状态，独立同步未来七日课表。
+- 为指定日期创建 ClassIsland 临时课表层，支持交换和替换，并保存 Profile。
+- 比较 `expectedRevision`，拒绝过期换课请求。
+- 通过 `NotificationProviderBase` 显示自定义通知，成功后广播事件。
 
-## 使用
+## 配置
 
-1. 在 ClassIsland 中安装本插件（.cipx 或开发目录加载）
-2. 打开 设置 → RemoteCI 设置，填写配对码与云端地址
-3. 手表端连接：局域网直连 `ws://电脑IP:8765/ws/配对码`，或经云端服务端中转
+在服务端 WebUI 的“人员权限”页面生成一次性插件配对码，再在 ClassIsland 的 RemoteCI 设置中填写云端地址和配对码并重启 ClassIsland。
 
-## 开发
+构建：
 
-- 构建：`dotnet build plugin/RemoteCI.Plugin`
-- 打包 cipx：`dotnet build plugin/RemoteCI.Plugin -p:CreateCipx=true`
-- 调试：参考 ClassIsland 插件文档，配置 `ClassIsland_DebugBinaryFile` 环境变量
+```powershell
+dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release
+dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release -p:CreateCipx=true
+```

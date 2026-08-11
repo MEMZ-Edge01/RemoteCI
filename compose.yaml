@@ -1,0 +1,18 @@
+services:
+  remoteci:
+    build:
+      context: .
+      dockerfile: server/RemoteCI.Server/Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      REMOTECI_ADMIN_PASSWORD: ${REMOTECI_ADMIN_PASSWORD:-}
+      REMOTECI_PLUGIN_PAIR_CODE: ${REMOTECI_PLUGIN_PAIR_CODE:-}
+    volumes:
+      - remoteci-data:/app/data
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  remoteci-data:
+    name: remoteci-data

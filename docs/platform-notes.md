@@ -132,3 +132,14 @@ $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/pair' -Method Post -Conte
 - 开发模式：设环境变量 `ClassIsland_DebugBinaryFile` 指向 `plugin/RemoteCI.Plugin/bin/Debug/net10.0/RemoteCI.Plugin.dll`，ClassIsland 启动时自动加载。
 - 分发模式：把 `cipx/RemoteCI.Plugin.cipx` 放入 ClassIsland 插件目录，或在应用内"插件市场"离线安装。
 - 插件端依赖：`ClassIsland.PluginSdk`（LGPLv3，仅编译期，ExcludeAssets runtime/native）+ `Fleck`（MIT，局域网 WebSocket 服务器）。
+## Wear OS 构建环境
+
+手表端固定使用 JDK 17。Windows 上应设置用户级 `JAVA_HOME`，并确保 `wearos/local.properties` 指向已安装的 Android SDK：
+
+```powershell
+$env:JAVA_HOME="C:\path\to\jdk-17"
+cd wearos
+.\gradlew.bat testDebugUnitTest assembleDebug
+```
+
+本机 2026-08-11 验证使用 Eclipse Temurin 17.0.20 和现有 Android SDK，Debug APK 构建成功。

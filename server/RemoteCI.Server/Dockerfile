@@ -12,4 +12,6 @@ COPY --from=build /app/publish .
 
 EXPOSE 8080
 ENV ASPNETCORE_URLS=http://0.0.0.0:8080
+ENV Server__DatabasePath=/app/data/remoteci.db
+VOLUME ["/app/data"]
 ENTRYPOINT ["dotnet", "RemoteCI.Server.dll"]
