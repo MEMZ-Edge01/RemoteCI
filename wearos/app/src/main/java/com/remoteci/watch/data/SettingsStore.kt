@@ -14,6 +14,8 @@ data class WatchSettings(
     val receiveAfterSchool: Boolean = true,
     val receiveScheduleChanged: Boolean = true,
     val receiveCustom: Boolean = true,
+    val receiveAutomationNotifications: Boolean = true,
+    val receivePluginNotifications: Boolean = true,
 )
 
 class SettingsStore(context: Context) {
@@ -31,6 +33,8 @@ class SettingsStore(context: Context) {
         receiveAfterSchool = prefs.getBoolean(KEY_AFTER_SCHOOL, true),
         receiveScheduleChanged = prefs.getBoolean(KEY_SCHEDULE, true),
         receiveCustom = prefs.getBoolean(KEY_CUSTOM, true),
+        receiveAutomationNotifications = prefs.getBoolean(KEY_AUTOMATION_NOTIFICATIONS, true),
+        receivePluginNotifications = prefs.getBoolean(KEY_PLUGIN_NOTIFICATIONS, true),
     )
 
     fun save(settings: WatchSettings) {
@@ -46,6 +50,8 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_AFTER_SCHOOL, settings.receiveAfterSchool)
             .putBoolean(KEY_SCHEDULE, settings.receiveScheduleChanged)
             .putBoolean(KEY_CUSTOM, settings.receiveCustom)
+            .putBoolean(KEY_AUTOMATION_NOTIFICATIONS, settings.receiveAutomationNotifications)
+            .putBoolean(KEY_PLUGIN_NOTIFICATIONS, settings.receivePluginNotifications)
             .apply()
     }
 
@@ -61,6 +67,8 @@ class SettingsStore(context: Context) {
         const val KEY_AFTER_SCHOOL = "receiveAfterSchool"
         const val KEY_SCHEDULE = "receiveScheduleChanged"
         const val KEY_CUSTOM = "receiveCustom"
+        const val KEY_AUTOMATION_NOTIFICATIONS = "receiveAutomationNotifications"
+        const val KEY_PLUGIN_NOTIFICATIONS = "receivePluginNotifications"
     }
 }
 
@@ -70,5 +78,7 @@ internal fun WatchSettings.receives(event: ClassEvent): Boolean = when (event.ev
     Protocol.EVENT_AFTER_SCHOOL -> receiveAfterSchool
     Protocol.EVENT_SCHEDULE_CHANGED -> receiveScheduleChanged
     Protocol.EVENT_CUSTOM -> receiveCustom
+    Protocol.EVENT_AUTOMATION_NOTIFICATION -> receiveAutomationNotifications
+    Protocol.EVENT_PLUGIN_NOTIFICATION -> receivePluginNotifications
     else -> false
 }

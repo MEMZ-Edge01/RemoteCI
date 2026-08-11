@@ -41,6 +41,7 @@ public class Plugin : PluginBase
         services.AddSingleton<ScheduleCatalog>();
         services.AddSingleton<ClassIslandHostControlService>();
         services.AddSingleton<CommandHandler>();
+        services.AddSingleton<ClassIslandNotificationBridge>();
         services.AddSingleton<StateCollector>();
         services.AddSingleton<RemoteCiService>();
         services.AddNotificationProvider<RemoteNotificationProvider>();

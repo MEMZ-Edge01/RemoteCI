@@ -112,6 +112,25 @@ class WatchScreensTest {
     }
 
     @Test
+    fun `rotary input needs accumulated rotation before switching home pages`() {
+        // 未达到阈值时保持当前页并继续累积。
+        assertEquals(0 to 1f, applyRotaryToHomePage(accumulator = 0f, currentPage = 0, scrollPixels = 1f))
+        assertEquals(0 to 2f, applyRotaryToHomePage(accumulator = 1f, currentPage = 0, scrollPixels = 1f))
+        // 达到阈值后翻到第二屏并清零。
+        assertEquals(1 to 0f, applyRotaryToHomePage(accumulator = 2f, currentPage = 0, scrollPixels = 1f))
+        // 反向同理：从第二屏退回第一屏。
+        assertEquals(0 to 0f, applyRotaryToHomePage(accumulator = -2f, currentPage = 1, scrollPixels = -1f))
+        // 边界上继续旋转不翻页，但清零防止残留累计。
+        assertEquals(1 to 0f, applyRotaryToHomePage(accumulator = 2f, currentPage = 1, scrollPixels = 1f))
+        assertEquals(0 to 0f, applyRotaryToHomePage(accumulator = -2f, currentPage = 0, scrollPixels = -1f))
+        // 来回抖动不会越界翻页。
+        assertEquals(0 to 1f, applyRotaryToHomePage(accumulator = 0f, currentPage = 0, scrollPixels = 1f))
+        assertEquals(0 to 0f, applyRotaryToHomePage(accumulator = 1f, currentPage = 0, scrollPixels = -1f))
+        // 零事件不改变状态。
+        assertEquals(0 to 1f, applyRotaryToHomePage(accumulator = 1f, currentPage = 0, scrollPixels = 0f))
+    }
+
+    @Test
     fun `only schedule managers can see next class details`() {
         assertFalse(canViewExtendedSchedule(UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)))
         assertTrue(

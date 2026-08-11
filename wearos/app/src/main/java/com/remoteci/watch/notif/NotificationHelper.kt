@@ -27,10 +27,10 @@ object NotificationHelper {
     fun ensureChannel(context: Context) {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "课表提醒",
+            "RemoteCI 通知",
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "上课、下课、放学提醒"
+            description = "课程、自动化和 ClassIsland 插件提醒"
             enableVibration(true)
         }
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -52,6 +52,8 @@ object NotificationHelper {
             Protocol.EVENT_AFTER_SCHOOL -> "放学啦"
             Protocol.EVENT_SCHEDULE_CHANGED -> "课表已更新"
             Protocol.EVENT_CUSTOM -> event.subject ?: "RemoteCI 通知"
+            Protocol.EVENT_AUTOMATION_NOTIFICATION,
+            Protocol.EVENT_PLUGIN_NOTIFICATION -> event.subject ?: "ClassIsland 通知"
             else -> "RemoteCI"
         }
 

@@ -81,6 +81,8 @@ public enum ClassEventKind
     OnAfterSchool = 3,
     ScheduleChanged = 4,
     Custom = 5,
+    AutomationNotification = 6,
+    PluginNotification = 7,
 }
 
 public enum CommandKind

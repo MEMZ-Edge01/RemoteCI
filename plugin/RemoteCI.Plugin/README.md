@@ -16,6 +16,7 @@
 - 为指定日期创建 ClassIsland 临时课表层，支持交换和替换，并保存 Profile。
 - 比较 `expectedRevision`，拒绝过期换课请求。
 - 通过 `NotificationProviderBase` 显示自定义通知，成功后广播事件。
+- 旁路观察 ClassIsland 的统一通知入口，把自动化“显示提醒”和第三方插件通知广播到手表，不接管或延迟桌面端显示。
 
 ## 配置
 

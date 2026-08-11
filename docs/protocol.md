@@ -47,11 +47,13 @@
 | `account_sync` | 服务端 → 插件 | 账号元数据、有效权限、设备验证器、版本和生成时间 |
 | `state_push` | 插件 → 服务端/手表 | 高频当前课程、提醒播放、主界面显隐与可用电源状态，不含完整课表 |
 | `schedule_sync` | 插件 → 服务端/手表 | 今天起七天的日期、课程、科目清单和每日修订号 |
-| `event_notify` | 插件 → 服务端/手表 | 上课、下课、放学、课表变更或自定义消息 |
+| `event_notify` | 插件 → 服务端/手表 | 上课、下课、放学、课表变更、自定义消息、ClassIsland 自动化或第三方插件通知 |
 | `command` | 手表/服务端 → 插件 | 结构化换课、通知、主界面或电源命令 |
 | `command_result` | 插件 → 发起者 | 真实成功、失败码、消息和可选新修订号 |
 
 `command_result.replyToMessageId` 必须等于请求的 `messageId`。服务端只把结果交给对应的 WebSocket 或等待中的 WebUI 请求，等待上限 15 秒。
+
+`event_notify.payload.event` 的值 6 表示 ClassIsland 自动化“显示提醒”行动产生的通知，值 7 表示第三方 ClassIsland 插件产生的通知。手表分别持久化开关；内置课程、天气等通知不会被值 7 重复转发。
 
 自定义通知由插件最终执行时强制把标题格式化为 `由用户名发送：原标题`。发送者名称取自已认证账号的 `displayName`（界面称“用户名”），而 `username` 是唯一登录 ID；手表、WebUI 和其他客户端均不能覆盖或移除署名前缀。通知请求还可通过 `isNotificationEffectEnabled`、`isNotificationSoundEnabled` 和 `isSpeechEnabled` 分别控制 ClassIsland 的提醒强调特效、提醒音效和语音朗读；省略时均为关闭。
 

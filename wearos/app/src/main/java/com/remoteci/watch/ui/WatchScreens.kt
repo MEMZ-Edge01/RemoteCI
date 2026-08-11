@@ -45,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,6 +84,7 @@ import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalTime
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 internal enum class SwapMode { Exchange, Replace }
 internal enum class LessonTarget { Source, Target }
@@ -138,10 +140,29 @@ internal fun HomeScreen(
     LaunchedEffect(snapshot?.currentTimeLayoutItem) { while (true) { now = LocalTime.now(); delay(30_000) } }
     WatchSurface { diameter ->
         val pagerState = rememberPagerState(pageCount = { 2 })
+        val focusRequester = remember { FocusRequester() }
+        val coroutineScope = rememberCoroutineScope()
+        var rotaryAccumulator by remember { mutableStateOf(0f) }
+        LaunchedEffect(Unit) { focusRequester.requestFocus() }
         Box(Modifier.fillMaxSize()) {
             VerticalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(focusRequester)
+                    .onRotaryScrollEvent { event ->
+                        val (targetPage, nextAccumulator) = applyRotaryToHomePage(
+                            accumulator = rotaryAccumulator,
+                            currentPage = pagerState.currentPage,
+                            scrollPixels = event.verticalScrollPixels,
+                        )
+                        rotaryAccumulator = nextAccumulator
+                        if (targetPage != pagerState.currentPage) {
+                            coroutineScope.launch { pagerState.animateScrollToPage(targetPage) }
+                        }
+                        event.verticalScrollPixels != 0f
+                    }
+                    .focusable(),
             ) { page ->
                 if (page == 0) {
                     HomeStatusPage(
@@ -169,6 +190,28 @@ internal fun HomeScreen(
                 modifier = Modifier.align(Alignment.CenterEnd),
             )
         }
+    }
+}
+
+/**
+ * 旋钮翻页所需的最小累计滚动量。
+ * Wear OS 旋钮每格约产生 1.0 垂直滚动像素，取 3 格可避免轻微转动或抖动误翻页。
+ */
+internal const val HOME_PAGE_ROTARY_SWITCH_THRESHOLD = 3f
+
+internal fun applyRotaryToHomePage(
+    accumulator: Float,
+    currentPage: Int,
+    scrollPixels: Float,
+): Pair<Int, Float> {
+    val total = accumulator + scrollPixels
+    return when {
+        total >= HOME_PAGE_ROTARY_SWITCH_THRESHOLD && currentPage < 1 -> 1 to 0f
+        total <= -HOME_PAGE_ROTARY_SWITCH_THRESHOLD && currentPage > 0 -> 0 to 0f
+        // 已达边界时即使方向一致也不翻页，清零避免残留累计影响反向切换。
+        total >= HOME_PAGE_ROTARY_SWITCH_THRESHOLD || total <= -HOME_PAGE_ROTARY_SWITCH_THRESHOLD ->
+            currentPage to 0f
+        else -> currentPage to total
     }
 }
 
@@ -577,6 +620,8 @@ internal fun NotificationSettingsScreen(
     item { Toggle("放学", settings.receiveAfterSchool) { onSettingsChange(settings.copy(receiveAfterSchool = it)) } }
     item { Toggle("课表变更", settings.receiveScheduleChanged) { onSettingsChange(settings.copy(receiveScheduleChanged = it)) } }
     item { Toggle("自定义消息", settings.receiveCustom) { onSettingsChange(settings.copy(receiveCustom = it)) } }
+    item { Toggle("ClassIsland 自动化", settings.receiveAutomationNotifications) { onSettingsChange(settings.copy(receiveAutomationNotifications = it)) } }
+    item { Toggle("其他插件通知", settings.receivePluginNotifications) { onSettingsChange(settings.copy(receivePluginNotifications = it)) } }
     item { BackButton(onBack) }
 }
 

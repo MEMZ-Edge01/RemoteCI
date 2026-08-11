@@ -11,6 +11,7 @@
 | Gradle / Android Gradle Plugin | 构建工具 | Apache-2.0 | © Gradle Inc. / Google |
 | xUnit / Microsoft.NET.Test.Sdk / Mvc.Testing | 服务端测试框架（开发依赖） | Apache-2.0 / MIT | © .NET Foundation 等；仅用于测试，不进入分发物 |
 | [Fleck](https://github.com/statianzo/Fleck) | 插件端嵌入式 WebSocket 服务器（局域网直连） | MIT | Copyright (c) Jason Staten |
+| [Harmony](https://github.com/pardeike/Harmony) | 旁路观察 ClassIsland 通知发送入口 | MIT | Copyright (c) Andreas Pardeike；使用单程序集 `Lib.Harmony` 分发包 |
 | [NAudio](https://github.com/naudio/NAudio) | Windows 默认播放设备主音量与静音控制 | MIT | Copyright (c) Mark Heath 等贡献者 |
 | OkHttp | 手表端 HTTP/WebSocket 客户端 | Apache-2.0 | © Square, Inc. |
 | kotlinx.serialization | 手表端 JSON 序列化 | Apache-2.0 | © JetBrains |

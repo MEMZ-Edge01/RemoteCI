@@ -26,6 +26,8 @@ object Protocol {
     const val EVENT_AFTER_SCHOOL = 3
     const val EVENT_SCHEDULE_CHANGED = 4
     const val EVENT_CUSTOM = 5
+    const val EVENT_AUTOMATION_NOTIFICATION = 6
+    const val EVENT_PLUGIN_NOTIFICATION = 7
 
     const val CMD_CHANGE_SCHEDULE = 1
     const val CMD_SEND_NOTIFICATION = 2

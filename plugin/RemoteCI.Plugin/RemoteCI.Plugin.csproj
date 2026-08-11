@@ -30,6 +30,8 @@
     </PackageReference>
     <!-- Fleck：嵌入式 WebSocket 服务器（MIT），用于局域网直连，不依赖 ASP.NET Core 运行时 -->
     <PackageReference Include="Fleck" Version="1.2.0" />
+    <!-- ClassIsland 暂未公开通知发送事件；Harmony 仅在运行时旁路观察统一发送入口，不替换原有显示流程。 -->
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
     <!-- NAudio.Wasapi：通过 Windows Core Audio 读取和控制默认播放设备的主音量。 -->
     <PackageReference Include="NAudio.Wasapi" Version="2.3.0" />
   </ItemGroup>
@@ -50,6 +52,12 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="icon.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="../../LICENSE" Link="LICENSE">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="../../THIRD_PARTY_NOTICES.md" Link="THIRD_PARTY_NOTICES.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

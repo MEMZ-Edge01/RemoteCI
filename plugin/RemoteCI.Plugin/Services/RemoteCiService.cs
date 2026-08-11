@@ -13,6 +13,7 @@ public sealed class RemoteCiService : IDisposable
 {
     private readonly StateCollector _collector;
     private readonly CommandHandler _commandHandler;
+    private readonly ClassIslandNotificationBridge _notificationBridge;
     private readonly PluginSettings _settings;
     private readonly AccountMirror _accounts;
     private readonly ILoggerFactory _loggerFactory;
@@ -25,12 +26,14 @@ public sealed class RemoteCiService : IDisposable
     public RemoteCiService(
         StateCollector collector,
         CommandHandler commandHandler,
+        ClassIslandNotificationBridge notificationBridge,
         PluginSettings settings,
         AccountMirror accounts,
         ILoggerFactory loggerFactory)
     {
         _collector = collector;
         _commandHandler = commandHandler;
+        _notificationBridge = notificationBridge;
         _settings = settings;
         _accounts = accounts;
         _loggerFactory = loggerFactory;
@@ -46,6 +49,8 @@ public sealed class RemoteCiService : IDisposable
         _commandHandler.NotificationSent += OnEventOccurred;
         _commandHandler.ScheduleChanged += OnScheduleChanged;
         _commandHandler.HostStateChanged += OnHostStateChanged;
+        _notificationBridge.NotificationCaptured += OnEventOccurred;
+        _notificationBridge.Start();
 
         if (_settings.EnableLanServer)
         {
@@ -77,6 +82,8 @@ public sealed class RemoteCiService : IDisposable
         _commandHandler.NotificationSent -= OnEventOccurred;
         _commandHandler.ScheduleChanged -= OnScheduleChanged;
         _commandHandler.HostStateChanged -= OnHostStateChanged;
+        _notificationBridge.NotificationCaptured -= OnEventOccurred;
+        _notificationBridge.Stop();
         _cts?.Cancel();
         _cloudClient?.Dispose();
         _cloudClient = null;

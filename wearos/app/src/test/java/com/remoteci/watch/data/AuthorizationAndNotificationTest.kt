@@ -15,6 +15,8 @@ class AuthorizationAndNotificationTest {
             Protocol.EVENT_AFTER_SCHOOL,
             Protocol.EVENT_SCHEDULE_CHANGED,
             Protocol.EVENT_CUSTOM,
+            Protocol.EVENT_AUTOMATION_NOTIFICATION,
+            Protocol.EVENT_PLUGIN_NOTIFICATION,
         ).forEach { eventType ->
             assertTrue(settings.receives(ClassEvent(id = "event-$eventType", event = eventType)))
         }
@@ -22,10 +24,12 @@ class AuthorizationAndNotificationTest {
 
     @Test
     fun `event preferences are independent`() {
-        val settings = WatchSettings(receiveCustom = false)
+        val settings = WatchSettings(receiveCustom = false, receiveAutomationNotifications = false)
 
         assertFalse(settings.receives(ClassEvent(id = "custom", event = Protocol.EVENT_CUSTOM)))
         assertTrue(settings.receives(ClassEvent(id = "class", event = Protocol.EVENT_ON_CLASS)))
+        assertFalse(settings.receives(ClassEvent(id = "automation", event = Protocol.EVENT_AUTOMATION_NOTIFICATION)))
+        assertTrue(settings.receives(ClassEvent(id = "plugin", event = Protocol.EVENT_PLUGIN_NOTIFICATION)))
     }
 
     @Test
