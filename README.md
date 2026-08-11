@@ -1,5 +1,7 @@
 # RemoteCI
 
+![CI](https://github.com/MEMZ-Edge01/RemoteCI/actions/workflows/ci.yml/badge.svg)
+
 RemoteCI 是 ClassIsland 2.x、ASP.NET Core 服务端和 Wear OS 手表组成的课表联动系统，统一使用账号、设备会话和细粒度权限控制公网与局域网操作。
 
 ## 已实现

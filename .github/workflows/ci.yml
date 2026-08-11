@@ -1,0 +1,41 @@
+name: CI
+
+# main 分支保护依赖的常规检查：服务端/共享库构建测试 + 手表端构建测试。
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: dotnet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: 构建
+        run: dotnet build RemoteCI.slnx -c Release
+      - name: 测试
+        run: dotnet test RemoteCI.slnx -c Release --no-build
+
+  wearos:
+    name: wearos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: 构建并测试手表端
+        working-directory: wearos
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug :app:testDebugUnitTest --console=plain

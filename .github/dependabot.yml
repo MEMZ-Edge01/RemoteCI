@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # GitHub Actions 与 NuGet 依赖每周检查一次，自动开 PR。
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "nuget"
+    directory: "/"
+    schedule:
+      interval: "weekly"
