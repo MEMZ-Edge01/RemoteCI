@@ -8,6 +8,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -18,6 +19,8 @@ import com.remoteci.watch.data.ScheduleChangeRequest
 import com.remoteci.watch.data.SettingsStore
 import com.remoteci.watch.data.SnapshotStore
 import com.remoteci.watch.notif.NotificationHelper
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private enum class Screen {
     Login,
@@ -49,6 +52,7 @@ fun RemoteCiApp(context: Context) {
         }.getOrNull() ?: "0.0.0"
     }
     ConnectionManager.initialize(context)
+    val scope = rememberCoroutineScope()
 
     var settings by remember { mutableStateOf(settingsStore.load()) }
     var screen by rememberSaveable {
@@ -245,6 +249,22 @@ fun RemoteCiApp(context: Context) {
             snapshot = displayedSnapshot,
             user = currentUser,
             resultText = commandResult?.let { if (it.success) "已完成：${it.message}" else "失败：${it.message}" },
+            onTeacherComing = {
+                // “老师来了”快捷提醒：标题展示“老师来了”，仅开启强调特效，不带音效和语音；
+                // 1 秒后自动清除。ClassIsland 先播标题（遮罩）再播正文，因此正文不会在 1 秒内显示，
+                // 这里传“老师来了”只是满足服务端正文非空的校验，效果等同正文留空。
+                ConnectionManager.sendNotification(
+                    title = "老师来了",
+                    message = "老师来了",
+                    isNotificationEffectEnabled = true,
+                    isNotificationSoundEnabled = false,
+                    isSpeechEnabled = false,
+                )
+                scope.launch {
+                    delay(1_000)
+                    ConnectionManager.clearNotifications()
+                }
+            },
             onOpenNotification = { screen = Screen.Notification },
             onClearNotifications = ConnectionManager::clearNotifications,
             onToggleMainMenu = {

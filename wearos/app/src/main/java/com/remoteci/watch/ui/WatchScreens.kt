@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.EditNotifications
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -445,6 +446,7 @@ internal fun ControlScreen(
     snapshot: ClassStateSnapshot?,
     user: UserProfile?,
     resultText: String?,
+    onTeacherComing: () -> Unit,
     onOpenNotification: () -> Unit,
     onClearNotifications: () -> Unit,
     onToggleMainMenu: () -> Unit,
@@ -454,6 +456,7 @@ internal fun ControlScreen(
 ) = WatchList(title = "控制") {
     val canNotify = user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true
     val canControlSystem = user?.has(Protocol.PERMISSION_SYSTEM_CONTROL) == true
+    item { ActionButton("老师来了", Icons.Rounded.School, canNotify, onTeacherComing) }
     item { ActionButton("发送通知", Icons.Rounded.EditNotifications, canNotify, onOpenNotification) }
     if (shouldShowClearNotifications(snapshot)) item {
         ActionButton("清除通知", Icons.Rounded.NotificationsOff, canNotify, onClearNotifications)
