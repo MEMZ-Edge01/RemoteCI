@@ -20,7 +20,7 @@
       .NET 会允许较新的宿主程序集满足较低版本引用，从而覆盖整个 2.x 系列。
       SDK 运行时由 ClassIsland 宿主提供，插件包内不携带，避免类型冲突。
     -->
-    <PackageReference Include="ClassIsland.PluginSdk" Version="2.0.0-dev-v2">
+    <PackageReference Include="ClassIsland.PluginSdk" Version="2.1.0.1">
       <ExcludeAssets>runtime; native</ExcludeAssets>
     </PackageReference>
     <!-- ClassIsland SDK 经 Avalonia 传入的 0.21.2 存在 GHSA-xrw6-gwf8-vvr9；固定到兼容分支的修复版。 -->

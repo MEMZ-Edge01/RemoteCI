@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="ClassIsland.PluginSdk" Version="2.0.0-dev-v2" />
+    <PackageReference Include="ClassIsland.PluginSdk" Version="2.1.0.1" />
     <!-- 与插件项目保持同一安全覆盖版本，避免测试依赖图回退到有漏洞的 0.21.2。 -->
     <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
