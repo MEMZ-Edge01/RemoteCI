@@ -44,30 +44,41 @@ public sealed class ClassIslandNotificationBridge
     {
         if (_harmony is not null) return;
 
-        var hostType = AccessTools.TypeByName("ClassIsland.Services.NotificationHostService");
-        var showMethod = hostType is null
-            ? null
-            : AccessTools.Method(hostType, "ShowNotification", new[]
+        try
+        {
+            var hostType = AccessTools.TypeByName("ClassIsland.Services.NotificationHostService");
+            var showMethod = hostType is null
+                ? null
+                : AccessTools.Method(hostType, "ShowNotification", new[]
+                {
+                    typeof(HostNotificationRequest), typeof(Guid), typeof(Guid), typeof(bool), typeof(bool),
+                });
+            if (showMethod is null)
             {
-                typeof(HostNotificationRequest), typeof(Guid), typeof(Guid), typeof(bool), typeof(bool),
+                _logger.LogWarning("ClassIsland 通知入口不可用，自动化和第三方插件通知不会推送到手表");
+                return;
+            }
+
+            _active = this;
+            _harmony = new Harmony(HarmonyId);
+            _harmony.Patch(showMethod, postfix: new HarmonyMethod(typeof(ClassIslandNotificationBridge), nameof(AfterShowNotification)));
+
+            var showChainedMethod = AccessTools.Method(hostType, "ShowChainedNotifications", new[]
+            {
+                typeof(HostNotificationRequest[]), typeof(Guid), typeof(Guid),
             });
-        if (showMethod is null)
-        {
-            _logger.LogWarning("ClassIsland 通知入口不可用，自动化和第三方插件通知不会推送到手表");
-            return;
+            if (showChainedMethod is not null)
+            {
+                _harmony.Patch(showChainedMethod, postfix: new HarmonyMethod(typeof(ClassIslandNotificationBridge), nameof(AfterShowChainedNotifications)));
+            }
         }
-
-        _active = this;
-        _harmony = new Harmony(HarmonyId);
-        _harmony.Patch(showMethod, postfix: new HarmonyMethod(typeof(ClassIslandNotificationBridge), nameof(AfterShowNotification)));
-
-        var showChainedMethod = AccessTools.Method(hostType, "ShowChainedNotifications", new[]
+        catch (Exception ex)
         {
-            typeof(HostNotificationRequest[]), typeof(Guid), typeof(Guid),
-        });
-        if (showChainedMethod is not null)
-        {
-            _harmony.Patch(showChainedMethod, postfix: new HarmonyMethod(typeof(ClassIslandNotificationBridge), nameof(AfterShowChainedNotifications)));
+            // 通知桥接只是增强功能，打补丁失败绝不能拖垮插件主服务或 ClassIsland 启动流程。
+            _harmony?.UnpatchAll(HarmonyId);
+            _harmony = null;
+            if (ReferenceEquals(_active, this)) _active = null;
+            _logger.LogWarning(ex, "ClassIsland 通知桥接补丁失败，自动化和第三方插件通知不会推送到手表");
         }
     }
 
