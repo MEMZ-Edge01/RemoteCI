@@ -47,6 +47,7 @@ builder.Services.AddRazorPages(options => options.Conventions.AllowAnonymousToPa
 builder.Services.AddScoped<IdentityCoordinator>();
 builder.Services.AddSingleton<IStateStore, StateStore>();
 builder.Services.AddSingleton<PeerRegistry>();
+builder.Services.AddSingleton<UpdateService>();
 
 var app = builder.Build();
 app.UseForwardedHeaders(new ForwardedHeadersOptions

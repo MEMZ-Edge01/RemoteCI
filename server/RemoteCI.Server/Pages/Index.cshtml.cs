@@ -18,6 +18,7 @@ public sealed class IndexModel(UserManager<AppUser> users, PeerRegistry peers, I
     public ClassStateSnapshot? Snapshot { get; private set; }
     public ScheduleBundle? Schedule { get; private set; }
     public string? PairCode { get; private set; }
+    public string ServerVersion => AppVersion.Version;
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {

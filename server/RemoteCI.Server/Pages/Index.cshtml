@@ -80,6 +80,7 @@
     <dl class="system-table">
         <div><dt>在线手表</dt><dd>@Model.WatchConnections</dd></div>
         <div><dt>账号</dt><dd>@Model.AccountCount</dd></div>
+        <div><dt>服务端版本</dt><dd>v@(Model.ServerVersion)</dd></div>
         <div><dt>课表同步</dt><dd>@(Model.Schedule?.GeneratedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "暂无")</dd></div>
         <div>
             <dt>@(Model.PluginOnline ? "插件状态" : "插件离线")</dt>
@@ -89,6 +90,6 @@
 </section>
 
 <footer class="workspace-footer">
-    <span><strong>RemoteCI <small>v2</small></strong> 远程课堂控制系统</span>
+    <span><strong>RemoteCI <small>v@(Model.ServerVersion)</small></strong> 远程课堂控制系统</span>
     <span>日期：@DateTimeOffset.Now.ToLocalTime().ToString("yyyy-MM-dd")</span>
 </footer>

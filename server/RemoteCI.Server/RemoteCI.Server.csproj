@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RemoteCI.Server</RootNamespace>
     <LangVersion>latest</LangVersion>
+    <!-- 与仓库 release 对齐的应用版本，WebUI 更新功能据此比较。 -->
+    <Version>0.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

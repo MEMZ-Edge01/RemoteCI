@@ -5,4 +5,36 @@
 <div class="two-column">
     <section class="panel"><h2>修改密码</h2><form method="post" asp-page-handler="Password" class="stack"><div asp-validation-summary="All" class="validation"></div><label>当前密码<input asp-for="Password.CurrentPassword" type="password" autocomplete="current-password" /></label><label>新密码<input asp-for="Password.NewPassword" type="password" autocomplete="new-password" /></label><button type="submit">修改并撤销设备登录</button></form></section>
     <section class="panel"><h2>已登录设备</h2>@if (Model.Sessions.Count == 0) { <p class="muted">暂无手表设备会话。</p> } else { <div class="list">@foreach (var session in Model.Sessions) { <article><div><strong>@session.DeviceName</strong><small>最近使用 @session.LastSeenAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</small></div><form method="post" asp-page-handler="Revoke"><input type="hidden" name="id" value="@session.Id" /><button class="danger ghost" type="submit">撤销</button></form></article> }</div> }</section>
+    @if (Model.Permissions.HasFlag(UserPermissions.ManageUsers))
+    {
+        <section class="panel update-panel">
+            <h2>系统更新</h2>
+            <p class="muted">当前服务端版本 v@(Model.CurrentVersion)，更新从 GitHub 仓库最新 release 拉取。</p>
+            @if (!string.IsNullOrEmpty(Model.CheckMessage))
+            {
+                <p class="notice @(Model.UpdateSucceeded ? "ok" : "warn")">@Model.CheckMessage</p>
+            }
+            @if (Model.LatestRelease is not null)
+            {
+                var latestVersion = UpdateService.NormalizeVersion(Model.LatestRelease.Tag);
+                var hasNewer = UpdateService.IsNewer(latestVersion, Model.CurrentVersion);
+                <p class="muted">最新版本 v@(latestVersion)</p>
+                @if (!string.IsNullOrEmpty(Model.LatestRelease.Body))
+                {
+                    <details class="release-notes"><summary>查看更新说明</summary><pre>@Model.LatestRelease.Body</pre></details>
+                }
+                @if (hasNewer && Model.ServerAsset is not null)
+                {
+                    <form method="post" asp-page-handler="Update" class="stack" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='下载并重启中…'">
+                        <button type="submit">下载并更新到 v@(latestVersion)</button>
+                    </form>
+                }
+                else if (hasNewer)
+                {
+                    <p class="muted">当前平台暂无可用的更新包，请到 GitHub 手动下载。</p>
+                }
+            }
+            <form method="post" asp-page-handler="CheckUpdate" class="stack"><button type="submit">检查更新</button></form>
+        </section>
+    }
 </div>

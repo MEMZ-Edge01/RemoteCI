@@ -1,0 +1,63 @@
+using RemoteCI.Server.Services;
+using Xunit;
+
+namespace RemoteCI.Server.Tests;
+
+public sealed class UpdateServiceTests
+{
+    [Theory]
+    [InlineData("v0.2.0", "0.2.0")]
+    [InlineData("0.3.0", "0.3.0")]
+    [InlineData("v1.0.0-beta.1", "1.0.0-beta.1")]
+    public void NormalizeVersion_StripsTagPrefix(string tag, string expected) =>
+        Assert.Equal(expected, UpdateService.NormalizeVersion(tag));
+
+    [Theory]
+    [InlineData("0.3.0", "0.2.0", true)]
+    [InlineData("0.2.0", "0.2.0", false)]
+    [InlineData("0.2.0", "0.3.0", false)]
+    [InlineData("1.0.0", "0.9.9", true)]
+    [InlineData("0.10.0", "0.9.0", true)]
+    public void IsNewer_ComparesSemanticVersions(string latest, string current, bool expected) =>
+        Assert.Equal(expected, UpdateService.IsNewer(latest, current));
+
+    [Fact]
+    public void SelectServerAsset_PicksMatchingPlatformZip()
+    {
+        var service = new UpdateService();
+        var release = new ReleaseInfo(
+            "v0.2.0",
+            "RemoteCI 0.2.0",
+            "",
+            new[]
+            {
+                new ReleaseAsset("RemoteCI.Watch-0.2.0.apk", "https://example/watch.apk", 1),
+                new ReleaseAsset("RemoteCI.Plugin-0.2.0.cipx", "https://example/plugin.cipx", 1),
+                new ReleaseAsset("RemoteCI.Server-0.2.0-linux-x64.zip", "https://example/linux.zip", 1),
+                new ReleaseAsset("RemoteCI.Server-0.2.0-win-x64.zip", "https://example/win.zip", 1),
+            });
+
+        var expected = OperatingSystem.IsWindows() ? "win" : "linux";
+        var asset = service.SelectServerAsset(release);
+
+        Assert.NotNull(asset);
+        Assert.Contains($"-{expected}-", asset.Name);
+        Assert.EndsWith(".zip", asset.Name);
+    }
+
+    [Fact]
+    public void SelectServerAsset_ReturnsNullWhenPlatformMissing()
+    {
+        var service = new UpdateService();
+        var release = new ReleaseInfo(
+            "v0.2.0",
+            "RemoteCI 0.2.0",
+            "",
+            new[]
+            {
+                new ReleaseAsset("RemoteCI.Watch-0.2.0.apk", "https://example/watch.apk", 1),
+            });
+
+        Assert.Null(service.SelectServerAsset(release));
+    }
+}

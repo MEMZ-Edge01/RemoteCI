@@ -23,6 +23,8 @@ wearos/build/
 wearos/**/build/
 wearos/local.properties
 wearos/.idea/
+wearos/keystore.properties
+wearos/keystore/
 *.iml
 captures/
 .externalNativeBuild/

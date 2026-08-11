@@ -1,5 +1,6 @@
 package com.remoteci.watch.ui
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.automirrored.rounded.List
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.EditNotifications
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.PowerSettingsNew
@@ -36,6 +38,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
@@ -74,11 +77,14 @@ import androidx.wear.compose.material.ToggleChipDefaults
 import com.remoteci.watch.data.ClassStateSnapshot
 import com.remoteci.watch.data.ConnectionManager
 import com.remoteci.watch.data.CourseEntry
+import com.remoteci.watch.data.GitHubAsset
+import com.remoteci.watch.data.GitHubRelease
 import com.remoteci.watch.data.Protocol
 import com.remoteci.watch.data.ScheduleBundle
 import com.remoteci.watch.data.ScheduleDay
 import com.remoteci.watch.data.SubjectEntry
 import com.remoteci.watch.data.UserProfile
+import com.remoteci.watch.data.UpdateManager
 import com.remoteci.watch.data.WatchSettings
 import java.time.Duration
 import java.time.LocalDate
@@ -583,11 +589,128 @@ internal fun NotificationScreen(
 internal fun SettingsScreen(
     onOpenConnection: () -> Unit,
     onOpenNotifications: () -> Unit,
+    onOpenUpdate: () -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = "设置") {
     item { ActionButton("连接", Icons.Rounded.Wifi, true, onOpenConnection) }
     item { ActionButton("通知", Icons.Rounded.EditNotifications, true, onOpenNotifications) }
+    item { ActionButton("更新", Icons.Rounded.SystemUpdate, true, onOpenUpdate) }
     item { BackButton(onBack) }
+}
+
+/** 更新页状态。 */
+private sealed interface UpdateUiState {
+    data object Idle : UpdateUiState
+    data object Checking : UpdateUiState
+    data object UpToDate : UpdateUiState
+    data object Downloading : UpdateUiState
+    data object Installing : UpdateUiState
+    data class Available(
+        val latestVersion: String,
+        val release: GitHubRelease,
+        val asset: GitHubAsset,
+    ) : UpdateUiState
+
+    data class Error(val message: String) : UpdateUiState
+}
+
+@Composable
+internal fun UpdateScreen(
+    context: Context,
+    currentVersion: String,
+    onBack: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var state by remember { mutableStateOf<UpdateUiState>(UpdateUiState.Idle) }
+
+    fun checkUpdate(): Unit {
+        state = UpdateUiState.Checking
+        scope.launch {
+            state = try {
+                val release = UpdateManager.fetchLatestRelease()
+                val latest = UpdateManager.versionFromTag(release.tagName)
+                val asset = UpdateManager.findApkAsset(release)
+                if (UpdateManager.isNewer(latest, currentVersion) && asset != null) {
+                    UpdateUiState.Available(latest, release, asset)
+                } else {
+                    UpdateUiState.UpToDate
+                }
+            } catch (error: Exception) {
+                UpdateUiState.Error(error.message ?: "检查更新失败")
+            }
+        }
+    }
+
+    WatchList(title = "更新") {
+        item { Hint("当前版本 v$currentVersion") }
+        when (val current = state) {
+            UpdateUiState.Idle, UpdateUiState.Checking -> {
+                if (current == UpdateUiState.Checking) {
+                    item { CircularProgressIndicator(modifier = Modifier.size(34.dp)) }
+                }
+                item {
+                    ActionButton(
+                        "检查更新",
+                        Icons.Rounded.SystemUpdate,
+                        enabled = current != UpdateUiState.Checking,
+                        onClick = ::checkUpdate,
+                    )
+                }
+            }
+
+            UpdateUiState.UpToDate -> {
+                item { Hint("已是最新版本") }
+                item {
+                    ActionButton("重新检查", Icons.Rounded.SystemUpdate, true, onClick = ::checkUpdate)
+                }
+            }
+
+            is UpdateUiState.Available -> {
+                item { Hint("发现新版本 v${current.latestVersion}") }
+                item { Hint(releaseNotesPreview(current.release.body)) }
+                item {
+                    ActionButton("下载并安装", Icons.Rounded.Download, true, onClick = {
+                        state = UpdateUiState.Downloading
+                        scope.launch {
+                            state = try {
+                                val apk = UpdateManager.downloadApk(context, current.asset)
+                                UpdateManager.installApk(context, apk)
+                                UpdateUiState.Installing
+                            } catch (error: Exception) {
+                                UpdateUiState.Error(error.message ?: "更新失败")
+                            }
+                        }
+                        Unit
+                    })
+                }
+            }
+
+            UpdateUiState.Downloading -> {
+                item { Hint("正在下载更新包…") }
+                item { CircularProgressIndicator(modifier = Modifier.size(34.dp)) }
+            }
+
+            UpdateUiState.Installing -> {
+                item { Hint("正在安装，请按系统提示确认…") }
+                item { CircularProgressIndicator(modifier = Modifier.size(34.dp)) }
+            }
+
+            is UpdateUiState.Error -> {
+                item { Hint(current.message) }
+                item {
+                    ActionButton("重新检查", Icons.Rounded.SystemUpdate, true, onClick = ::checkUpdate)
+                }
+            }
+        }
+        item { BackButton(onBack) }
+    }
+}
+
+/** 截取 release 说明供手表小屏展示。 */
+private fun releaseNotesPreview(body: String?, maxLength: Int = 180): String {
+    if (body.isNullOrBlank()) return "暂无更新说明"
+    val plain = body.replace("\r", "").trim()
+    return if (plain.length <= maxLength) plain else plain.take(maxLength) + "…"
 }
 
 @Composable

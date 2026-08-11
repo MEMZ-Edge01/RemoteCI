@@ -1,9 +1,25 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
+
+// 签名信息从 wearos/keystore.properties（本机）或 CI 环境变量读取；
+// 文件与密钥均不入库，缺失时 release 构建产物不签名（仅用于本地调试）。
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")?.let { rootProject.file(it) }
+    ?: keystoreProperties.getProperty("storeFile")?.let { rootProject.file(it) }
+val keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    ?: keystoreProperties.getProperty("storePassword")
+val keystoreKeyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: keystoreProperties.getProperty("keyAlias")
+val keystoreKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+    ?: keystoreProperties.getProperty("keyPassword")
 
 android {
     namespace = "com.remoteci.watch"
@@ -19,9 +35,25 @@ android {
             "com.remoteci.watch.NetworkSecurityPolicyInstrumentation"
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystoreFile != null && keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = keystorePassword
+                keyAlias = keystoreKeyAlias
+                keyPassword = keystoreKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = if (keystoreFile != null && keystoreFile.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                null
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

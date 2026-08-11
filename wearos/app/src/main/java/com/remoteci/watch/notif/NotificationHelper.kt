@@ -22,7 +22,7 @@ import com.remoteci.watch.data.receives
  * 通知+振动助手：课程事件到达时发系统通知并振动。
  */
 object NotificationHelper {
-    private const val CHANNEL_ID = "remoteci_class"
+    internal const val CHANNEL_ID = "remoteci_class"
 
     fun ensureChannel(context: Context) {
         val channel = NotificationChannel(

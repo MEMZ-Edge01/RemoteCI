@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 自更新：通过 PackageInstaller 覆盖安装同签名 APK。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -33,6 +35,15 @@
         <meta-data
             android:name="com.google.android.wearable.standalone"
             android:value="true" />
+
+        <!-- PackageInstaller 安装结果接收器，仅响应本应用的 action。 -->
+        <receiver
+            android:name=".notif.UpdateReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.remoteci.watch.UPDATE_INSTALL_RESULT" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

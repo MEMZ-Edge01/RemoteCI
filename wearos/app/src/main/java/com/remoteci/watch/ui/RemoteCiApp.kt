@@ -35,6 +35,7 @@ private enum class Screen {
     Settings,
     ConnectionSettings,
     NotificationSettings,
+    Update,
 }
 
 @Composable
@@ -42,6 +43,11 @@ fun RemoteCiApp(context: Context) {
     val settingsStore = remember { SettingsStore(context) }
     val snapshotStore = remember { SnapshotStore(context) }
     val eventHistory = remember { EventHistory(context) }
+    val currentVersion = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull() ?: "0.0.0"
+    }
     ConnectionManager.initialize(context)
 
     var settings by remember { mutableStateOf(settingsStore.load()) }
@@ -127,6 +133,7 @@ fun RemoteCiApp(context: Context) {
             Screen.Power -> Screen.Control
             Screen.Volume -> Screen.Control
             Screen.ConnectionSettings, Screen.NotificationSettings -> Screen.Settings
+            Screen.Update -> Screen.Settings
             else -> Screen.Home
         }
     }
@@ -291,6 +298,7 @@ fun RemoteCiApp(context: Context) {
         Screen.Settings -> SettingsScreen(
             onOpenConnection = { screen = Screen.ConnectionSettings },
             onOpenNotifications = { screen = Screen.NotificationSettings },
+            onOpenUpdate = { screen = Screen.Update },
             onBack = { screen = Screen.Home },
         )
 
@@ -306,6 +314,12 @@ fun RemoteCiApp(context: Context) {
         Screen.NotificationSettings -> NotificationSettingsScreen(
             settings = settings,
             onSettingsChange = { settings = it; settingsStore.save(it) },
+            onBack = { screen = Screen.Settings },
+        )
+
+        Screen.Update -> UpdateScreen(
+            context = context,
+            currentVersion = currentVersion,
             onBack = { screen = Screen.Settings },
         )
     }

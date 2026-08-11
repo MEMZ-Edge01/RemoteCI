@@ -70,3 +70,26 @@ docker compose start remoteci
 ## 7. 升级
 
 协议 v2 要求服务端、插件和手表一起升级。升级前备份 SQLite 卷，部署服务端并确认迁移成功，再更新 CIPX 和手表 APK。插件离线时 WebUI 的换课与通知会立即失败，不会排队补发。
+
+### 7.1 WebUI（服务端）更新
+
+管理员登录后在“个人账号 → 系统更新”中点击“检查更新”，页面会从 GitHub 仓库
+`MEMZ-Edge01/RemoteCI` 的最新 release 读取版本和更新说明。发现新版本后点击
+“下载并更新”，服务端会下载当前平台（linux-x64 / win-x64）的更新包并就地覆盖，
+然后自动退出进程；Docker 的 `restart: unless-stopped` 策略会以新文件重新启动容器。
+普通用户看不到该面板，且该操作仅对管理员开放。
+
+注意：直接以 `dotnet` 在 Windows 上运行服务端时，运行中的程序集会被锁定，
+热更新可能失败，建议使用 Docker 部署。
+
+### 7.2 插件更新
+
+插件不做内置更新界面，升级统一交给 ClassIsland 的插件市场管理：每个 GitHub
+release 都会附带 `RemoteCI.Plugin-<版本>.cipx` 和对应的 `checksums.md`，
+在 ClassIsland 插件市场中指向该 release 地址即可自动拉取新版本。
+
+### 7.3 手表更新
+
+手表端在“设置 → 更新”中检查 GitHub 最新 release，发现新版本后下载
+`RemoteCI.Watch-<版本>.apk` 并通过系统安装器覆盖安装。更新要求发布包与当前
+安装包签名一致：首次安装正式签名版后，后续更新才能在同一签名下自动覆盖。
