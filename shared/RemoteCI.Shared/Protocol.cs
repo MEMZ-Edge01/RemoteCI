@@ -14,6 +14,7 @@ public static class Protocol
     public const string MessageTypeAuthProof = "auth_proof";
     public const string MessageTypeAuthState = "auth_state";
     public const string MessageTypeAccountSync = "account_sync";
+    public const string MessageTypeExtensionsSync = "extensions_sync";
 
     public const string QueryToken = "token";
     public const string HeaderAuthorization = "Authorization";
@@ -93,6 +94,8 @@ public enum CommandKind
     SetMainMenuVisibility = 4,
     Power = 5,
     Volume = 6,
+    /// <summary>执行其他 ClassIsland 插件通过 RemoteCI 注册的自定义远程功能。</summary>
+    RunExtension = 7,
 }
 
 public enum PowerActionKind

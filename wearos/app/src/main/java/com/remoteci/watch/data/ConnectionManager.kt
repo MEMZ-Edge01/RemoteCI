@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -61,6 +62,7 @@ object ConnectionManager {
     val currentUser = MutableStateFlow<UserProfile?>(null)
     val snapshot = MutableStateFlow<ClassStateSnapshot?>(null)
     val schedule = MutableStateFlow<ScheduleBundle?>(null)
+    val extensions = MutableStateFlow<List<ExtensionDefinition>>(emptyList())
     val events = MutableSharedFlow<ClassEvent>(extraBufferCapacity = 32)
     val lastCommandResult = MutableStateFlow<CommandResult?>(null)
 
@@ -83,6 +85,7 @@ object ConnectionManager {
         webSocket = null
         state.value = State.Connecting
         lastCommandResult.value = null
+        extensions.value = emptyList()
 
         activeJob = scope.launch {
             try {
@@ -124,6 +127,7 @@ object ConnectionManager {
         webSocket = null
         accessToken = null
         if (clearUser) currentUser.value = null
+        extensions.value = emptyList()
         state.value = State.Idle
     }
 
@@ -216,6 +220,17 @@ object ConnectionManager {
         sendCommand(
             CommandMessage(command = Protocol.CMD_VOLUME, volume = VolumeControlRequest(muted = muted)),
             Protocol.PERMISSION_SYSTEM_CONTROL,
+        )
+    }
+
+    fun runExtension(extension: ExtensionDefinition, args: Map<String, String?> = emptyMap()) {
+        sendCommand(
+            CommandMessage(
+                command = Protocol.CMD_RUN_EXTENSION,
+                extensionId = extension.id,
+                extensionArgs = args,
+            ),
+            extension.requiredPermission,
         )
     }
 
@@ -384,6 +399,15 @@ object ConnectionManager {
         }
         Protocol.TYPE_SCHEDULE_SYNC -> {
             envelope.payload?.let { schedule.value = json.decodeFromJsonElement(ScheduleBundle.serializer(), it) }
+            null
+        }
+        Protocol.TYPE_EXTENSIONS_SYNC -> {
+            envelope.payload?.let {
+                extensions.value = json.decodeFromJsonElement(
+                    ListSerializer(ExtensionDefinition.serializer()),
+                    it,
+                )
+            }
             null
         }
         Protocol.TYPE_EVENT_NOTIFY -> {

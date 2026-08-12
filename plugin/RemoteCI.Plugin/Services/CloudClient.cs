@@ -48,6 +48,7 @@ public sealed class CloudClient : IDisposable
     public Task SendStateAsync(ClassStateSnapshot value) => SendAsync(Envelope.StatePush(value));
     public Task SendScheduleAsync(ScheduleBundle value) => SendAsync(Envelope.ScheduleSync(value));
     public Task SendEventAsync(ClassEvent value) => SendAsync(Envelope.EventNotify(value));
+    public Task SendExtensionsAsync(IReadOnlyList<ExtensionDefinition> value) => SendAsync(Envelope.ExtensionsSync(value));
 
     private async Task RunLoopAsync(CancellationToken ct)
     {

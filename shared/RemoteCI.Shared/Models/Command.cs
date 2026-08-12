@@ -27,6 +27,16 @@ public sealed class CommandMessage
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public VolumeControlRequest? Volume { get; set; }
 
+    /// <summary>RunExtension 命令的目标扩展 Id（由插件注册表提供）。</summary>
+    [JsonPropertyName("extensionId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ExtensionId { get; set; }
+
+    /// <summary>RunExtension 命令的参数键值对；值统一以字符串传输。</summary>
+    [JsonPropertyName("extensionArgs")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, string?>? ExtensionArgs { get; set; }
+
     /// <summary>接入端覆盖此字段，插件只信任经服务端或本地挑战认证后的身份。</summary>
     [JsonPropertyName("requestedBy")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

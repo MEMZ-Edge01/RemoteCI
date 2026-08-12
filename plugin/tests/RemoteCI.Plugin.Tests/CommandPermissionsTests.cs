@@ -15,4 +15,11 @@ public sealed class CommandPermissionsTests
     {
         Assert.Equal(expected, CommandPermissions.Required(command));
     }
+
+    [Fact]
+    public void RunExtension_UsesDynamicPermissionDeclaration()
+    {
+        // 扩展命令的权限随注册项动态声明，静态权限表返回 None 表示不走静态校验。
+        Assert.Equal(UserPermissions.None, CommandPermissions.Required(CommandKind.RunExtension));
+    }
 }

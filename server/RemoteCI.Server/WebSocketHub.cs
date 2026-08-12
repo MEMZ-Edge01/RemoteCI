@@ -52,6 +52,8 @@ public static class WebSocketHub
                 await registry.SendToWatchAsync(connectionId, Envelope.StatePush(snapshot), context.RequestAborted);
             if (store.GetLatestSchedule() is { } schedule)
                 await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSync(schedule), context.RequestAborted);
+            if (store.GetLatestExtensions() is { } extensions)
+                await registry.SendToWatchAsync(connectionId, Envelope.ExtensionsSync(extensions), context.RequestAborted);
         }
 
         try
@@ -129,6 +131,14 @@ public static class WebSocketHub
                 }
                 return;
 
+            case Protocol.MessageTypeExtensionsSync when principal.IsPlugin:
+                if (ConvertPayload<List<ExtensionDefinition>>(envelope.Payload) is { } extensions)
+                {
+                    store.SaveExtensions(extensions);
+                    await registry.SendExtensionsToWatchesAsync(extensions, ct);
+                }
+                return;
+
             case Protocol.MessageTypeCommandResult when principal.IsPlugin:
                 if (ConvertPayload<CommandResult>(envelope.Payload) is { } result)
                     await registry.CompleteCommandAsync(envelope, result, ct);
@@ -154,16 +164,20 @@ public static class WebSocketHub
             return;
         }
 
-        var required = CommandPermissions.Required(command.Command);
-        if (required == UserPermissions.None)
+        // RunExtension 的所需权限由插件端按注册项动态校验，服务端只要求已认证用户。
+        if (command.Command != CommandKind.RunExtension)
         {
-            await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "未知命令", ct);
-            return;
-        }
-        if (!user.Permissions.HasFlag(required))
-        {
-            await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.Forbidden, "权限不足", ct);
-            return;
+            var required = CommandPermissions.Required(command.Command);
+            if (required == UserPermissions.None)
+            {
+                await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "未知命令", ct);
+                return;
+            }
+            if (!user.Permissions.HasFlag(required))
+            {
+                await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.Forbidden, "权限不足", ct);
+                return;
+            }
         }
 
         command.RequestedBy = user;

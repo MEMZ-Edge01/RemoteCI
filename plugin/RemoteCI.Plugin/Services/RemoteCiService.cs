@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Avalonia.Threading;
+using RemoteCI.Plugin.Extensions;
 using RemoteCI.Plugin.Settings;
 using RemoteCI.Shared.Models;
 
@@ -16,6 +17,7 @@ public sealed class RemoteCiService : IDisposable
     private readonly ClassIslandNotificationBridge _notificationBridge;
     private readonly PluginSettings _settings;
     private readonly AccountMirror _accounts;
+    private readonly IRemoteCiExtensionRegistry _extensions;
     private readonly ILoggerFactory _loggerFactory;
     private LanServer? _lanServer;
     private CloudClient? _cloudClient;
@@ -29,6 +31,7 @@ public sealed class RemoteCiService : IDisposable
         ClassIslandNotificationBridge notificationBridge,
         PluginSettings settings,
         AccountMirror accounts,
+        IRemoteCiExtensionRegistry extensions,
         ILoggerFactory loggerFactory)
     {
         _collector = collector;
@@ -36,6 +39,7 @@ public sealed class RemoteCiService : IDisposable
         _notificationBridge = notificationBridge;
         _settings = settings;
         _accounts = accounts;
+        _extensions = extensions;
         _loggerFactory = loggerFactory;
     }
 
@@ -50,6 +54,7 @@ public sealed class RemoteCiService : IDisposable
         _commandHandler.ScheduleChanged += OnScheduleChanged;
         _commandHandler.HostStateChanged += OnHostStateChanged;
         _notificationBridge.NotificationCaptured += OnEventOccurred;
+        _extensions.ExtensionsChanged += OnExtensionsChanged;
         _notificationBridge.Start();
 
         if (_settings.EnableLanServer)
@@ -71,6 +76,7 @@ public sealed class RemoteCiService : IDisposable
         }
 
         _collector.Start();
+        PublishExtensions(); // 注册表可能在连接建立前已就绪，启动时先推送一次当前快照。
     }
 
     public void Stop()
@@ -83,6 +89,7 @@ public sealed class RemoteCiService : IDisposable
         _commandHandler.ScheduleChanged -= OnScheduleChanged;
         _commandHandler.HostStateChanged -= OnHostStateChanged;
         _notificationBridge.NotificationCaptured -= OnEventOccurred;
+        _extensions.ExtensionsChanged -= OnExtensionsChanged;
         _notificationBridge.Stop();
         _cts?.Cancel();
         _cloudClient?.Dispose();
@@ -121,6 +128,29 @@ public sealed class RemoteCiService : IDisposable
             _ = cloud.SendEventAsync(@event);
         }
     }
+
+    private void OnExtensionsChanged(object? sender, EventArgs e) => PublishExtensions();
+
+    private void PublishExtensions()
+    {
+        var definitions = _extensions.GetExtensions()
+            .Select(ToDefinition)
+            .ToList();
+        _lanServer?.BroadcastExtensions(definitions);
+        if (_cloudClient is { } cloud)
+        {
+            _ = cloud.SendExtensionsAsync(definitions);
+        }
+    }
+
+    private static ExtensionDefinition ToDefinition(IRemoteCiExtension extension) => new()
+    {
+        Id = extension.Id,
+        DisplayName = extension.DisplayName,
+        Icon = extension.Icon,
+        RequiredPermission = extension.RequiredPermission,
+        Parameters = extension.Parameters.Count == 0 ? null : extension.Parameters.ToList(),
+    };
 
     public void Dispose() => Stop();
 }

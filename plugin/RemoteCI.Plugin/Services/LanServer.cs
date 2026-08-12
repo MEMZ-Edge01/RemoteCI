@@ -55,6 +55,7 @@ public sealed class LanServer : IDisposable
     public void BroadcastState(ClassStateSnapshot value) => Broadcast(Envelope.StatePush(value));
     public void BroadcastSchedule(ScheduleBundle value) => Broadcast(Envelope.ScheduleSync(value));
     public void BroadcastEvent(ClassEvent value) => Broadcast(Envelope.EventNotify(value));
+    public void BroadcastExtensions(IReadOnlyList<ExtensionDefinition> value) => Broadcast(Envelope.ExtensionsSync(value));
 
     private void Broadcast(Envelope envelope)
     {
@@ -108,14 +109,18 @@ public sealed class LanServer : IDisposable
         var command = ConvertPayload<CommandMessage>(envelope.Payload);
         if (command is null) return;
         var required = CommandPermissions.Required(command.Command);
+        // 授权镜像过期时所有管理命令都必须拒绝；扩展命令的静态权限为 None，
+        // 因此需要单独检查镜像状态，避免绕过“仅允许查看课程”的限制。
+        var mirrorExpired = !_accounts.AllowsPrivilegedOperations;
+        var permissionDenied = !client.User.Permissions.HasFlag(required);
         CommandResult result;
-        if (!client.User.Permissions.HasFlag(required))
+        if (mirrorExpired || permissionDenied)
         {
             result = new CommandResult
             {
                 Success = false,
                 Code = CommandResultCodes.Forbidden,
-                Message = _accounts.AllowsPrivilegedOperations ? "权限不足" : "授权镜像超过 24 小时，仅允许查看课程",
+                Message = mirrorExpired ? "授权镜像超过 24 小时，仅允许查看课程" : "权限不足",
             };
         }
         else

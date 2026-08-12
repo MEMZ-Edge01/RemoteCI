@@ -143,6 +143,79 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
         Assert.True(sync.Version > 0);
     }
 
+    [Fact]
+    public async Task PluginPushesExtensions_AllWatchesReceiveThem()
+    {
+        using var plugin = await ConnectPluginAsync();
+        using var watch = await ConnectWatchAsync();
+        await SendAsync(plugin, Envelope.ExtensionsSync(new List<ExtensionDefinition>
+        {
+            new ExtensionDefinition
+            {
+                Id = "demo.lock",
+                DisplayName = "锁屏",
+                Icon = "power",
+                RequiredPermission = UserPermissions.SystemControl,
+            },
+        }));
+
+        var received = await ReceivePayloadAsync<List<ExtensionDefinition>>(watch, Protocol.MessageTypeExtensionsSync);
+        var extension = Assert.Single(received);
+        Assert.Equal("demo.lock", extension.Id);
+        Assert.Equal("锁屏", extension.DisplayName);
+        Assert.Equal(UserPermissions.SystemControl, extension.RequiredPermission);
+    }
+
+    [Fact]
+    public async Task NewWatchConnection_ReceivesCachedExtensions()
+    {
+        using var plugin = await ConnectPluginAsync();
+        await SendAsync(plugin, Envelope.ExtensionsSync(new List<ExtensionDefinition>
+        {
+            new ExtensionDefinition
+            {
+                Id = "demo.lock",
+                DisplayName = "锁屏",
+                RequiredPermission = UserPermissions.SystemControl,
+            },
+        }));
+
+        using var watch = await ConnectWatchAsync();
+        var received = await ReceivePayloadAsync<List<ExtensionDefinition>>(watch, Protocol.MessageTypeExtensionsSync);
+        Assert.Equal("demo.lock", Assert.Single(received).Id);
+    }
+
+    [Fact]
+    public async Task ExtensionCommand_IsForwardedToPluginAndResultReturns()
+    {
+        using var plugin = await ConnectPluginAsync();
+        using var watch = await ConnectWatchAsync();
+        var request = Envelope.Command(new CommandMessage
+        {
+            Command = CommandKind.RunExtension,
+            ExtensionId = "demo.lock",
+            ExtensionArgs = new Dictionary<string, string?> { ["message"] = "下课了" },
+        });
+        await SendAsync(watch, request);
+
+        var forwarded = await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeCommand);
+        var command = ConvertPayload<CommandMessage>(forwarded.Payload);
+        Assert.Equal(CommandKind.RunExtension, command.Command);
+        Assert.Equal("demo.lock", command.ExtensionId);
+        Assert.Equal("下课了", command.ExtensionArgs!["message"]);
+        Assert.Equal(UserRole.Admin, command.RequestedBy?.Role);
+
+        await SendAsync(plugin, new Envelope
+        {
+            Type = Protocol.MessageTypeCommandResult,
+            ReplyToMessageId = forwarded.MessageId,
+            Payload = new CommandResult { Success = true, Code = CommandResultCodes.Ok, Message = "已执行" },
+        });
+
+        var reply = await ReceiveEnvelopeAsync(watch, Protocol.MessageTypeCommandResult);
+        Assert.Equal(request.MessageId, reply.ReplyToMessageId);
+    }
+
     private async Task<WebSocket> ConnectPluginAsync() => await ConnectAsync(await _factory.GetPluginTokenAsync());
 
     private async Task<WebSocket> ConnectWatchAsync(

@@ -61,6 +61,9 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
     public Task SendEventToWatchesAsync(ClassEvent value, CancellationToken ct = default) =>
         BroadcastWatchesAsync(Envelope.EventNotify(value), ct);
 
+    public Task SendExtensionsToWatchesAsync(IReadOnlyList<ExtensionDefinition> value, CancellationToken ct = default) =>
+        BroadcastWatchesAsync(Envelope.ExtensionsSync(value), ct);
+
     public async Task BroadcastWatchesAsync(Envelope envelope, CancellationToken ct = default)
     {
         foreach (var peer in _watchPeers.Values)

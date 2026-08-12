@@ -7,6 +7,7 @@ public sealed class StateStore : IStateStore
     private ClassStateSnapshot? _snapshot;
     private ScheduleBundle? _schedule;
     private ClassEvent? _event;
+    private IReadOnlyList<ExtensionDefinition>? _extensions;
     private readonly object _lock = new();
 
     public void SaveSnapshot(ClassStateSnapshot snapshot) =>
@@ -26,6 +27,12 @@ public sealed class StateStore : IStateStore
 
     public ClassEvent? GetLatestEvent() =>
         Get(_event);
+
+    public void SaveExtensions(IReadOnlyList<ExtensionDefinition> extensions) =>
+        Set(ref _extensions, extensions);
+
+    public IReadOnlyList<ExtensionDefinition>? GetLatestExtensions() =>
+        Get(_extensions);
 
     private void Set<T>(ref T? field, T value) where T : class
     {

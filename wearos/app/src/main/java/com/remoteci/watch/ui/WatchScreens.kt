@@ -78,6 +78,7 @@ import androidx.wear.compose.material.ToggleChipDefaults
 import com.remoteci.watch.data.ClassStateSnapshot
 import com.remoteci.watch.data.ConnectionManager
 import com.remoteci.watch.data.CourseEntry
+import com.remoteci.watch.data.ExtensionDefinition
 import com.remoteci.watch.data.GitHubAsset
 import com.remoteci.watch.data.GitHubRelease
 import com.remoteci.watch.data.Protocol
@@ -445,6 +446,7 @@ internal fun SubjectPickerScreen(
 internal fun ControlScreen(
     snapshot: ClassStateSnapshot?,
     user: UserProfile?,
+    extensions: List<ExtensionDefinition>,
     resultText: String?,
     onTeacherComing: () -> Unit,
     onOpenNotification: () -> Unit,
@@ -452,6 +454,7 @@ internal fun ControlScreen(
     onToggleMainMenu: () -> Unit,
     onOpenVolume: () -> Unit,
     onOpenPower: () -> Unit,
+    onRunExtension: (ExtensionDefinition) -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = "控制") {
     val canNotify = user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true
@@ -478,6 +481,17 @@ internal fun ControlScreen(
         )
     }
     item { ActionButton("电源", Icons.Rounded.PowerSettingsNew, canControlSystem, onOpenPower) }
+    // 其他插件通过 RemoteCI 注册的扩展功能：按当前用户权限过滤后动态显示在控制菜单底部。
+    visibleExtensionsFor(user, extensions).forEach { extension ->
+        item {
+            ActionButton(
+                extension.displayName,
+                extensionIcon(extension.icon),
+                enabled = true,
+                onClick = { onRunExtension(extension) },
+            )
+        }
+    }
     if (!resultText.isNullOrBlank()) item { Hint(resultText) }
     item { BackButton(onBack) }
 }
@@ -487,6 +501,82 @@ internal fun shouldShowClearNotifications(snapshot: ClassStateSnapshot?): Boolea
 
 internal fun mainMenuActionLabel(snapshot: ClassStateSnapshot?): String =
     if (snapshot?.isMainMenuVisible == false) "显示主菜单" else "隐藏主菜单"
+
+/** 扩展功能按当前用户有效权限过滤；隐藏按钮不构成安全控制，插件执行端会再次校验。 */
+internal fun visibleExtensionsFor(
+    user: UserProfile?,
+    extensions: List<ExtensionDefinition>,
+): List<ExtensionDefinition> = extensions.filter { user?.has(it.requiredPermission) == true }
+
+/** Material 图标名白名单映射；未知或缺失时返回 null，界面回退为纯文字。 */
+internal fun extensionIcon(icon: String?): ImageVector? = when (icon?.trim()?.lowercase()) {
+    "school" -> Icons.Rounded.School
+    "notification", "notifications", "message" -> Icons.Rounded.EditNotifications
+    "volume", "volumeup" -> Icons.AutoMirrored.Rounded.VolumeUp
+    "power", "poweroff" -> Icons.Rounded.PowerSettingsNew
+    "settings", "gear" -> Icons.Rounded.Settings
+    "update", "systemupdate" -> Icons.Rounded.SystemUpdate
+    "download" -> Icons.Rounded.Download
+    "restart", "reboot" -> Icons.Rounded.RestartAlt
+    "swap", "exchange" -> Icons.Rounded.SwapHoriz
+    "wifi", "connect" -> Icons.Rounded.Wifi
+    "visibility", "show" -> Icons.Rounded.Visibility
+    "hide", "hidden" -> Icons.Rounded.VisibilityOff
+    "clear", "clearnotifications" -> Icons.Rounded.NotificationsOff
+    else -> null
+}
+
+/** 按参数 schema 生成初始表单值；switch 默认 false，其余使用注册的默认值。 */
+internal fun defaultExtensionArgs(extension: ExtensionDefinition): Map<String, String?> =
+    extension.parameters.associate { param ->
+        param.key to when (param.type) {
+            Protocol.EXT_PARAM_SWITCH -> (param.defaultValue ?: "false").let { if (it == "true") "true" else "false" }
+            else -> param.defaultValue
+        }
+    }
+
+/** select 参数点击后的下一个候选项（循环切换；当前值不在候选中时从第一项开始）。 */
+internal fun nextSelectValue(options: List<String>, current: String?): String {
+    if (options.isEmpty()) return current ?: ""
+    return options[(options.indexOf(current) + 1).mod(options.size)]
+}
+
+/** 扩展参数输入页：按注册的 schema 渲染字段，提交后由调用方发送 RunExtension 命令。 */
+@Composable
+internal fun ExtensionFormScreen(
+    extension: ExtensionDefinition,
+    connectionReady: Boolean,
+    resultText: String?,
+    onSubmit: (Map<String, String?>) -> Unit,
+    onBack: () -> Unit,
+) {
+    var values by remember(extension.id) { mutableStateOf(defaultExtensionArgs(extension)) }
+    WatchList(title = extension.displayName) {
+        extension.parameters.forEach { param -> item {
+            when (param.type) {
+                Protocol.EXT_PARAM_SWITCH -> Toggle(param.label, values[param.key] == "true") {
+                    values = values + (param.key to it.toString())
+                }
+
+                Protocol.EXT_PARAM_SELECT -> ActionButton(
+                    "${param.label}：${values[param.key] ?: ""}",
+                    null,
+                    param.options.isNotEmpty(),
+                    onClick = { values = values + (param.key to nextSelectValue(param.options, values[param.key])) },
+                )
+
+                else -> Input(
+                    values[param.key] ?: "",
+                    { values = values + (param.key to it) },
+                    param.label,
+                )
+            }
+        } }
+        item { ActionButton("执行", Icons.Rounded.Check, connectionReady, onClick = { onSubmit(values) }) }
+        if (!resultText.isNullOrBlank()) item { Hint(resultText) }
+        item { BackButton(onBack) }
+    }
+}
 
 @Composable
 internal fun VolumeScreen(

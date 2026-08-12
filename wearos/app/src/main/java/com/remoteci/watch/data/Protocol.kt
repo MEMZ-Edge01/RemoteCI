@@ -9,6 +9,7 @@ object Protocol {
     const val TYPE_STATE_PUSH = "state_push"
     const val TYPE_SCHEDULE_SYNC = "schedule_sync"
     const val TYPE_EVENT_NOTIFY = "event_notify"
+    const val TYPE_EXTENSIONS_SYNC = "extensions_sync"
     const val TYPE_COMMAND = "command"
     const val TYPE_COMMAND_RESULT = "command_result"
     const val TYPE_AUTH_CHALLENGE = "auth_challenge"
@@ -35,12 +36,18 @@ object Protocol {
     const val CMD_SET_MAIN_MENU_VISIBILITY = 4
     const val CMD_POWER = 5
     const val CMD_VOLUME = 6
+    const val CMD_RUN_EXTENSION = 7
     const val POWER_SHUTDOWN = 1
     const val POWER_RESTART = 2
     const val POWER_SLEEP = 3
     const val POWER_HIBERNATE = 4
     const val CHANGE_EXCHANGE = 1
     const val CHANGE_REPLACE = 2
+
+    const val EXT_PARAM_TEXT = 1
+    const val EXT_PARAM_NUMBER = 2
+    const val EXT_PARAM_SWITCH = 3
+    const val EXT_PARAM_SELECT = 4
 
     const val ROLE_USER = 1
     const val ROLE_ADMIN = 2
@@ -154,6 +161,8 @@ data class CommandMessage(
     @SerialName("mainMenuVisible") val mainMenuVisible: Boolean? = null,
     @SerialName("powerAction") val powerAction: Int? = null,
     val volume: VolumeControlRequest? = null,
+    @SerialName("extensionId") val extensionId: String? = null,
+    @SerialName("extensionArgs") val extensionArgs: Map<String, String?>? = null,
 )
 
 @Serializable
@@ -168,6 +177,25 @@ data class CommandResult(
     val code: String = "",
     val message: String = "",
     @SerialName("scheduleRevision") val scheduleRevision: String? = null,
+)
+
+@Serializable
+data class ExtensionDefinition(
+    val id: String,
+    @SerialName("displayName") val displayName: String,
+    val icon: String? = null,
+    @SerialName("requiredPermission") val requiredPermission: Int = Protocol.PERMISSION_VIEW_CURRENT,
+    val parameters: List<ExtensionParameter> = emptyList(),
+)
+
+@Serializable
+data class ExtensionParameter(
+    val key: String,
+    val label: String,
+    val type: Int = Protocol.EXT_PARAM_TEXT,
+    @SerialName("defaultValue") val defaultValue: String? = null,
+    val required: Boolean = false,
+    val options: List<String> = emptyList(),
 )
 
 @Serializable

@@ -47,6 +47,7 @@
 | `account_sync` | 服务端 → 插件 | 账号元数据、有效权限、设备验证器、版本和生成时间 |
 | `state_push` | 插件 → 服务端/手表 | 高频当前课程、提醒播放、主界面显隐与可用电源状态，不含完整课表 |
 | `schedule_sync` | 插件 → 服务端/手表 | 今天起七天的日期、课程、科目清单和每日修订号 |
+| `extensions_sync` | 插件 → 服务端/手表 | 扩展功能清单（id、displayName、icon、requiredPermission、parameters） |
 | `event_notify` | 插件 → 服务端/手表 | 上课、下课、放学、课表变更、自定义消息、ClassIsland 自动化或第三方插件通知 |
 | `command` | 手表/服务端 → 插件 | 结构化换课、通知、主界面或电源命令 |
 | `command_result` | 插件 → 发起者 | 真实成功、失败码、消息和可选新修订号 |
@@ -58,6 +59,8 @@
 自定义通知由插件最终执行时强制把标题格式化为 `由用户名发送：原标题`。发送者名称取自已认证账号的 `displayName`（界面称“用户名”），而 `username` 是唯一登录 ID；手表、WebUI 和其他客户端均不能覆盖或移除署名前缀。通知请求还可通过 `isNotificationEffectEnabled`、`isNotificationSoundEnabled` 和 `isSpeechEnabled` 分别控制 ClassIsland 的提醒强调特效、提醒音效和语音朗读；省略时均为关闭。
 
 控制命令值 3 为清除当前 ClassIsland 提醒，值 4 通过 `mainMenuVisible` 设置主界面显隐，值 5 通过 `powerAction` 选择关机、重启、睡眠或休眠。值 6 通过 `volume.level` 设置 Windows 默认播放设备的 0-100 主音量，或通过 `volume.muted` 设置静音状态。休眠入口只在插件状态报告 Windows 已启用休眠时显示。
+
+`extensions_sync` 的载荷是其他 ClassIsland 插件通过 RemoteCI 注册的扩展功能列表；服务端只做内存缓存并转发给手表，新连接的手表会收到最近一次清单。命令值 7 为 `RunExtension`，通过 `extensionId` 指定目标扩展，`extensionArgs` 携带参数字典（值统一为字符串）。扩展命令的所需权限由插件端按注册项动态校验，服务端只要求已认证用户；未注册、缺少必填参数或权限不足时分别返回 `INVALID_REQUEST` / `FORBIDDEN`，执行异常统一返回 `INTERNAL_ERROR`。
 
 状态快照中的 `isVolumeControlAvailable`、`volumePercent` 和 `isMuted` 分别表示默认播放设备是否可控、当前主音量百分比和静音状态，手表必须以这些真实状态刷新音量页。
 

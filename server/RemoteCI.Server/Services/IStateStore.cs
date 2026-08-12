@@ -14,4 +14,6 @@ public interface IStateStore
     ScheduleBundle? GetLatestSchedule();
     void SaveEvent(ClassEvent @event);
     ClassEvent? GetLatestEvent();
+    void SaveExtensions(IReadOnlyList<ExtensionDefinition> extensions);
+    IReadOnlyList<ExtensionDefinition>? GetLatestExtensions();
 }

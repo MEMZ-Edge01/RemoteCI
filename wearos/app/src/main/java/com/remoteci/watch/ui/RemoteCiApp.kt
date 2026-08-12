@@ -14,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.remoteci.watch.data.ConnectionManager
 import com.remoteci.watch.data.EventHistory
+import com.remoteci.watch.data.ExtensionDefinition
 import com.remoteci.watch.data.Protocol
 import com.remoteci.watch.data.ScheduleChangeRequest
 import com.remoteci.watch.data.SettingsStore
@@ -33,6 +34,7 @@ private enum class Screen {
     SubjectPicker,
     Control,
     Notification,
+    ExtensionForm,
     Power,
     Volume,
     Settings,
@@ -70,6 +72,7 @@ fun RemoteCiApp(context: Context) {
     var noticeEffectEnabled by rememberSaveable { mutableStateOf(false) }
     var noticeSoundEnabled by rememberSaveable { mutableStateOf(false) }
     var noticeSpeechEnabled by rememberSaveable { mutableStateOf(false) }
+    var activeExtension by remember { mutableStateOf<ExtensionDefinition?>(null) }
     var cachedSnapshot by remember { mutableStateOf(snapshotStore.load()) }
     var cachedSchedule by remember { mutableStateOf(snapshotStore.loadSchedule()) }
 
@@ -77,6 +80,7 @@ fun RemoteCiApp(context: Context) {
     val currentUser by ConnectionManager.currentUser.collectAsState()
     val liveSnapshot by ConnectionManager.snapshot.collectAsState()
     val liveSchedule by ConnectionManager.schedule.collectAsState()
+    val liveExtensions by ConnectionManager.extensions.collectAsState()
     val commandResult by ConnectionManager.lastCommandResult.collectAsState()
     val displayedSnapshot = liveSnapshot ?: cachedSnapshot
     val displayedSchedule = liveSchedule ?: cachedSchedule
@@ -118,6 +122,10 @@ fun RemoteCiApp(context: Context) {
         if (user != null && !user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) &&
             !user.has(Protocol.PERMISSION_SYSTEM_CONTROL) && screen == Screen.Control)
             screen = Screen.Home
+        val active = activeExtension
+        if (user != null && active != null &&
+            !user.has(active.requiredPermission) && screen == Screen.ExtensionForm)
+            screen = Screen.Control
     }
     LaunchedEffect(selectedDay) {
         val enabled = lessons.filter { it.enabled }
@@ -134,6 +142,7 @@ fun RemoteCiApp(context: Context) {
             Screen.Swap -> Screen.DayPicker
             Screen.ScheduleDatePicker -> Screen.ScheduleOverview
             Screen.Notification -> Screen.Control
+            Screen.ExtensionForm -> Screen.Control
             Screen.Power -> Screen.Control
             Screen.Volume -> Screen.Control
             Screen.ConnectionSettings, Screen.NotificationSettings -> Screen.Settings
@@ -248,6 +257,7 @@ fun RemoteCiApp(context: Context) {
         Screen.Control -> ControlScreen(
             snapshot = displayedSnapshot,
             user = currentUser,
+            extensions = liveExtensions,
             resultText = commandResult?.let { if (it.success) "已完成：${it.message}" else "失败：${it.message}" },
             onTeacherComing = {
                 // “老师来了”快捷提醒：标题展示“老师来了”，仅开启强调特效，不带音效和语音；
@@ -272,8 +282,36 @@ fun RemoteCiApp(context: Context) {
             },
             onOpenVolume = { screen = Screen.Volume },
             onOpenPower = { screen = Screen.Power },
+            onRunExtension = { extension ->
+                if (extension.parameters.isEmpty()) {
+                    ConnectionManager.runExtension(extension)
+                } else {
+                    activeExtension = extension
+                    screen = Screen.ExtensionForm
+                }
+            },
             onBack = { screen = Screen.Home },
         )
+
+        Screen.ExtensionForm -> {
+            val extension = activeExtension
+            if (extension == null) {
+                // 进程重建后内存中的扩展清单尚未重新同步，退回控制菜单等待重新推送。
+                LaunchedEffect(Unit) { screen = Screen.Control }
+            } else {
+                ExtensionFormScreen(
+                    extension = extension,
+                    connectionReady = connectionState is ConnectionManager.State.LanConnected ||
+                        connectionState is ConnectionManager.State.CloudConnected,
+                    resultText = commandResult?.message,
+                    onSubmit = { args ->
+                        ConnectionManager.runExtension(extension, args)
+                        screen = Screen.Control
+                    },
+                    onBack = { screen = Screen.Control },
+                )
+            }
+        }
 
         Screen.Power -> PowerScreen(
             sleepAvailable = displayedSnapshot?.isSleepAvailable == true,

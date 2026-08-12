@@ -3,6 +3,7 @@ using Avalonia.Threading;
 using ClassIsland.Core.Abstractions.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using RemoteCI.Plugin.Extensions;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 
@@ -16,7 +17,8 @@ public sealed class CommandHandler
     private readonly ScheduleCatalog _schedules;
     private readonly RemoteNotificationProvider _notifications;
     private readonly ClassIslandHostControlService _hostControl;
-    private readonly ILogger<CommandHandler> _logger;
+    private readonly ILogger _logger;
+    private readonly ExtensionCommandRouter _extensionRouter;
 
     public CommandHandler(
         IProfileService profiles,
@@ -24,14 +26,16 @@ public sealed class CommandHandler
         ScheduleCatalog schedules,
         ClassIslandHostControlService hostControl,
         IEnumerable<IHostedService> hostedServices,
-        ILogger<CommandHandler> logger)
+        IRemoteCiExtensionRegistry extensions,
+        ILoggerFactory loggerFactory)
     {
         _profiles = profiles;
         _lessons = lessons;
         _schedules = schedules;
         _hostControl = hostControl;
         _notifications = hostedServices.OfType<RemoteNotificationProvider>().Single();
-        _logger = logger;
+        _logger = loggerFactory.CreateLogger<CommandHandler>();
+        _extensionRouter = new ExtensionCommandRouter(extensions, loggerFactory);
     }
 
     public event Action<ClassEvent>? NotificationSent;
@@ -40,6 +44,10 @@ public sealed class CommandHandler
 
     public async Task<CommandResult> HandleAsync(CommandMessage command)
     {
+        // 扩展命令的权限随注册项动态声明，不走静态权限表。
+        if (command.Command == CommandKind.RunExtension)
+            return await _extensionRouter.RunAsync(command);
+
         var required = CommandPermissions.Required(command.Command);
         if (required == UserPermissions.None)
             return Failure(CommandResultCodes.InvalidRequest, $"未知指令：{command.Command}");

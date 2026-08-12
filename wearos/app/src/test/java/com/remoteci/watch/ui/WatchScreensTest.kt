@@ -1,15 +1,20 @@
 package com.remoteci.watch.ui
 
 import com.remoteci.watch.data.ClassStateSnapshot
+import com.remoteci.watch.data.ExtensionDefinition
+import com.remoteci.watch.data.ExtensionParameter
 import com.remoteci.watch.data.Protocol
 import com.remoteci.watch.data.ScheduleBundle
 import com.remoteci.watch.data.ScheduleDay
 import com.remoteci.watch.data.UserProfile
 import java.time.LocalDate
 import java.time.LocalTime
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.School
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WatchScreensTest {
@@ -178,5 +183,61 @@ class WatchScreensTest {
         )
 
         assertEquals("2026-08-12", initialScheduleDate(bundle, false, today))
+    }
+
+    @Test
+    fun `extension visibility follows declared permission`() {
+        val extension = ExtensionDefinition(
+            id = "demo.lock",
+            displayName = "锁屏",
+            requiredPermission = Protocol.PERMISSION_SYSTEM_CONTROL,
+        )
+        val admin = UserProfile(permissions = 63)
+        val student = UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)
+
+        assertEquals(listOf(extension), visibleExtensionsFor(admin, listOf(extension)))
+        assertTrue(visibleExtensionsFor(student, listOf(extension)).isEmpty())
+        assertTrue(visibleExtensionsFor(null, listOf(extension)).isEmpty())
+    }
+
+    @Test
+    fun `extension icon maps whitelist and falls back for unknown names`() {
+        assertEquals(Icons.Rounded.School, extensionIcon("school"))
+        assertEquals(Icons.Rounded.School, extensionIcon(" School "))
+        assertNull(extensionIcon("unknown-icon"))
+        assertNull(extensionIcon(null))
+    }
+
+    @Test
+    fun `extension form defaults follow parameter schema`() {
+        val extension = ExtensionDefinition(
+            id = "demo.say",
+            displayName = "喊话",
+            parameters = listOf(
+                ExtensionParameter(key = "message", label = "内容", defaultValue = "你好"),
+                ExtensionParameter(
+                    key = "urgent",
+                    label = "紧急",
+                    type = Protocol.EXT_PARAM_SWITCH,
+                    defaultValue = "true",
+                ),
+                ExtensionParameter(key = "silent", label = "静音", type = Protocol.EXT_PARAM_SWITCH),
+            ),
+        )
+
+        assertEquals(
+            mapOf("message" to "你好", "urgent" to "true", "silent" to "false"),
+            defaultExtensionArgs(extension),
+        )
+    }
+
+    @Test
+    fun `select parameter cycles options and clamps empty list`() {
+        val options = listOf("A", "B", "C")
+
+        assertEquals("B", nextSelectValue(options, "A"))
+        assertEquals("A", nextSelectValue(options, "C"))
+        assertEquals("A", nextSelectValue(options, null))
+        assertEquals("X", nextSelectValue(emptyList(), "X"))
     }
 }

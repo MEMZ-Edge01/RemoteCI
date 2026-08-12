@@ -6,6 +6,7 @@ using ClassIsland.Shared;
 using ClassIsland.Shared.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using RemoteCI.Plugin.Extensions;
 using RemoteCI.Plugin.Services;
 using RemoteCI.Plugin.Settings;
 using RemoteCI.Plugin.Views.SettingsPages;
@@ -44,6 +45,8 @@ public class Plugin : PluginBase
         services.AddSingleton<ClassIslandNotificationBridge>();
         services.AddSingleton<StateCollector>();
         services.AddSingleton<RemoteCiService>();
+        // 公开扩展注册表：其他 ClassIsland 插件在 AppStarted 后通过 IAppHost.GetService<IRemoteCiExtensionRegistry>() 获取并注册自定义远程功能。
+        services.AddSingleton<IRemoteCiExtensionRegistry, RemoteCiExtensionRegistry>();
         services.AddNotificationProvider<RemoteNotificationProvider>();
         services.AddSettingsPage<RemoteCiSettingsPage>();
 
