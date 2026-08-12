@@ -147,16 +147,20 @@ public sealed class CommandHandler
 
     private async Task<CommandResult> HandleNotificationAsync(NotificationRequest? request, string senderName)
     {
-        var message = request?.Message.Trim();
-        if (string.IsNullOrWhiteSpace(message) || message.Length > 500)
-            return Failure(CommandResultCodes.InvalidRequest, "通知正文需为 1-500 个字符");
+        if (request is null)
+            return Failure(CommandResultCodes.InvalidRequest, "缺少通知内容");
+        var message = request.Message.Trim();
+        if (message.Length > 500)
+            return Failure(CommandResultCodes.InvalidRequest, "通知正文不能超过 500 个字符");
         // 服务端会按全局设置注入 ForceSenderInTitle；null 按旧行为视为开启。
-        var title = BuildNotificationTitle(senderName, request?.Title, request?.ForceSenderInTitle != false);
+        var title = BuildNotificationTitle(senderName, request.Title, request.ForceSenderInTitle != false);
+        // 标题与正文均可留空；正文留空时以原标题兜底，避免 ClassIsland 显示空白正文。
+        if (string.IsNullOrWhiteSpace(message)) message = NormalizeNotificationTitle(request.Title);
 
         await _notifications.ShowRemoteNotificationAsync(
             title,
             message,
-            request!.IsNotificationEffectEnabled,
+            request.IsNotificationEffectEnabled,
             request.IsNotificationSoundEnabled,
             request.IsSpeechEnabled);
         NotificationSent?.Invoke(new ClassEvent
@@ -221,9 +225,15 @@ public sealed class CommandHandler
 
     internal static string BuildNotificationTitle(string senderName, string? requestedTitle, bool forceSenderInTitle = true)
     {
-        var title = requestedTitle?.Trim();
-        title = string.IsNullOrWhiteSpace(title) ? "RemoteCI 通知" : title[..Math.Min(title.Length, 60)];
+        var title = NormalizeNotificationTitle(requestedTitle);
         return forceSenderInTitle ? $"由{senderName.Trim()}发送：{title}" : title;
+    }
+
+    /// <summary>标题留空时统一使用默认标题，并负责 60 字截断与首尾空白清理。</summary>
+    internal static string NormalizeNotificationTitle(string? requestedTitle)
+    {
+        var title = requestedTitle?.Trim();
+        return string.IsNullOrWhiteSpace(title) ? "RemoteCI 通知" : title[..Math.Min(title.Length, 60)];
     }
 
     private ClassIsland.Shared.Models.Profile.ClassPlan? GetWritablePlan(DateTime date)

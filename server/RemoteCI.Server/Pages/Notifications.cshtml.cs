@@ -51,6 +51,7 @@ public sealed class NotificationsModel(
             Notification = new NotificationRequest
             {
                 Title = string.IsNullOrWhiteSpace(Input.Title) ? "RemoteCI 通知" : Input.Title.Trim(),
+                // 标题与正文均可留空；留空项由插件端兜底为默认标题/原标题。
                 Message = Input.Message.Trim(),
                 // 署名是否强制由服务端全局设置决定，避免客户端绕过。
                 ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(ct),
@@ -72,6 +73,6 @@ public sealed class NotificationsModel(
     public sealed class NoticeInput
     {
         [StringLength(60)] public string Title { get; set; } = string.Empty;
-        [Required, StringLength(500, MinimumLength = 1)] public string Message { get; set; } = string.Empty;
+        [StringLength(500)] public string Message { get; set; } = string.Empty;
     }
 }

@@ -645,7 +645,8 @@ internal fun NotificationScreen(
     item { Toggle("启用提醒强调特效", effectEnabled, onEffectEnabledChange) }
     item { Toggle("启用提醒音效", soundEnabled, onSoundEnabledChange) }
     item { Toggle("启用提醒语言", speechEnabled, onSpeechEnabledChange) }
-    item { ActionButton("发送并等待回执", Icons.Rounded.EditNotifications, message.isNotBlank(), onSend) }
+    // 标题与正文均可留空，插件会为留空项兜底为默认标题/原标题。
+    item { ActionButton("发送并等待回执", Icons.Rounded.EditNotifications, true, onSend) }
     if (!resultText.isNullOrBlank()) item { Hint(resultText) }
     item { BackButton(onBack) }
 }

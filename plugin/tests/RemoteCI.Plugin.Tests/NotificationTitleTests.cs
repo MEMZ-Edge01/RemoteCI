@@ -49,4 +49,18 @@ public sealed class NotificationTitleTests
 
         Assert.Equal("RemoteCI 通知", title);
     }
+
+    [Fact]
+    public void NormalizeTitleFallsBackToDefaultForBlank()
+    {
+        Assert.Equal("RemoteCI 通知", CommandHandler.NormalizeNotificationTitle(null));
+        Assert.Equal("RemoteCI 通知", CommandHandler.NormalizeNotificationTitle("   "));
+    }
+
+    [Fact]
+    public void NormalizeTitleTrimsAndTruncatesToSixty()
+    {
+        Assert.Equal("临时调课", CommandHandler.NormalizeNotificationTitle("  临时调课  "));
+        Assert.Equal(new string('长', 60), CommandHandler.NormalizeNotificationTitle(new string('长', 80)));
+    }
 }
