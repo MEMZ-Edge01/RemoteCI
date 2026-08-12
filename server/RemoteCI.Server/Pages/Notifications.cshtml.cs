@@ -10,14 +10,26 @@ using RemoteCI.Shared.Models;
 namespace RemoteCI.Server.Pages;
 
 [Authorize]
-public sealed class NotificationsModel(UserManager<AppUser> users, PeerRegistry peers) : WebPageModel(users)
+public sealed class NotificationsModel(
+    UserManager<AppUser> users,
+    PeerRegistry peers,
+    IdentityCoordinator identities) : WebPageModel(users)
 {
     [BindProperty]
     public NoticeInput Input { get; set; } = new();
+
+    /// <summary>全局“强制在标题显示发送人”开关，作用于 WebUI 与手表的所有通知。</summary>
+    [BindProperty]
+    public bool ForceSenderInTitle { get; set; }
+
     public bool PluginOnline => peers.HasPlugin;
 
-    public async Task<IActionResult> OnGetAsync() =>
-        await RequireAsync(UserPermissions.SendNotifications) is { } denied ? denied : Page();
+    public async Task<IActionResult> OnGetAsync()
+    {
+        if (await RequireAsync(UserPermissions.SendNotifications) is { } denied) return denied;
+        ForceSenderInTitle = await identities.GetForceSenderInTitleAsync();
+        return Page();
+    }
 
     public async Task<IActionResult> OnPostAsync(CancellationToken ct)
     {
@@ -40,9 +52,20 @@ public sealed class NotificationsModel(UserManager<AppUser> users, PeerRegistry 
             {
                 Title = string.IsNullOrWhiteSpace(Input.Title) ? "RemoteCI 通知" : Input.Title.Trim(),
                 Message = Input.Message.Trim(),
+                // 署名是否强制由服务端全局设置决定，避免客户端绕过。
+                ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(ct),
             },
         }, TimeSpan.FromSeconds(15), ct);
         TempData[result.Success ? "Message" : "Error"] = result.Message;
+        return RedirectToPage();
+    }
+
+    public async Task<IActionResult> OnPostSettingsAsync(CancellationToken ct)
+    {
+        if (await RequireAsync(UserPermissions.SendNotifications) is { } denied) return denied;
+        var settings = await identities.SetForceSenderInTitleAsync(ForceSenderInTitle, ct);
+        await peers.SendSettingsToWatchesAsync(settings, ct);
+        TempData["Message"] = ForceSenderInTitle ? "已开启强制显示发送人" : "已关闭强制显示发送人";
         return RedirectToPage();
     }
 

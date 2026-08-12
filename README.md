@@ -12,7 +12,7 @@ RemoteCI 是 ClassIsland 2.x、ASP.NET Core 服务端和 Wear OS 手表组成的
 - 局域网：手表不发送密码或云端访问令牌，使用设备会话派生验证器完成一次性 HMAC 挑战认证。
 - 课表：状态按秒推送，七日课表单独低频同步；支持指定日期交换两节课或替换科目，并用修订号防止并发覆盖。
 - 通知：WebUI 或手表发送的消息先由 ClassIsland 正式通知提供方显示，成功后再广播给手表。
-- 手表：设备密钥由 Android Keystore AES-GCM 保护；普通用户界面只显示当前课程，五类消息可按设备单独开关。
+- 手表：设备密钥由 Android Keystore AES-GCM 保护；普通用户界面只显示当前课程，五类消息可按设备单独开关；可在“设置 → 外观”切换 Material Design 3 配色方案。
 - 更新：WebUI 个人账号与手表设置中可从 GitHub 最新 release 一键检查并更新；插件升级由 ClassIsland 插件市场统一管理。
 
 不存在真实 ClassIsland 写入能力的“切换单双周”功能已经移除。

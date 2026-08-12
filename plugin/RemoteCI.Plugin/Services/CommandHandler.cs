@@ -150,7 +150,8 @@ public sealed class CommandHandler
         var message = request?.Message.Trim();
         if (string.IsNullOrWhiteSpace(message) || message.Length > 500)
             return Failure(CommandResultCodes.InvalidRequest, "通知正文需为 1-500 个字符");
-        var title = BuildNotificationTitle(senderName, request?.Title);
+        // 服务端会按全局设置注入 ForceSenderInTitle；null 按旧行为视为开启。
+        var title = BuildNotificationTitle(senderName, request?.Title, request?.ForceSenderInTitle != false);
 
         await _notifications.ShowRemoteNotificationAsync(
             title,
@@ -215,14 +216,14 @@ public sealed class CommandHandler
         });
     }
 
-    /// <summary>在最终执行端统一添加署名，客户端无法通过自定义标题绕过。</summary>
+    /// <summary>在最终执行端统一添加署名，是否强制由服务端全局设置决定。</summary>
     internal static string GetNotificationSenderName(UserProfile requestedBy) => requestedBy.DisplayName.Trim();
 
-    internal static string BuildNotificationTitle(string senderName, string? requestedTitle)
+    internal static string BuildNotificationTitle(string senderName, string? requestedTitle, bool forceSenderInTitle = true)
     {
         var title = requestedTitle?.Trim();
         title = string.IsNullOrWhiteSpace(title) ? "RemoteCI 通知" : title[..Math.Min(title.Length, 60)];
-        return $"由{senderName.Trim()}发送：{title}";
+        return forceSenderInTitle ? $"由{senderName.Trim()}发送：{title}" : title;
     }
 
     private ClassIsland.Shared.Models.Profile.ClassPlan? GetWritablePlan(DateTime date)

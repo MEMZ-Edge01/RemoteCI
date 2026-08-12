@@ -63,6 +63,9 @@ public sealed class Envelope
     public static Envelope AccountSync(object payload) =>
         New(Protocol.MessageTypeAccountSync, payload);
 
+    public static Envelope SettingsSync(object payload) =>
+        New(Protocol.MessageTypeSettingsSync, payload);
+
     private static Envelope New(string type, object payload) => new()
     {
         Type = type,

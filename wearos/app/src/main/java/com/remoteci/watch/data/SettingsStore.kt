@@ -9,6 +9,7 @@ data class WatchSettings(
     val lanConnectionEnabled: Boolean = true,
     val lanHost: String = "",
     val lanPort: Int = 8765,
+    val themeId: String = "lavender",
     val receiveOnClass: Boolean = true,
     val receiveOnBreaking: Boolean = true,
     val receiveAfterSchool: Boolean = true,
@@ -28,6 +29,7 @@ class SettingsStore(context: Context) {
         lanConnectionEnabled = prefs.getBoolean(KEY_LAN_CONNECTION_ENABLED, true),
         lanHost = prefs.getString(KEY_LAN_HOST, "") ?: "",
         lanPort = prefs.getInt(KEY_LAN_PORT, 8765),
+        themeId = prefs.getString(KEY_THEME_ID, "lavender") ?: "lavender",
         receiveOnClass = prefs.getBoolean(KEY_ON_CLASS, true),
         receiveOnBreaking = prefs.getBoolean(KEY_ON_BREAKING, true),
         receiveAfterSchool = prefs.getBoolean(KEY_AFTER_SCHOOL, true),
@@ -45,6 +47,7 @@ class SettingsStore(context: Context) {
             .putBoolean(KEY_LAN_CONNECTION_ENABLED, settings.lanConnectionEnabled)
             .putString(KEY_LAN_HOST, settings.lanHost)
             .putInt(KEY_LAN_PORT, settings.lanPort)
+            .putString(KEY_THEME_ID, settings.themeId)
             .putBoolean(KEY_ON_CLASS, settings.receiveOnClass)
             .putBoolean(KEY_ON_BREAKING, settings.receiveOnBreaking)
             .putBoolean(KEY_AFTER_SCHOOL, settings.receiveAfterSchool)
@@ -62,6 +65,7 @@ class SettingsStore(context: Context) {
         const val KEY_LAN_CONNECTION_ENABLED = "lanConnectionEnabled"
         const val KEY_LAN_HOST = "lanHost"
         const val KEY_LAN_PORT = "lanPort"
+        const val KEY_THEME_ID = "themeId"
         const val KEY_ON_CLASS = "receiveOnClass"
         const val KEY_ON_BREAKING = "receiveOnBreaking"
         const val KEY_AFTER_SCHOOL = "receiveAfterSchool"

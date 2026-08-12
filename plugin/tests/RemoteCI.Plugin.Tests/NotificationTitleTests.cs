@@ -33,4 +33,20 @@ public sealed class NotificationTitleTests
 
         Assert.Equal("由admin发送：RemoteCI 通知", title);
     }
+
+    [Fact]
+    public void DisabledForceSenderKeepsTitleWithoutPrefix()
+    {
+        var title = CommandHandler.BuildNotificationTitle("student01", "  临时调课  ", forceSenderInTitle: false);
+
+        Assert.Equal("临时调课", title);
+    }
+
+    [Fact]
+    public void DisabledForceSenderStillFallsBackForEmptyTitle()
+    {
+        var title = CommandHandler.BuildNotificationTitle("admin", "  ", forceSenderInTitle: false);
+
+        Assert.Equal("RemoteCI 通知", title);
+    }
 }

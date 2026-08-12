@@ -15,6 +15,7 @@ object Protocol {
     const val TYPE_AUTH_CHALLENGE = "auth_challenge"
     const val TYPE_AUTH_PROOF = "auth_proof"
     const val TYPE_AUTH_STATE = "auth_state"
+    const val TYPE_SETTINGS_SYNC = "settings_sync"
 
     const val STATE_NONE = 0
     const val STATE_CLASS = 1
@@ -77,6 +78,7 @@ data class ClassStateSnapshot(
     @SerialName("nextClassSubject") val nextClassSubject: String? = null,
     @SerialName("currentState") val currentState: Int = Protocol.STATE_NONE,
     @SerialName("currentTimeLayoutItem") val currentTimeLayoutItem: String? = null,
+    @SerialName("timeZoneOffsetMinutes") val timeZoneOffsetMinutes: Int? = null,
     @SerialName("nextClassTimeLayoutItem") val nextClassTimeLayoutItem: String? = null,
     @SerialName("classPlanName") val classPlanName: String? = null,
     @SerialName("isClassPlanEnabled") val isClassPlanEnabled: Boolean = false,
@@ -148,9 +150,16 @@ data class ScheduleChangeRequest(
 data class NotificationRequest(
     val title: String,
     val message: String,
+    @SerialName("forceSenderInTitle") val forceSenderInTitle: Boolean? = null,
     @SerialName("isNotificationEffectEnabled") val isNotificationEffectEnabled: Boolean = false,
     @SerialName("isNotificationSoundEnabled") val isNotificationSoundEnabled: Boolean = false,
     @SerialName("isSpeechEnabled") val isSpeechEnabled: Boolean = false,
+)
+
+@Serializable
+data class SettingsSync(
+    @SerialName("forceSenderInTitle") val forceSenderInTitle: Boolean = true,
+    @SerialName("updatedAt") val updatedAt: String? = null,
 )
 
 @Serializable

@@ -9,7 +9,6 @@ import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.remoteci.watch.notif.NotificationHelper
-import com.remoteci.watch.ui.AppTheme
 import com.remoteci.watch.ui.RemoteCiApp
 
 /** Wear OS 入口：申请通知权限后进入主界面。 */
@@ -29,10 +28,9 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        // 主题由 RemoteCiApp 根据“设置 → 外观”选中的配色统一提供。
         setContent {
-            AppTheme {
-                RemoteCiApp(applicationContext)
-            }
+            RemoteCiApp(applicationContext)
         }
     }
 

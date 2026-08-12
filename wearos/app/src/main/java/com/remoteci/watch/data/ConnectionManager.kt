@@ -63,6 +63,7 @@ object ConnectionManager {
     val snapshot = MutableStateFlow<ClassStateSnapshot?>(null)
     val schedule = MutableStateFlow<ScheduleBundle?>(null)
     val extensions = MutableStateFlow<List<ExtensionDefinition>>(emptyList())
+    val settings = MutableStateFlow<SettingsSync?>(null)
     val events = MutableSharedFlow<ClassEvent>(extraBufferCapacity = 32)
     val lastCommandResult = MutableStateFlow<CommandResult?>(null)
 
@@ -86,6 +87,8 @@ object ConnectionManager {
         state.value = State.Connecting
         lastCommandResult.value = null
         extensions.value = emptyList()
+        // 重新连接后以服务端下发的设置快照为准，未同步前 UI 按默认开启处理。
+        this@ConnectionManager.settings.value = null
 
         activeJob = scope.launch {
             try {
@@ -128,6 +131,7 @@ object ConnectionManager {
         accessToken = null
         if (clearUser) currentUser.value = null
         extensions.value = emptyList()
+        this@ConnectionManager.settings.value = null
         state.value = State.Idle
     }
 
@@ -408,6 +412,10 @@ object ConnectionManager {
                     it,
                 )
             }
+            null
+        }
+        Protocol.TYPE_SETTINGS_SYNC -> {
+            envelope.payload?.let { settings.value = json.decodeFromJsonElement(SettingsSync.serializer(), it) }
             null
         }
         Protocol.TYPE_EVENT_NOTIFY -> {

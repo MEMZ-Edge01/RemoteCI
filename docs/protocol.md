@@ -51,18 +51,21 @@
 | `event_notify` | 插件 → 服务端/手表 | 上课、下课、放学、课表变更、自定义消息、ClassIsland 自动化或第三方插件通知 |
 | `command` | 手表/服务端 → 插件 | 结构化换课、通知、主界面或电源命令 |
 | `command_result` | 插件 → 发起者 | 真实成功、失败码、消息和可选新修订号 |
+| `settings_sync` | 服务端 → 手表 | 全局通知设置快照（目前含 `forceSenderInTitle`） |
 
 `command_result.replyToMessageId` 必须等于请求的 `messageId`。服务端只把结果交给对应的 WebSocket 或等待中的 WebUI 请求，等待上限 15 秒。
 
 `event_notify.payload.event` 的值 6 表示 ClassIsland 自动化“显示提醒”行动产生的通知，值 7 表示第三方 ClassIsland 插件产生的通知。手表分别持久化开关；内置课程、天气等通知不会被值 7 重复转发。
 
-自定义通知由插件最终执行时强制把标题格式化为 `由用户名发送：原标题`。发送者名称取自已认证账号的 `displayName`（界面称“用户名”），而 `username` 是唯一登录 ID；手表、WebUI 和其他客户端均不能覆盖或移除署名前缀。通知请求还可通过 `isNotificationEffectEnabled`、`isNotificationSoundEnabled` 和 `isSpeechEnabled` 分别控制 ClassIsland 的提醒强调特效、提醒音效和语音朗读；省略时均为关闭。
+自定义通知的标题是否添加 `由用户名发送：` 前缀由服务端全局设置 `forceSenderInTitle` 决定（WebUI 通知页开关，默认开启）。开启时插件最终执行会把标题格式化为 `由用户名发送：原标题`；关闭时不添加前缀。发送者名称取自已认证账号的 `displayName`（界面称“用户名”），而 `username` 是唯一登录 ID；服务端转发命令时会按全局设置覆盖客户端请求中的署名标志，客户端不能绕过。设置变更时服务端通过 `settings_sync` 推送在线手表，手表通知页据此决定是否显示“将显示发送人”提示。通知请求还可通过 `isNotificationEffectEnabled`、`isNotificationSoundEnabled` 和 `isSpeechEnabled` 分别控制 ClassIsland 的提醒强调特效、提醒音效和语音朗读；省略时均为关闭。
 
 控制命令值 3 为清除当前 ClassIsland 提醒，值 4 通过 `mainMenuVisible` 设置主界面显隐，值 5 通过 `powerAction` 选择关机、重启、睡眠或休眠。值 6 通过 `volume.level` 设置 Windows 默认播放设备的 0-100 主音量，或通过 `volume.muted` 设置静音状态。休眠入口只在插件状态报告 Windows 已启用休眠时显示。
 
 `extensions_sync` 的载荷是其他 ClassIsland 插件通过 RemoteCI 注册的扩展功能列表；服务端只做内存缓存并转发给手表，新连接的手表会收到最近一次清单。命令值 7 为 `RunExtension`，通过 `extensionId` 指定目标扩展，`extensionArgs` 携带参数字典（值统一为字符串）。扩展命令的所需权限由插件端按注册项动态校验，服务端只要求已认证用户；未注册、缺少必填参数或权限不足时分别返回 `INVALID_REQUEST` / `FORBIDDEN`，执行异常统一返回 `INTERNAL_ERROR`。
 
 状态快照中的 `isVolumeControlAvailable`、`volumePercent` 和 `isMuted` 分别表示默认播放设备是否可控、当前主音量百分比和静音状态，手表必须以这些真实状态刷新音量页。
+
+状态快照中的 `currentTimeLayoutItem` 使用插件本地时间（如 `16:30-17:10 语文`），并携带 `timeZoneOffsetMinutes`（插件本地时区相对 UTC 的偏移分钟数，东八区为 480）。手表端以快照的 `generatedAt`（UTC）加该偏移推算“插件本地当前时间”，再计算课程进度环，避免两端时区不一致时进度环显示为空。旧版插件不携带 `timeZoneOffsetMinutes` 时，手表回退到自身本地时间，行为与旧版一致。
 
 ## 换课
 

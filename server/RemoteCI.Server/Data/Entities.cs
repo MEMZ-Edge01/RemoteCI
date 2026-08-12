@@ -38,4 +38,7 @@ public sealed class SystemMetadata
 {
     public int Id { get; set; } = 1;
     public long AccountVersion { get; set; }
+
+    /// <summary>全局通知设置：开启后所有通知标题强制添加“由用户名发送：”前缀。</summary>
+    public bool ForceSenderInTitle { get; set; } = true;
 }

@@ -15,6 +15,7 @@ public static class Protocol
     public const string MessageTypeAuthState = "auth_state";
     public const string MessageTypeAccountSync = "account_sync";
     public const string MessageTypeExtensionsSync = "extensions_sync";
+    public const string MessageTypeSettingsSync = "settings_sync";
 
     public const string QueryToken = "token";
     public const string HeaderAuthorization = "Authorization";

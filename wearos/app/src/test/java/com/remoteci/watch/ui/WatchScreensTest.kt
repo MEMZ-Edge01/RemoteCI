@@ -31,6 +31,33 @@ class WatchScreensTest {
     }
 
     @Test
+    fun `lessonProgress matches real plugin payload with subject suffix`() {
+        // 插件实际推送格式："16:30-17:10 语文"
+        val progress = lessonProgress("16:30-17:10 语文", LocalTime.of(16, 46))
+
+        assertEquals(0.4f, progress, 0.001f)
+        assertEquals("16:30-17:10", extractTimeRange("16:30-17:10 语文"))
+    }
+
+    @Test
+    fun `pluginLocalNow aligns progress with plugin timezone`() {
+        // 插件在 UTC+8，快照生成于 08:46:55Z，本地应为 16:46:55。
+        val atSnapshot = pluginLocalNow("2026-08-12T08:46:55.0573662+00:00", 480, 1_000L, 1_000L)
+        assertEquals(LocalTime.of(16, 46, 55), atSnapshot.withNano(0))
+
+        // 两分钟后的插件本地时间。
+        val twoMinutesLater = pluginLocalNow("2026-08-12T08:46:55.0573662+00:00", 480, 1_000L, 121_000L)
+        assertEquals(LocalTime.of(16, 48, 55), twoMinutesLater.withNano(0))
+    }
+
+    @Test
+    fun `pluginLocalNow falls back to device local time without offset`() {
+        // 旧版插件不携带偏移信息时保持原行为，不抛异常。
+        val fallback = pluginLocalNow(null, null, 0L, 0L)
+        assertTrue(fallback.isBefore(LocalTime.now().plusMinutes(1)))
+    }
+
+    @Test
     fun `progress ring only appears for bounded course phases`() {
         val timed = "13:00-14:00"
 
@@ -114,25 +141,6 @@ class WatchScreensTest {
         assertEquals(48, adjustVolumeForRotary(50, -1f))
         assertEquals(100, adjustVolumeForRotary(100, 1f))
         assertEquals(0, adjustVolumeForRotary(0, -1f))
-    }
-
-    @Test
-    fun `rotary input needs accumulated rotation before switching home pages`() {
-        // 未达到阈值时保持当前页并继续累积。
-        assertEquals(0 to 1f, applyRotaryToHomePage(accumulator = 0f, currentPage = 0, scrollPixels = 1f))
-        assertEquals(0 to 2f, applyRotaryToHomePage(accumulator = 1f, currentPage = 0, scrollPixels = 1f))
-        // 达到阈值后翻到第二屏并清零。
-        assertEquals(1 to 0f, applyRotaryToHomePage(accumulator = 2f, currentPage = 0, scrollPixels = 1f))
-        // 反向同理：从第二屏退回第一屏。
-        assertEquals(0 to 0f, applyRotaryToHomePage(accumulator = -2f, currentPage = 1, scrollPixels = -1f))
-        // 边界上继续旋转不翻页，但清零防止残留累计。
-        assertEquals(1 to 0f, applyRotaryToHomePage(accumulator = 2f, currentPage = 1, scrollPixels = 1f))
-        assertEquals(0 to 0f, applyRotaryToHomePage(accumulator = -2f, currentPage = 0, scrollPixels = -1f))
-        // 来回抖动不会越界翻页。
-        assertEquals(0 to 1f, applyRotaryToHomePage(accumulator = 0f, currentPage = 0, scrollPixels = 1f))
-        assertEquals(0 to 0f, applyRotaryToHomePage(accumulator = 1f, currentPage = 0, scrollPixels = -1f))
-        // 零事件不改变状态。
-        assertEquals(0 to 1f, applyRotaryToHomePage(accumulator = 1f, currentPage = 0, scrollPixels = 0f))
     }
 
     @Test

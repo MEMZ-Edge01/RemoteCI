@@ -48,7 +48,9 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
             Password = password,
             DeviceName = "Integration Test",
         });
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"Login failed ({response.StatusCode}): {await response.Content.ReadAsStringAsync()}");
         return (await response.Content.ReadFromJsonAsync<AuthResponse>())!;
     }
 

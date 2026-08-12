@@ -68,6 +68,8 @@ public sealed class StateCollector
             NextClassSubject = nextSubject,
             CurrentState = MapState(_lessons.CurrentState),
             CurrentTimeLayoutItem = FormatTimeLayoutItem(_lessons.CurrentTimeLayoutItem, currentSubject),
+            // 随快照带上插件本地时区偏移，手表端据此对齐时间，避免两端时区不一致时进度环为空。
+            TimeZoneOffsetMinutes = (int)TimeZoneInfo.Local.GetUtcOffset(DateTimeOffset.UtcNow).TotalMinutes,
             NextClassTimeLayoutItem = FormatTimeLayoutItem(_lessons.NextClassTimeLayoutItem, nextSubject),
             ClassPlanName = _lessons.CurrentClassPlan?.Name,
             IsClassPlanEnabled = _lessons.IsClassPlanEnabled,

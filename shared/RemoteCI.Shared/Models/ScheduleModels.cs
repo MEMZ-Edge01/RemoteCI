@@ -99,6 +99,11 @@ public sealed class NotificationRequest
     [JsonPropertyName("message")]
     public string Message { get; set; } = string.Empty;
 
+    /// <summary>服务端根据全局“强制在标题显示发送人”设置注入；null 时插件按旧行为视为开启。</summary>
+    [JsonPropertyName("forceSenderInTitle")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ForceSenderInTitle { get; set; }
+
     [JsonPropertyName("isNotificationEffectEnabled")]
     public bool IsNotificationEffectEnabled { get; set; }
 

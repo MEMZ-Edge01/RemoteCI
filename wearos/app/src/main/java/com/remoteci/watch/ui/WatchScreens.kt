@@ -1,6 +1,7 @@
 package com.remoteci.watch.ui
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,8 +22,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.pager.VerticalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.wear.compose.foundation.pager.VerticalPager
+import androidx.wear.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.List
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.EditNotifications
 import androidx.compose.material.icons.rounded.NotificationsOff
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.School
@@ -91,6 +93,8 @@ import com.remoteci.watch.data.WatchSettings
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -106,16 +110,9 @@ internal data class LessonChoice(
     val enabled: Boolean,
 )
 
-private val WatchBackground = Color.Black
-private val HomePanel = Color(0xFFF4E7FF)
-private val PinkContainer = Color(0xFFFFE1FA)
-private val LavenderContainer = Color(0xFFD8D4FF)
-private val SecondaryContainer = Color(0xFFE8DEF8)
-private val OnSecondaryContainer = Color(0xFF4A4459)
-private val ProgressActive = Color(0xFF6750A4)
-private val ProgressTrack = Color(0xFFEEE5FA)
-private val DisabledContainer = Color(0xFF343238)
-private val DisabledContent = Color(0xFF8E8A94)
+/** 当前 M3 配色的快捷入口，所有屏幕统一从主题取色。 */
+private val palette: WatchPalette
+    @Composable get() = LocalWatchPalette.current
 
 @Composable
 internal fun LoginScreen(
@@ -140,37 +137,35 @@ internal fun HomeScreen(
     user: UserProfile?,
     onOpenScheduleOverview: () -> Unit,
     onOpenScheduleChange: () -> Unit,
+    onQuickSwapCurrent: (() -> Unit)?,
     onOpenNotification: () -> Unit,
     onOpenSettings: () -> Unit,
     onRetryConnection: () -> Unit,
 ) {
-    var now by remember { mutableStateOf(LocalTime.now()) }
-    LaunchedEffect(snapshot?.currentTimeLayoutItem) { while (true) { now = LocalTime.now(); delay(30_000) } }
+    var now by remember(snapshot?.generatedAt, snapshot?.timeZoneOffsetMinutes) {
+        mutableStateOf(pluginLocalNow(snapshot?.generatedAt, snapshot?.timeZoneOffsetMinutes, 0L, 0L))
+    }
+    // 以插件快照的 UTC 生成时间为基准推算“插件本地当前时间”，避免两端时区/时钟不一致时进度环为空。
+    LaunchedEffect(snapshot?.generatedAt, snapshot?.timeZoneOffsetMinutes) {
+        val baseElapsed = SystemClock.elapsedRealtime()
+        while (true) {
+            now = pluginLocalNow(
+                snapshot?.generatedAt,
+                snapshot?.timeZoneOffsetMinutes,
+                baseElapsed,
+                SystemClock.elapsedRealtime(),
+            )
+            delay(30_000)
+        }
+    }
     WatchSurface { diameter ->
         val pagerState = rememberPagerState(pageCount = { 2 })
-        val focusRequester = remember { FocusRequester() }
-        val coroutineScope = rememberCoroutineScope()
-        var rotaryAccumulator by remember { mutableStateOf(0f) }
-        LaunchedEffect(Unit) { focusRequester.requestFocus() }
         Box(Modifier.fillMaxSize()) {
+            // Wear Compose 的 VerticalPager 默认内置表冠/旋转表圈支持：
+            // 一格贴合一页、自动管理旋转焦点，并按设备分辨率（表冠/表圈）自适应灵敏度。
             VerticalPager(
                 state = pagerState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .focusRequester(focusRequester)
-                    .onRotaryScrollEvent { event ->
-                        val (targetPage, nextAccumulator) = applyRotaryToHomePage(
-                            accumulator = rotaryAccumulator,
-                            currentPage = pagerState.currentPage,
-                            scrollPixels = event.verticalScrollPixels,
-                        )
-                        rotaryAccumulator = nextAccumulator
-                        if (targetPage != pagerState.currentPage) {
-                            coroutineScope.launch { pagerState.animateScrollToPage(targetPage) }
-                        }
-                        event.verticalScrollPixels != 0f
-                    }
-                    .focusable(),
+                modifier = Modifier.fillMaxSize(),
             ) { page ->
                 if (page == 0) {
                     HomeStatusPage(
@@ -179,12 +174,12 @@ internal fun HomeScreen(
                         user = user,
                         now = now,
                         diameter = diameter,
+                        onQuickSwapCurrent = onQuickSwapCurrent,
                         onRetryConnection = onRetryConnection,
                     )
                 } else {
                     HomeMenuPage(
                         user = user,
-                        diameter = diameter,
                         onOpenScheduleOverview = onOpenScheduleOverview,
                         onOpenScheduleChange = onOpenScheduleChange,
                         onOpenNotification = onOpenNotification,
@@ -201,28 +196,6 @@ internal fun HomeScreen(
     }
 }
 
-/**
- * 旋钮翻页所需的最小累计滚动量。
- * Wear OS 旋钮每格约产生 1.0 垂直滚动像素，取 3 格可避免轻微转动或抖动误翻页。
- */
-internal const val HOME_PAGE_ROTARY_SWITCH_THRESHOLD = 3f
-
-internal fun applyRotaryToHomePage(
-    accumulator: Float,
-    currentPage: Int,
-    scrollPixels: Float,
-): Pair<Int, Float> {
-    val total = accumulator + scrollPixels
-    return when {
-        total >= HOME_PAGE_ROTARY_SWITCH_THRESHOLD && currentPage < 1 -> 1 to 0f
-        total <= -HOME_PAGE_ROTARY_SWITCH_THRESHOLD && currentPage > 0 -> 0 to 0f
-        // 已达边界时即使方向一致也不翻页，清零避免残留累计影响反向切换。
-        total >= HOME_PAGE_ROTARY_SWITCH_THRESHOLD || total <= -HOME_PAGE_ROTARY_SWITCH_THRESHOLD ->
-            currentPage to 0f
-        else -> currentPage to total
-    }
-}
-
 @Composable
 private fun HomeStatusPage(
     connectionState: ConnectionManager.State,
@@ -230,13 +203,14 @@ private fun HomeStatusPage(
     user: UserProfile?,
     now: LocalTime,
     diameter: Dp,
+    onQuickSwapCurrent: (() -> Unit)?,
     onRetryConnection: () -> Unit,
 ) {
     val currentSubject = snapshot?.currentSubject ?: "暂无课程"
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(HomePanel)
+            .background(palette.homePanel)
             .clickable(
                 enabled = connectionState is ConnectionManager.State.Error,
                 onClick = onRetryConnection,
@@ -254,8 +228,8 @@ private fun HomeStatusPage(
                     progress = lessonProgress(snapshot?.currentTimeLayoutItem, now),
                     modifier = Modifier.size(diameter * .125f),
                     strokeWidth = diameter * .02f,
-                    indicatorColor = ProgressActive,
-                    trackColor = ProgressTrack,
+                    indicatorColor = palette.progressActive,
+                    trackColor = palette.progressTrack,
                 )
                 Spacer(Modifier.width(diameter * .04f))
             }
@@ -274,6 +248,7 @@ private fun HomeStatusPage(
             modifier = Modifier.width(diameter * .39f).height(diameter * .14f),
             fontSize = if (currentSubject.length <= 2) 16.sp else 12.sp,
             iconSize = diameter * .055f,
+            onClick = onQuickSwapCurrent,
         )
         Spacer(Modifier.height(diameter * .035f))
         HomeInfoChip(
@@ -299,7 +274,6 @@ private fun HomeStatusPage(
 @Composable
 private fun HomeMenuPage(
     user: UserProfile?,
-    diameter: Dp,
     onOpenScheduleOverview: () -> Unit,
     onOpenScheduleChange: () -> Unit,
     onOpenNotification: () -> Unit,
@@ -313,13 +287,10 @@ private fun HomeMenuPage(
             else -> HomeAction(label, Icons.Rounded.Settings, onOpenSettings)
         }
     }
-    Column(
-        modifier = Modifier.fillMaxSize().background(WatchBackground),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(diameter * .015f, Alignment.CenterVertically),
-    ) {
+    // 与“设置/控制”等二级菜单同款：可滑动列表 + 圆角按钮。
+    WatchList(title = "菜单") {
         actions.forEach { action ->
-            HomeTile(action, diameter, Modifier.width(diameter * .47f))
+            item { ActionButton(action.label, action.icon, true, action.onClick) }
         }
     }
 }
@@ -335,7 +306,7 @@ private fun HomePageIndicator(currentPage: Int, diameter: Dp, modifier: Modifier
                 Modifier
                     .size(9.dp)
                     .clip(CircleShape)
-                    .background(if (currentPage == page) LavenderContainer else Color.White.copy(alpha = .92f)),
+                    .background(if (currentPage == page) palette.primaryContainer else Color.White.copy(alpha = .92f)),
             )
         }
     }
@@ -655,6 +626,7 @@ internal fun PowerScreen(
 internal fun NotificationScreen(
     title: String,
     message: String,
+    forceSenderInTitle: Boolean,
     effectEnabled: Boolean,
     soundEnabled: Boolean,
     speechEnabled: Boolean,
@@ -668,7 +640,7 @@ internal fun NotificationScreen(
     onBack: () -> Unit,
 ) = WatchList(title = "发送消息") {
     item { Input(title, onTitleChange, "标题") }
-    item { Hint("发送后标题会自动添加“由当前用户名发送：”") }
+    if (forceSenderInTitle) item { Hint("将显示发送人") }
     item { Input(message, onMessageChange, "正文") }
     item { Toggle("启用提醒强调特效", effectEnabled, onEffectEnabledChange) }
     item { Toggle("启用提醒音效", soundEnabled, onSoundEnabledChange) }
@@ -682,13 +654,65 @@ internal fun NotificationScreen(
 internal fun SettingsScreen(
     onOpenConnection: () -> Unit,
     onOpenNotifications: () -> Unit,
+    onOpenAppearance: () -> Unit,
     onOpenUpdate: () -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = "设置") {
     item { ActionButton("连接", Icons.Rounded.Wifi, true, onOpenConnection) }
     item { ActionButton("通知", Icons.Rounded.EditNotifications, true, onOpenNotifications) }
+    item { ActionButton("外观", Icons.Rounded.Palette, true, onOpenAppearance) }
     item { ActionButton("更新", Icons.Rounded.SystemUpdate, true, onOpenUpdate) }
     item { BackButton(onBack) }
+}
+
+@Composable
+internal fun AppearanceSettingsScreen(
+    currentThemeId: String,
+    onThemeChange: (String) -> Unit,
+    onBack: () -> Unit,
+) = WatchList(title = "外观") {
+    item { Hint("选择配色方案") }
+    WatchPalette.All.forEach { option ->
+        item {
+            ThemeOptionButton(
+                option = option,
+                selected = option.id == currentThemeId,
+                onClick = { onThemeChange(option.id) },
+            )
+        }
+    }
+    item { BackButton(onBack) }
+}
+
+/** 外观设置页的配色选项：色点 + 名称 + 当前选中标记。 */
+@Composable
+private fun ThemeOptionButton(
+    option: WatchPalette,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(.78f).height(38.dp).clip(RoundedCornerShape(19.dp))
+            .background(if (selected) palette.buttonContainer else Color.Transparent)
+            .then(if (selected) Modifier else Modifier.border(.5.dp, Color.White.copy(.35f), RoundedCornerShape(19.dp)))
+            .clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(14.dp).clip(CircleShape).background(option.progressActive))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            option.label,
+            color = if (selected) palette.onButtonContainer else Color.White,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (selected) {
+            Spacer(Modifier.width(6.dp))
+            Icon(Icons.Rounded.Check, null, tint = palette.onButtonContainer, modifier = Modifier.size(15.dp))
+        }
+    }
 }
 
 /** 更新页状态。 */
@@ -861,7 +885,7 @@ private fun WatchList(title: String, content: androidx.wear.compose.foundation.l
 private fun WatchSurface(content: @Composable BoxScope.(Dp) -> Unit) {
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
         val diameter = minOf(maxWidth, maxHeight)
-        Box(Modifier.size(diameter).clip(CircleShape).background(WatchBackground), contentAlignment = Alignment.Center) { content(diameter) }
+        Box(Modifier.size(diameter).clip(CircleShape).background(Color.Black), contentAlignment = Alignment.Center) { content(diameter) }
     }
 }
 
@@ -875,14 +899,14 @@ private fun ActionButton(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(.78f).height(38.dp).clip(RoundedCornerShape(19.dp))
-            .background(if (!enabled) DisabledContainer else if (subtle) Color.Transparent else SecondaryContainer)
+            .background(if (!enabled) palette.disabledContainer else if (subtle) Color.Transparent else palette.buttonContainer)
             .then(if (subtle) Modifier.border(.5.dp, Color.White.copy(.35f), RoundedCornerShape(19.dp)) else Modifier)
             .clickable(enabled = enabled, onClick = onClick),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (icon != null) { Icon(icon, null, tint = if (subtle) Color.White else OnSecondaryContainer, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)) }
-        Text(label, color = if (!enabled) DisabledContent else if (subtle) Color.White else OnSecondaryContainer, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (icon != null) { Icon(icon, null, tint = if (subtle) Color.White else palette.onButtonContainer, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(5.dp)) }
+        Text(label, color = if (!enabled) palette.disabledContent else if (subtle) Color.White else palette.onButtonContainer, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -902,20 +926,6 @@ internal fun canViewExtendedSchedule(user: UserProfile?): Boolean =
     user?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true
 
 @Composable
-private fun HomeTile(action: HomeAction, diameter: Dp, modifier: Modifier = Modifier) {
-    Row(
-        modifier = modifier.height(diameter * .185f).clip(RoundedCornerShape(12.dp))
-            .background(SecondaryContainer).clickable(onClick = action.onClick),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(action.icon, null, tint = OnSecondaryContainer, modifier = Modifier.size(14.dp))
-        Spacer(Modifier.width(7.dp))
-        Text(action.label, color = OnSecondaryContainer, fontSize = 10.sp)
-    }
-}
-
-@Composable
 private fun HomeInfoChip(
     text: String,
     icon: ImageVector? = null,
@@ -923,24 +933,26 @@ private fun HomeInfoChip(
     modifier: Modifier = Modifier.height(24.dp),
     fontSize: TextUnit = if (filled) 11.sp else 12.sp,
     iconSize: Dp = 16.dp,
+    onClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier.clip(RoundedCornerShape(12.dp))
             .then(
-                if (filled) Modifier.background(SecondaryContainer)
+                if (filled) Modifier.background(palette.buttonContainer)
                 else Modifier.border(1.dp, Color(0xFF79747E), RoundedCornerShape(12.dp)),
             )
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 7.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
-            Icon(icon, null, tint = OnSecondaryContainer, modifier = Modifier.size(iconSize))
+            Icon(icon, null, tint = palette.onButtonContainer, modifier = Modifier.size(iconSize))
             Spacer(Modifier.width(5.dp))
         }
         Text(
             text,
-            color = if (filled) OnSecondaryContainer else Color.Black,
+            color = if (filled) palette.onButtonContainer else Color.Black,
             fontSize = fontSize,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
@@ -953,32 +965,32 @@ private fun HomeInfoChip(
 private fun LessonSummary(course: CourseEntry) {
     Row(
         modifier = Modifier.fillMaxWidth(.82f).height(38.dp).clip(RoundedCornerShape(14.dp))
-            .background(SecondaryContainer).padding(horizontal = 12.dp),
+            .background(palette.buttonContainer).padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(course.label, color = OnSecondaryContainer, fontSize = 11.sp)
+        Text(course.label, color = palette.onButtonContainer, fontSize = 11.sp)
         Spacer(Modifier.width(7.dp))
-        Text(course.subject, color = OnSecondaryContainer, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
-        Text(listOfNotNull(course.startTime, course.endTime).joinToString("-"), color = OnSecondaryContainer, fontSize = 9.sp)
+        Text(course.subject, color = palette.onButtonContainer, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1)
+        Text(listOfNotNull(course.startTime, course.endTime).joinToString("-"), color = palette.onButtonContainer, fontSize = 9.sp)
     }
 }
 
 @Composable
 private fun LessonButton(label: String, subject: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth(.78f).height(44.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick)) {
-        Box(Modifier.weight(.3f).fillMaxSize().background(PinkContainer), contentAlignment = Alignment.Center) { Text(label, color = Color.Black, fontWeight = FontWeight.Bold) }
-        Box(Modifier.weight(.7f).fillMaxSize().background(LavenderContainer), contentAlignment = Alignment.Center) { Text(subject, color = Color.Black, fontWeight = FontWeight.Bold, maxLines = 1) }
+        Box(Modifier.weight(.3f).fillMaxSize().background(palette.secondaryContainer), contentAlignment = Alignment.Center) { Text(label, color = Color.Black, fontWeight = FontWeight.Bold) }
+        Box(Modifier.weight(.7f).fillMaxSize().background(palette.primaryContainer), contentAlignment = Alignment.Center) { Text(subject, color = Color.Black, fontWeight = FontWeight.Bold, maxLines = 1) }
     }
 }
 
 @Composable
 private fun ModeSelector(mode: SwapMode, onModeChange: (SwapMode) -> Unit) {
-    Row(Modifier.width(120.dp).height(28.dp).clip(RoundedCornerShape(14.dp)).background(DisabledContainer)) {
+    Row(Modifier.width(120.dp).height(28.dp).clip(RoundedCornerShape(14.dp)).background(palette.disabledContainer)) {
         listOf(SwapMode.Exchange to "交换", SwapMode.Replace to "替换").forEach { (value, label) ->
             Box(
-                Modifier.weight(1f).fillMaxSize().background(if (mode == value) SecondaryContainer else Color.Transparent).clickable { onModeChange(value) },
+                Modifier.weight(1f).fillMaxSize().background(if (mode == value) palette.buttonContainer else Color.Transparent).clickable { onModeChange(value) },
                 contentAlignment = Alignment.Center,
-            ) { Text(label, color = if (mode == value) OnSecondaryContainer else Color.White, fontSize = 11.sp) }
+            ) { Text(label, color = if (mode == value) palette.onButtonContainer else Color.White, fontSize = 11.sp) }
         }
     }
 }
@@ -994,8 +1006,8 @@ private fun Input(value: String, onValueChange: (String) -> Unit, label: String,
         visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
         colors = TextFieldDefaults.colors(
             focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-            focusedContainerColor = DisabledContainer, unfocusedContainerColor = DisabledContainer,
-            focusedIndicatorColor = SecondaryContainer, cursorColor = SecondaryContainer,
+            focusedContainerColor = palette.disabledContainer, unfocusedContainerColor = palette.disabledContainer,
+            focusedIndicatorColor = palette.buttonContainer, cursorColor = palette.buttonContainer,
         ),
     )
 }
@@ -1007,7 +1019,7 @@ private fun Toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit)
         onCheckedChange = onChange,
         label = { Text(label) },
         toggleControl = { Switch(checked = checked) },
-        colors = ToggleChipDefaults.toggleChipColors(uncheckedStartBackgroundColor = DisabledContainer, uncheckedEndBackgroundColor = DisabledContainer),
+        colors = ToggleChipDefaults.toggleChipColors(uncheckedStartBackgroundColor = palette.disabledContainer, uncheckedEndBackgroundColor = palette.disabledContainer),
         modifier = Modifier.fillMaxWidth(.88f),
     )
 }
@@ -1019,7 +1031,7 @@ private fun Toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit)
     textAlign = TextAlign.Center,
     modifier = Modifier.fillMaxWidth(.76f).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
 )
-@Composable private fun SectionLabel(text: String) = Text(text, color = SecondaryContainer, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+@Composable private fun SectionLabel(text: String) = Text(text, color = palette.buttonContainer, fontSize = 12.sp, fontWeight = FontWeight.Bold)
 
 private fun describeConnectionForScreen(state: ConnectionManager.State): String = when (state) {
     ConnectionManager.State.Idle -> "未连接"
@@ -1029,9 +1041,10 @@ private fun describeConnectionForScreen(state: ConnectionManager.State): String 
     is ConnectionManager.State.Error -> state.message
 }
 
+@Composable
 private fun connectionIndicatorColor(state: ConnectionManager.State): Color = when (state) {
     ConnectionManager.State.LanConnected -> Color(0xFF2E7D32)
-    ConnectionManager.State.CloudConnected -> ProgressActive
+    ConnectionManager.State.CloudConnected -> palette.progressActive
     ConnectionManager.State.Connecting -> Color(0xFFF9A825)
     is ConnectionManager.State.Error -> Color(0xFFBA1A1A)
     ConnectionManager.State.Idle -> Color(0xFFC8C4D0)
@@ -1087,6 +1100,20 @@ internal fun extractTimeRange(value: String?): String {
     return "${match.groupValues[1]}-${match.groupValues[2]}"
 }
 
+/**
+ * 把当前时间段（如 "16:30-17:10 语文"）匹配到当天课表的课程零基索引，
+ * 供主界面课程按钮“点击快速选中该课换课”预选源课使用。
+ * 匹配不到（课表未同步、当前无课或时间段不一致）时返回 null。
+ */
+internal fun currentLessonIndex(day: ScheduleDay?, value: String?): Int? {
+    val range = extractTimeRange(value)
+    if (range.isBlank() || day == null) return null
+    val parts = range.split("-")
+    if (parts.size != 2) return null
+    val (start, end) = parts
+    return day.courses.firstOrNull { it.enabled && it.startTime == start && it.endTime == end }?.index
+}
+
 /** 只有具有明确起止时间的课程阶段才显示环状进度，避免放学等开放状态产生伪进度。 */
 internal fun shouldShowStateProgress(snapshot: ClassStateSnapshot?): Boolean =
     snapshot?.currentState in setOf(
@@ -1101,4 +1128,28 @@ internal fun lessonProgress(value: String?, now: LocalTime): Float {
     val end = runCatching { LocalTime.parse(match.groupValues[2]) }.getOrNull() ?: return 0f
     val total = Duration.between(start, end).seconds
     return if (total <= 0) 0f else (Duration.between(start, now).seconds.toFloat() / total).coerceIn(0f, 1f)
+}
+
+/**
+ * 根据插件快照推算“插件本地当前时间”：
+ * 以快照的 UTC 生成时间为基准，加上插件时区偏移和本机经过的真实时间，
+ * 即使手表时区与插件不一致，课程进度也能按插件时间轴正确计算。
+ *
+ * @param generatedAt 快照的 UTC 生成时间（ISO-8601，如 "2026-08-12T08:46:55+00:00"）。
+ * @param offsetMinutes 插件本地时区相对 UTC 的偏移分钟数；为 null 表示旧版插件无偏移信息。
+ * @param baseElapsedMs 收到当前快照时本机 elapsedRealtime 毫秒数。
+ * @param nowElapsedMs 当前本机 elapsedRealtime 毫秒数。
+ */
+internal fun pluginLocalNow(
+    generatedAt: String?,
+    offsetMinutes: Int?,
+    baseElapsedMs: Long,
+    nowElapsedMs: Long,
+): LocalTime {
+    val offset = offsetMinutes?.let { runCatching { ZoneOffset.ofTotalSeconds(it * 60) }.getOrNull() }
+    if (offset == null) return LocalTime.now()
+    val base = generatedAt?.let { raw ->
+        runCatching { OffsetDateTime.parse(raw).toInstant().atOffset(offset).toLocalTime() }.getOrNull()
+    } ?: LocalTime.now(offset)
+    return base.plusNanos((nowElapsedMs - baseElapsedMs) * 1_000_000L)
 }

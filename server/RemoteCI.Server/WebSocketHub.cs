@@ -54,6 +54,10 @@ public static class WebSocketHub
                 await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSync(schedule), context.RequestAborted);
             if (store.GetLatestExtensions() is { } extensions)
                 await registry.SendToWatchAsync(connectionId, Envelope.ExtensionsSync(extensions), context.RequestAborted);
+            await registry.SendToWatchAsync(connectionId, Envelope.SettingsSync(new SettingsSync
+            {
+                ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(context.RequestAborted),
+            }), context.RequestAborted);
         }
 
         try
@@ -78,7 +82,8 @@ public static class WebSocketHub
                 principal = await identities.ValidateAnyTokenAsync(token, context.RequestAborted);
                 if (principal is null) break;
                 envelope.Sender = principal.PeerRole;
-                await DispatchAsync(envelope, principal, connectionId, registry, store, logger, context.RequestAborted);
+                await DispatchAsync(
+                    envelope, principal, connectionId, registry, store, identities, logger, context.RequestAborted);
             }
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -102,6 +107,7 @@ public static class WebSocketHub
         Guid connectionId,
         PeerRegistry registry,
         IStateStore store,
+        IdentityCoordinator identities,
         ILogger logger,
         CancellationToken ct)
     {
@@ -145,7 +151,7 @@ public static class WebSocketHub
                 return;
 
             case Protocol.MessageTypeCommand when principal.User is not null:
-                await ForwardUserCommandAsync(envelope, principal.User, connectionId, registry, ct);
+                await ForwardUserCommandAsync(envelope, principal.User, connectionId, registry, identities, ct);
                 return;
 
             default:
@@ -155,7 +161,12 @@ public static class WebSocketHub
     }
 
     private static async Task ForwardUserCommandAsync(
-        Envelope envelope, UserProfile user, Guid connectionId, PeerRegistry registry, CancellationToken ct)
+        Envelope envelope,
+        UserProfile user,
+        Guid connectionId,
+        PeerRegistry registry,
+        IdentityCoordinator identities,
+        CancellationToken ct)
     {
         var command = ConvertPayload<CommandMessage>(envelope.Payload);
         if (command is null)
@@ -163,6 +174,10 @@ public static class WebSocketHub
             await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "命令格式无效", ct);
             return;
         }
+
+        // 通知署名是否强制由服务端全局设置决定，客户端携带的值一律被覆盖，防止绕过。
+        if (command.Notification is not null)
+            command.Notification.ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(ct);
 
         // RunExtension 的所需权限由插件端按注册项动态校验，服务端只要求已认证用户。
         if (command.Command != CommandKind.RunExtension)

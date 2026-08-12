@@ -20,6 +20,13 @@ public sealed class ClassStateSnapshot
     [JsonPropertyName("currentTimeLayoutItem")]
     public string? CurrentTimeLayoutItem { get; set; }
 
+    /// <summary>
+    /// 插件本地时区相对 UTC 的偏移分钟数（如东八区为 480）。
+    /// 手表端据此把 UTC 时间戳换算为插件本地时间，避免两端时区不一致时课程进度计算错误。
+    /// </summary>
+    [JsonPropertyName("timeZoneOffsetMinutes")]
+    public int? TimeZoneOffsetMinutes { get; set; }
+
     [JsonPropertyName("nextClassTimeLayoutItem")]
     public string? NextClassTimeLayoutItem { get; set; }
 

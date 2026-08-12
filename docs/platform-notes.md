@@ -85,6 +85,12 @@ $env:JAVA_HOME = 'E:\Android Studio\jbr'
 - `compileSdk = 37`（本机已装 platform android-37.0）；`minSdk = 30`（Wear OS 3+）；`targetSdk = 37`。
 - Java/Kotlin 目标 17；构建用 Android Studio 自带 JBR（JDK 25）运行 Gradle 9.7。
 
+### 3.5 手表端 M3 主题配色（设置 → 外观）
+
+- “设置 → 外观”可切换 6 套 Material Design 3 配色：淡紫（默认）、经典紫、蓝、绿、橙、粉，色值取自 M3 官方 tonal palette。
+- `WatchPalette` 数据类集中管理整套配色；`LocalWatchPalette`（CompositionLocal）由 `AppTheme` 提供，屏幕组件统一从主题取色，禁止再硬编码容器色。
+- 主题 id 通过 `SettingsStore.themeId`（SharedPreferences）持久化；`AppTheme` 在 `RemoteCiApp` 内根据设置提供，切换即时生效。
+
 ## 4. 后续扩展点（v0.2+）
 
 - **Tiles 小组件**：`androidx.wear.tiles` 官方库，数据层（ConnectionManager/StateFlow）已与 UI 分离，Tiles 直接消费同一状态源。

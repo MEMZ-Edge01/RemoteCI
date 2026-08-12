@@ -367,6 +367,22 @@ public sealed partial class IdentityCoordinator(
             .ExecuteUpdateAsync(x => x.SetProperty(s => s.RevokedAt, now), ct);
     }
 
+    /// <summary>读取全局“强制在标题显示发送人”设置，默认开启以保持既有行为。</summary>
+    public async Task<bool> GetForceSenderInTitleAsync(CancellationToken ct = default)
+    {
+        var metadata = await db.SystemMetadata.AsNoTracking().SingleAsync(x => x.Id == 1, ct);
+        return metadata.ForceSenderInTitle;
+    }
+
+    /// <summary>更新全局“强制在标题显示发送人”设置，返回可广播给在线手表的快照。</summary>
+    public async Task<SettingsSync> SetForceSenderInTitleAsync(bool force, CancellationToken ct = default)
+    {
+        var metadata = await db.SystemMetadata.SingleAsync(x => x.Id == 1, ct);
+        metadata.ForceSenderInTitle = force;
+        await db.SaveChangesAsync(ct);
+        return new SettingsSync { ForceSenderInTitle = force };
+    }
+
     private async Task<long> NextVersionAsync(CancellationToken ct)
     {
         var metadata = await db.SystemMetadata.SingleAsync(x => x.Id == 1, ct);

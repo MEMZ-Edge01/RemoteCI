@@ -216,6 +216,25 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
         Assert.Equal(request.MessageId, reply.ReplyToMessageId);
     }
 
+    [Fact]
+    public async Task WatchReceivesDefaultSettings_AndNotificationCommandGetsServerPolicyInjected()
+    {
+        using var plugin = await ConnectPluginAsync();
+        using var watch = await ConnectWatchAsync();
+
+        var settings = await ReceivePayloadAsync<SettingsSync>(watch, Protocol.MessageTypeSettingsSync);
+        Assert.True(settings.ForceSenderInTitle);
+
+        await SendAsync(watch, Envelope.Command(new CommandMessage
+        {
+            Command = CommandKind.SendNotification,
+            Notification = new NotificationRequest { Title = "x", Message = "x" },
+        }));
+        var forwarded = await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeCommand);
+        var command = ConvertPayload<CommandMessage>(forwarded.Payload);
+        Assert.True(command.Notification?.ForceSenderInTitle);
+    }
+
     private async Task<WebSocket> ConnectPluginAsync() => await ConnectAsync(await _factory.GetPluginTokenAsync());
 
     private async Task<WebSocket> ConnectWatchAsync(

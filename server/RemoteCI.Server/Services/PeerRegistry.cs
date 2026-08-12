@@ -64,6 +64,9 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
     public Task SendExtensionsToWatchesAsync(IReadOnlyList<ExtensionDefinition> value, CancellationToken ct = default) =>
         BroadcastWatchesAsync(Envelope.ExtensionsSync(value), ct);
 
+    public Task SendSettingsToWatchesAsync(SettingsSync value, CancellationToken ct = default) =>
+        BroadcastWatchesAsync(Envelope.SettingsSync(value), ct);
+
     public async Task BroadcastWatchesAsync(Envelope envelope, CancellationToken ct = default)
     {
         foreach (var peer in _watchPeers.Values)
@@ -177,22 +180,36 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
 
     private static async Task<bool> TrySendAsync(WsPeer peer, Envelope envelope, CancellationToken ct)
     {
-        if (peer.Socket.State != WebSocketState.Open) return false;
-        var payload = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonDefaults.Options);
-        await peer.SendLock.WaitAsync(ct);
         try
         {
             if (peer.Socket.State != WebSocketState.Open) return false;
-            await peer.Socket.SendAsync(payload, WebSocketMessageType.Text, true, ct);
-            return true;
+            await peer.SendLock.WaitAsync(ct);
+            try
+            {
+                if (peer.Socket.State != WebSocketState.Open) return false;
+                var payload = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonDefaults.Options);
+                if (peer.Socket.State != WebSocketState.Open) return false;
+                await peer.Socket.SendAsync(payload, WebSocketMessageType.Text, true, ct);
+                return true;
+            }
+            finally
+            {
+                peer.SendLock.Release();
+            }
         }
         catch (WebSocketException)
         {
             return false;
         }
-        finally
+        catch (ObjectDisposedException)
         {
-            peer.SendLock.Release();
+            // 对端已释放连接，等待 UnregisterAsync 清理注册表，本次发送直接跳过。
+            return false;
+        }
+        catch (IOException)
+        {
+            // 连接中断（含测试宿主把已释放连接包装为 IO 异常的情况），由 UnregisterAsync 清理。
+            return false;
         }
     }
 
