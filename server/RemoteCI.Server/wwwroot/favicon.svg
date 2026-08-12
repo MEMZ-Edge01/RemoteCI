@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
 <svg width="100%" height="100%" viewBox="0 0 192 192" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
-<title>RemoteCI</title>
-<rect x="0" y="0" width="192" height="192" rx="42" fill="#1E1E2E"/>
     <g>
         <path d="M177.94,160L56,160L56,100L177.94,100C182.329,100 185.94,103.611 185.94,108L185.94,152C185.94,156.389 182.329,160 177.94,160Z" style="fill:rgb(226,226,226);fill-rule:nonzero;"/>
         <rect x="70.01" y="115" width="30" height="30" style="fill:rgb(153,153,153);"/>

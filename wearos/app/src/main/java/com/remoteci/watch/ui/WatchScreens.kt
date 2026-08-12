@@ -287,8 +287,8 @@ private fun HomeMenuPage(
             else -> HomeAction(label, Icons.Rounded.Settings, onOpenSettings)
         }
     }
-    // 与“设置/控制”等二级菜单同款：可滑动列表 + 圆角按钮。
-    WatchList(title = "菜单") {
+    // 首页菜单不显示“菜单”标题，让选项直接占满一屏，避免旋转翻页后还要滚动。
+    WatchList(title = "菜单", showTitle = false) {
         actions.forEach { action ->
             item { ActionButton(action.label, action.icon, true, action.onClick) }
         }
@@ -866,7 +866,11 @@ internal fun NotificationSettingsScreen(
 }
 
 @Composable
-private fun WatchList(title: String, content: androidx.wear.compose.foundation.lazy.ScalingLazyListScope.() -> Unit) {
+private fun WatchList(
+    title: String,
+    showTitle: Boolean = true,
+    content: androidx.wear.compose.foundation.lazy.ScalingLazyListScope.() -> Unit,
+) {
     WatchSurface {
         ScalingLazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -874,8 +878,10 @@ private fun WatchList(title: String, content: androidx.wear.compose.foundation.l
             horizontalAlignment = Alignment.CenterHorizontally,
             contentPadding = PaddingValues(top = 34.dp, bottom = 58.dp),
         ) {
-            item { Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
-            item { Spacer(Modifier.height(6.dp)) }
+            if (showTitle) {
+                item { Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold) }
+                item { Spacer(Modifier.height(6.dp)) }
+            }
             content()
         }
     }

@@ -13,8 +13,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>@ViewData["Title"] · RemoteCI</title>
-    <link rel="icon" href="~/favicon.ico" sizes="16x16 32x32 48x48" />
-    <link rel="icon" type="image/svg+xml" href="~/favicon.svg" />
+    <link rel="icon" href="~/favicon.ico" sizes="16x16 32x32 48x48" asp-append-version="true" />
+    <link rel="icon" type="image/svg+xml" href="~/favicon.svg" asp-append-version="true" />
     <link rel="stylesheet" href="~/vendor/bootstrap-icons/font/bootstrap-icons.min.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/app.css" asp-append-version="true" />
 </head>
@@ -23,7 +23,7 @@
     {
         <aside class="sidebar" aria-label="主导航">
             <a class="brand" href="@(permissions.HasFlag(UserPermissions.AccessWebUi) ? Url.Page("/Index") : Url.Page("/Account"))">
-                <img class="brand-logo" src="~/logo-mark.svg" alt="RemoteCI" />
+                <img class="brand-logo" src="~/logo-mark.svg" alt="RemoteCI" asp-append-version="true" />
                 <span class="brand-full">RemoteCI</span><small>v2</small>
             </a>
             <nav class="side-nav">

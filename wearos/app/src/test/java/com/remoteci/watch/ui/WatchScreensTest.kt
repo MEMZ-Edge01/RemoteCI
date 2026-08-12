@@ -1,6 +1,7 @@
 package com.remoteci.watch.ui
 
 import com.remoteci.watch.data.ClassStateSnapshot
+import com.remoteci.watch.data.CourseEntry
 import com.remoteci.watch.data.ExtensionDefinition
 import com.remoteci.watch.data.ExtensionParameter
 import com.remoteci.watch.data.Protocol
@@ -37,6 +38,27 @@ class WatchScreensTest {
 
         assertEquals(0.4f, progress, 0.001f)
         assertEquals("16:30-17:10", extractTimeRange("16:30-17:10 语文"))
+    }
+
+    @Test
+    fun `currentLessonIndex matches today lesson by time range`() {
+        val day = ScheduleDay(
+            date = "2026-08-12",
+            revision = "r1",
+            courses = listOf(
+                CourseEntry(index = 0, label = "第 1 节", subjectId = "a", subject = "语文", startTime = "16:30", endTime = "17:10", enabled = true),
+                CourseEntry(index = 1, label = "第 2 节", subjectId = "b", subject = "数学", startTime = "17:20", endTime = "18:00", enabled = true),
+                CourseEntry(index = 2, label = "第 3 节", subjectId = "c", subject = "英语", startTime = "18:10", endTime = "18:50", enabled = false),
+            ),
+        )
+
+        assertEquals(0, currentLessonIndex(day, "16:30-17:10 语文"))
+        assertEquals(1, currentLessonIndex(day, "17:20-18:00 数学"))
+        // 禁用的课程不作为换课源课。
+        assertNull(currentLessonIndex(day, "18:10-18:50 英语"))
+        // 时间不在课表中或缺少课表时匹配不到。
+        assertNull(currentLessonIndex(day, "19:00-20:00 晚自习"))
+        assertNull(currentLessonIndex(null, "16:30-17:10 语文"))
     }
 
     @Test
