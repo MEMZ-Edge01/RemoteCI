@@ -28,7 +28,8 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           dotnet publish server/RemoteCI.Server/RemoteCI.Server.csproj -c Release -r ${{ matrix.rid }} \
-            --self-contained false -o "publish/${{ matrix.rid }}"
+            --self-contained false -p:Version="$version" -o "publish/${{ matrix.rid }}"
+          grep -Fq "\"RemoteCI.Server/$version\"" "publish/${{ matrix.rid }}/RemoteCI.Server.deps.json"
           cd "publish/${{ matrix.rid }}"
           zip -r "../RemoteCI.Server-${version}-${{ matrix.rid }}.zip" .
       - uses: actions/upload-artifact@v4
@@ -46,8 +47,10 @@ jobs:
           dotnet-version: "10.0.x"
       - name: 打包 CIPX
         run: |
-          dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release -p:CreateCipx=true
           version="${GITHUB_REF_NAME#v}"
+          sed -i "s/^version: .*/version: ${version}.0/" plugin/RemoteCI.Plugin/manifest.yml
+          grep -Fxq "version: ${version}.0" plugin/RemoteCI.Plugin/manifest.yml
+          dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release -p:CreateCipx=true
           cp plugin/RemoteCI.Plugin/cipx/RemoteCI.Plugin.cipx "RemoteCI.Plugin-${version}.cipx"
           cp plugin/RemoteCI.Plugin/cipx/checksums.md "RemoteCI.Plugin-${version}.checksums.md"
       - uses: actions/upload-artifact@v4
@@ -73,10 +76,12 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "$ANDROID_KEYSTORE_B64" ]; then
-            echo "::warning::未配置签名密钥，将构建未签名 APK"
-            exit 0
-          fi
+          for name in ANDROID_KEYSTORE_B64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::未配置 $name，拒绝发布无法覆盖正式版的 APK"
+              exit 1
+            fi
+          done
           mkdir -p wearos/keystore
           echo "$ANDROID_KEYSTORE_B64" | base64 -d > wearos/keystore/remoteci-release.jks
           {
@@ -88,12 +93,24 @@ jobs:
       - name: 构建 Release APK
         working-directory: wearos
         run: |
+          version="${GITHUB_REF_NAME#v}"
           chmod +x gradlew
-          ./gradlew :app:assembleRelease --console=plain
+          ./gradlew :app:assembleRelease -PreleaseVersion="$version" --console=plain
+          grep -Fq "\"versionName\": \"$version\"" app/build/outputs/apk/release/output-metadata.json
       - name: 按版本重命名 APK
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           cp wearos/app/build/outputs/apk/release/app-release.apk "RemoteCI.Watch-${version}.apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          "$apksigner" verify --print-certs "RemoteCI.Watch-${version}.apk"
+          mkdir previous-watch
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern 'RemoteCI.Watch-*.apk' --dir previous-watch
+          previous_apk="$(find previous-watch -type f -name 'RemoteCI.Watch-*.apk' | head -n 1)"
+          previous_digest="$("$apksigner" verify --print-certs "$previous_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          current_digest="$("$apksigner" verify --print-certs "RemoteCI.Watch-${version}.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
+          test -n "$previous_digest" && test "$current_digest" = "$previous_digest"
       - uses: actions/upload-artifact@v4
         with:
           name: watch-apk
@@ -131,6 +148,8 @@ jobs:
           # 否则 release 作业下载全部 artifact 时会连带下载 *.dockerbuild 缓存。
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            REMOTECI_VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ghcr.io/memz-edge01/remoteci:${{ steps.meta.outputs.version }}
             ghcr.io/memz-edge01/remoteci:latest

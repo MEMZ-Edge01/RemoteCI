@@ -29,7 +29,7 @@
 
    ```bash
    bash fnos/build.sh          # 使用最近 git tag
-   bash fnos/build.sh 0.3.0    # 指定版本
+   bash fnos/build.sh 0.3.1    # 指定版本
    ```
 
 产物输出到 `artifacts/release/RemoteCI-<版本>.fpk`。GitHub Actions 的 `release.yml` 会在推送 `v*` 标签时自动完成：构建并推送多架构镜像到 GHCR → 打包 fpk → 附加到 GitHub Release。
@@ -39,6 +39,6 @@
 1. 从 GitHub Releases 下载 `RemoteCI-<版本>.fpk`。
 2. 在飞牛 fnOS 应用中心选择"手动安装"，按向导填写端口、管理员密码和插件配对码。
 3. 安装后从桌面入口打开 RemoteCI WebUI。
-4. WebUI 的"系统更新"面板会自动检查 GitHub 最新 release：发现新版本后一键把新 fpk 下载到数据卷，再从应用中心手动安装即可完成升级（应用中心会自动拉取新镜像并重建容器）。
+4. 后续版本检查与升级由 fnOS 应用商店统一管理；WebUI 的“系统更新”面板仅显示“由fnOS应用商店管理”，不在容器内下载或安装 fpk。
 
 数据（SQLite）保存在 `/var/apps/remoteci/var/data`，卸载应用不会删除它。

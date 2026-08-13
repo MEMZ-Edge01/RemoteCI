@@ -63,9 +63,28 @@ public sealed class AccountMirrorTests
         Assert.False(mirror.AllowsPrivilegedOperations);
     }
 
-    private static AccountSync CreateSync(Guid userId, Guid sessionId, string verifier, DateTimeOffset generatedAt) => new()
+    [Fact]
+    public void ServerVersionSurvivesMirrorPersistenceForLanAuthentication()
+    {
+        var path = Path.Combine(
+            Path.GetTempPath(), "RemoteCI.Plugin.Tests", Guid.NewGuid().ToString("N"), "accounts.json");
+        var mirror = new AccountMirror(path);
+        mirror.Apply(CreateSync(Guid.NewGuid(), Guid.NewGuid(), "00", DateTimeOffset.UtcNow, "0.3.1"));
+
+        var reloaded = new AccountMirror(path);
+
+        Assert.Equal("0.3.1", reloaded.ServerVersion);
+    }
+
+    private static AccountSync CreateSync(
+        Guid userId,
+        Guid sessionId,
+        string verifier,
+        DateTimeOffset generatedAt,
+        string serverVersion = "0.3.1") => new()
     {
         Version = 1,
+        ServerVersion = serverVersion,
         GeneratedAt = generatedAt,
         Accounts = [new SyncedAccount
         {

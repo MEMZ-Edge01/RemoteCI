@@ -301,7 +301,14 @@ public sealed partial class IdentityCoordinator(
                 Verifier = x.VerifierHash,
                 ExpiresAt = x.ExpiresAt,
             }).ToList();
-        return new AccountSync { Version = accountVersion, GeneratedAt = now, Accounts = accounts, Sessions = sessions };
+        return new AccountSync
+        {
+            Version = accountVersion,
+            ServerVersion = AppVersion.Version,
+            GeneratedAt = now,
+            Accounts = accounts,
+            Sessions = sessions,
+        };
     }
 
     private async Task<AuthResponse> CreateOrRotateSessionAsync(

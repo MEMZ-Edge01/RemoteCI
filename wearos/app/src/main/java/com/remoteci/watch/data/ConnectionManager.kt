@@ -59,6 +59,8 @@ object ConnectionManager {
     private var generation = 0
 
     val state = MutableStateFlow<State>(State.Idle)
+    /** 当前认证连接所属的 WebUI 版本；未知时禁止手表自行升级。 */
+    val serverVersion = MutableStateFlow<String?>(null)
     val currentUser = MutableStateFlow<UserProfile?>(null)
     val snapshot = MutableStateFlow<ClassStateSnapshot?>(null)
     val schedule = MutableStateFlow<ScheduleBundle?>(null)
@@ -85,6 +87,7 @@ object ConnectionManager {
         webSocket?.close(1000, "switch")
         webSocket = null
         state.value = State.Connecting
+        serverVersion.value = null
         lastCommandResult.value = null
         extensions.value = emptyList()
         // 重新连接后以服务端下发的设置快照为准，未同步前 UI 按默认开启处理。
@@ -113,9 +116,11 @@ object ConnectionManager {
                 connectCloud(settings, auth, attempt)
             } catch (_: MissingSessionException) {
                 state.value = State.Error("请先使用账号密码登录")
+                serverVersion.value = null
                 currentUser.value = null
             } catch (error: Exception) {
                 state.value = State.Error(error.message ?: "连接失败")
+                serverVersion.value = null
             }
         }
     }
@@ -128,6 +133,7 @@ object ConnectionManager {
         volumeJob?.cancel()
         webSocket?.close(1000, "disconnect")
         webSocket = null
+        serverVersion.value = null
         accessToken = null
         if (clearUser) currentUser.value = null
         extensions.value = emptyList()
@@ -374,7 +380,7 @@ object ConnectionManager {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (continuation.isActive) continuation.resume(false)
-                if (ConnectionManager.webSocket === webSocket) ConnectionManager.webSocket = null
+                clearActiveConnection(webSocket)
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -382,7 +388,7 @@ object ConnectionManager {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (ConnectionManager.webSocket === webSocket) ConnectionManager.webSocket = null
+                clearActiveConnection(webSocket)
                 if (attempt == generation && !continuation.isActive) scheduleReconnect(attempt)
             }
         }
@@ -390,10 +396,18 @@ object ConnectionManager {
         continuation.invokeOnCancellation { socket.close(1000, "cancelled") }
     }
 
+    /** 只清理由当前活跃连接持有的版本，避免旧连接的迟到回调清空新连接状态。 */
+    private fun clearActiveConnection(socket: WebSocket) {
+        if (webSocket !== socket) return
+        webSocket = null
+        serverVersion.value = null
+    }
+
     private fun handleEnvelope(envelope: Envelope): AuthState? = when (envelope.type) {
         Protocol.TYPE_AUTH_STATE -> envelope.payload?.let {
             json.decodeFromJsonElement(AuthState.serializer(), it).also { auth ->
                 currentUser.value = if (auth.authenticated) auth.user else null
+                serverVersion.value = if (auth.authenticated) auth.serverVersion else null
                 if (!auth.authenticated) state.value = State.Error(auth.error ?: "登录已失效")
             }
         }

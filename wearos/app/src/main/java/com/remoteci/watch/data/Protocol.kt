@@ -258,6 +258,7 @@ data class AuthProof(
 @Serializable
 data class AuthState(
     val authenticated: Boolean,
+    @SerialName("serverVersion") val serverVersion: String? = null,
     val user: UserProfile? = null,
     @SerialName("errorCode") val errorCode: String? = null,
     val error: String? = null,

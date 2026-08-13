@@ -6,6 +6,47 @@ namespace RemoteCI.Server.Tests;
 public sealed class UpdateServiceTests
 {
     [Theory]
+    [InlineData(true, false, UpdateApplyMode.ManagedByPlatform)]
+    [InlineData(false, true, UpdateApplyMode.InProcessContainer)]
+    [InlineData(false, false, UpdateApplyMode.ExternalInstaller)]
+    public void DetermineApplyMode_SelectsSafeStrategyForRuntime(
+        bool isFnos,
+        bool isContainer,
+        UpdateApplyMode expected) =>
+        Assert.Equal(expected, UpdateService.DetermineApplyMode(isFnos, isContainer));
+
+    [Fact]
+    public async Task ExternalInstaller_RetriesUntilLockedDestinationCanBeReplaced()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source");
+        var destination = Path.Combine(root, "destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        var sourceDll = Path.Combine(source, "e_sqlite3.dll");
+        var destinationDll = Path.Combine(destination, "e_sqlite3.dll");
+        await File.WriteAllTextAsync(sourceDll, "new sqlite");
+        await File.WriteAllTextAsync(destinationDll, "old sqlite");
+
+        try
+        {
+            using var locked = new FileStream(destinationDll, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var applying = UpdateInstaller.ApplyFilesAsync(source, destination, CancellationToken.None);
+            await Task.Delay(250);
+            if (OperatingSystem.IsWindows()) Assert.False(applying.IsCompleted);
+            locked.Dispose();
+
+            await applying;
+
+            Assert.Equal("new sqlite", await File.ReadAllTextAsync(destinationDll));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
     [InlineData("v0.2.0", "0.2.0")]
     [InlineData("0.3.0", "0.3.0")]
     [InlineData("v1.0.0-beta.1", "1.0.0-beta.1")]
@@ -59,40 +100,6 @@ public sealed class UpdateServiceTests
             });
 
         Assert.Null(service.SelectServerAsset(release));
-    }
-
-    [Fact]
-    public void SelectFnosAsset_PicksVersionedFpk()
-    {
-        var service = new UpdateService();
-        var release = new ReleaseInfo(
-            "v0.3.0",
-            "RemoteCI 0.3.0",
-            "",
-            new[]
-            {
-                new ReleaseAsset("RemoteCI.Watch-0.3.0.apk", "https://example/watch.apk", 1),
-                new ReleaseAsset("RemoteCI-0.3.0.fpk", "https://example/remoteci.fpk", 1),
-                new ReleaseAsset("RemoteCI-0.2.0.fpk", "https://example/old.fpk", 1),
-            });
-
-        var asset = service.SelectFnosAsset(release);
-
-        Assert.NotNull(asset);
-        Assert.Equal("RemoteCI-0.3.0.fpk", asset.Name);
-    }
-
-    [Fact]
-    public void SelectFnosAsset_ReturnsNullWhenFpkMissing()
-    {
-        var service = new UpdateService();
-        var release = new ReleaseInfo(
-            "v0.3.0",
-            "RemoteCI 0.3.0",
-            "",
-            new[] { new ReleaseAsset("RemoteCI.Server-0.3.0-linux-x64.zip", "https://example/linux.zip", 1) });
-
-        Assert.Null(service.SelectFnosAsset(release));
     }
 
     [Fact]

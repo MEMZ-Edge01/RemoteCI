@@ -170,7 +170,10 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
                 await UnregisterAsync(peer.Id, WebSocketCloseStatus.PolicyViolation);
                 continue;
             }
-            await TrySendAsync(peer, Envelope.AuthState(new AuthState { Authenticated = true, User = principal.User }), ct);
+            await TrySendAsync(
+                peer,
+                Envelope.AuthState(ServerAuthStateFactory.CreateAuthenticated(principal.User)),
+                ct);
         }
     }
 

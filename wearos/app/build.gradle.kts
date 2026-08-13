@@ -1,5 +1,7 @@
 import java.util.Properties
 
+val releaseVersion = providers.gradleProperty("releaseVersion").orNull ?: "0.3.1"
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -29,8 +31,8 @@ android {
         applicationId = "com.remoteci.watch"
         minSdk = 30
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = releaseVersion
         testInstrumentationRunner =
             "com.remoteci.watch.NetworkSecurityPolicyInstrumentation"
     }
@@ -67,6 +69,7 @@ android {
     }
 
     buildFeatures {
+        buildConfig = true
         compose = true
     }
 }

@@ -30,17 +30,11 @@ public sealed class AccountModel(
     public string? CheckMessage { get; private set; }
     public bool UpdateSucceeded { get; private set; }
     public bool IsFnos => UpdateService.IsFnosRuntime;
-    public string? DownloadedFpk { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
         if (await RequireAsync() is { } denied) return denied;
         Sessions = await identities.ListSessionsAsync(CurrentUser.Id, null, ct);
-        if (IsFnos)
-        {
-            // 刷新页面后仍展示已下载的 fpk（取 updates 目录中最新一个）。
-            DownloadedFpk = await FindLatestDownloadedFpkAsync(ct);
-        }
         return Page();
     }
 
@@ -91,6 +85,11 @@ public sealed class AccountModel(
     public async Task<IActionResult> OnPostCheckUpdateAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        if (IsFnos)
+        {
+            CheckMessage = UpdateService.FnosManagedMessage;
+            return Page();
+        }
         try
         {
             LatestRelease = await updates.FetchLatestReleaseAsync(ct);
@@ -100,9 +99,7 @@ public sealed class AccountModel(
             }
             else
             {
-                ServerAsset = IsFnos
-                    ? updates.SelectFnosAsset(LatestRelease)
-                    : updates.SelectServerAsset(LatestRelease);
+                ServerAsset = updates.SelectServerAsset(LatestRelease);
                 CheckMessage = UpdateService.IsNewer(
                     UpdateService.NormalizeVersion(LatestRelease.Tag), CurrentVersion)
                     ? "发现新版本，可下载更新。"
@@ -120,6 +117,11 @@ public sealed class AccountModel(
     public async Task<IActionResult> OnPostUpdateAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        if (IsFnos)
+        {
+            CheckMessage = UpdateService.FnosManagedMessage;
+            return Page();
+        }
         try
         {
             LatestRelease = await updates.FetchLatestReleaseAsync(ct)
@@ -132,25 +134,17 @@ public sealed class AccountModel(
                 ? serverOptions.Value.DatabasePath
                 : Path.Combine(environment.ContentRootPath, serverOptions.Value.DatabasePath);
 
-            if (IsFnos)
-            {
-                ServerAsset = updates.SelectFnosAsset(LatestRelease)
-                    ?? throw new InvalidOperationException("未找到 fnOS 安装包（fpk），请到 GitHub 手动下载。");
-                DownloadedFpk = await updates.DownloadFnosFpkAsync(
-                    LatestRelease, ServerAsset, databasePath, environment.ContentRootPath, ct);
-                CheckMessage = "最新版 fpk 安装包已下载到数据卷，请在飞牛应用中心选择“手动安装”该安装包完成升级；"
-                    + "应用中心会自动拉取新镜像并重建容器。";
-                return Page();
-            }
-
             ServerAsset = updates.SelectServerAsset(LatestRelease)
                 ?? throw new InvalidOperationException("未找到当前平台的更新包，请到 GitHub 手动下载。");
-            await updates.ApplyUpdateAsync(
+            var prepared = await updates.PrepareUpdateAsync(
                 LatestRelease, ServerAsset, databasePath, environment.ContentRootPath, ct);
+            var mode = await updates.BeginApplyAsync(prepared, environment.ContentRootPath, ct);
 
-            CheckMessage = $"v{latestVersion} 更新包已应用，服务端即将重启，请稍后刷新页面。";
+            CheckMessage = mode == UpdateApplyMode.ExternalInstaller
+                ? $"v{latestVersion} 更新包已准备，服务端退出后将完成替换并自动重启，请稍后刷新页面。"
+                : $"v{latestVersion} 更新包已应用，服务端即将重启，请稍后刷新页面。";
             UpdateSucceeded = true;
-            // 先让响应返回浏览器，再平滑退出进程；容器由 Docker restart 策略自动拉起。
+            // 外部安装器已经等待当前 PID；容器则由 restart 策略拉起。
             _ = Task.Run(async () =>
             {
                 await Task.Delay(2000);
@@ -162,42 +156,6 @@ public sealed class AccountModel(
             CheckMessage = "更新失败：" + ex.Message;
         }
         return Page();
-    }
-
-    /// <summary>把已下载的 fnOS 安装包回传给浏览器（仅管理员，且文件名限定在 updates 目录内）。</summary>
-    public async Task<IActionResult> OnGetDownloadFpkAsync(string file, CancellationToken ct)
-    {
-        if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
-        var databasePath = Path.IsPathRooted(serverOptions.Value.DatabasePath)
-            ? serverOptions.Value.DatabasePath
-            : Path.Combine(environment.ContentRootPath, serverOptions.Value.DatabasePath);
-        var updatesRoot = UpdateService.GetUpdatesRoot(databasePath, environment.ContentRootPath);
-        var safeName = Path.GetFileName(file);
-        var target = Path.Combine(updatesRoot, safeName);
-        if (!System.IO.File.Exists(target))
-        {
-            return NotFound();
-        }
-
-        var stream = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read);
-        return File(stream, "application/octet-stream", safeName);
-    }
-
-    private async Task<string?> FindLatestDownloadedFpkAsync(CancellationToken ct)
-    {
-        var databasePath = Path.IsPathRooted(serverOptions.Value.DatabasePath)
-            ? serverOptions.Value.DatabasePath
-            : Path.Combine(environment.ContentRootPath, serverOptions.Value.DatabasePath);
-        var updatesRoot = UpdateService.GetUpdatesRoot(databasePath, environment.ContentRootPath);
-        if (!System.IO.Directory.Exists(updatesRoot))
-        {
-            return null;
-        }
-
-        return await Task.Run(() => System.IO.Directory
-            .EnumerateFiles(updatesRoot, "*.fpk")
-            .OrderByDescending(path => System.IO.File.GetLastWriteTimeUtc(path))
-            .FirstOrDefault(), ct);
     }
 
     public sealed class PasswordInput

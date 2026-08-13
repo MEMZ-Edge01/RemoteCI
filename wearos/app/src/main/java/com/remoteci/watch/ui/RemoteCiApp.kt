@@ -81,6 +81,7 @@ fun RemoteCiApp(context: Context) {
     var cachedSchedule by remember { mutableStateOf(snapshotStore.loadSchedule()) }
 
     val connectionState by ConnectionManager.state.collectAsState()
+    val connectedServerVersion by ConnectionManager.serverVersion.collectAsState()
     val currentUser by ConnectionManager.currentUser.collectAsState()
     val liveSnapshot by ConnectionManager.snapshot.collectAsState()
     val liveSchedule by ConnectionManager.schedule.collectAsState()
@@ -417,6 +418,7 @@ fun RemoteCiApp(context: Context) {
         Screen.Update -> UpdateScreen(
             context = context,
             currentVersion = currentVersion,
+            serverVersion = connectedServerVersion,
             onBack = { screen = Screen.Settings },
         )
         }

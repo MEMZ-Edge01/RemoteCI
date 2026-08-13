@@ -11,43 +11,38 @@
             <h2>系统更新@(Model.IsFnos ? "（飞牛 fnOS）" : "")</h2>
             @if (Model.IsFnos)
             {
-                <p class="muted">当前服务端版本 v@(Model.CurrentVersion)。发现新版本后会自动下载 fpk 安装包，再到飞牛应用中心手动安装完成升级（应用中心会自动拉取新镜像并重建容器）。</p>
+                <p class="muted">当前服务端版本 v@(Model.CurrentVersion)。</p>
+                <p class="notice ok">@UpdateService.FnosManagedMessage</p>
             }
             else
             {
                 <p class="muted">当前服务端版本 v@(Model.CurrentVersion)，更新从 GitHub 仓库最新 release 拉取。</p>
-            }
-            @if (!string.IsNullOrEmpty(Model.CheckMessage))
-            {
-                <p class="notice @(Model.UpdateSucceeded ? "ok" : "warn")">@Model.CheckMessage</p>
-            }
-            @if (Model.DownloadedFpk is not null)
-            {
-                var fpkName = System.IO.Path.GetFileName(Model.DownloadedFpk);
-                <p class="muted">已下载：@fpkName</p>
-                <p><a class="button" href="@Url.Page("/Account", "DownloadFpk", new { file = fpkName })">把 fpk 保存到本机</a></p>
-            }
-            @if (Model.LatestRelease is not null)
-            {
-                var latestVersion = UpdateService.NormalizeVersion(Model.LatestRelease.Tag);
-                var hasNewer = UpdateService.IsNewer(latestVersion, Model.CurrentVersion);
-                <p class="muted">最新版本 v@(latestVersion)</p>
-                @if (!string.IsNullOrEmpty(Model.LatestRelease.Body))
+                @if (!string.IsNullOrEmpty(Model.CheckMessage))
                 {
-                    <details class="release-notes"><summary>查看更新说明</summary><pre>@Model.LatestRelease.Body</pre></details>
+                    <p class="notice @(Model.UpdateSucceeded ? "ok" : "warn")">@Model.CheckMessage</p>
                 }
-                @if (hasNewer && Model.ServerAsset is not null)
+                @if (Model.LatestRelease is not null)
                 {
-                    <form method="post" asp-page-handler="Update" class="stack" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='处理中…'">
-                        <button type="submit">@(Model.IsFnos ? "下载 v" + latestVersion + " fpk 安装包" : "下载并更新到 v" + latestVersion)</button>
-                    </form>
+                    var latestVersion = UpdateService.NormalizeVersion(Model.LatestRelease.Tag);
+                    var hasNewer = UpdateService.IsNewer(latestVersion, Model.CurrentVersion);
+                    <p class="muted">最新版本 v@(latestVersion)</p>
+                    @if (!string.IsNullOrEmpty(Model.LatestRelease.Body))
+                    {
+                        <details class="release-notes"><summary>查看更新说明</summary><pre>@Model.LatestRelease.Body</pre></details>
+                    }
+                    @if (hasNewer && Model.ServerAsset is not null)
+                    {
+                        <form method="post" asp-page-handler="Update" class="stack" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='处理中…'">
+                            <button type="submit">下载并更新到 v@(latestVersion)</button>
+                        </form>
+                    }
+                    else if (hasNewer)
+                    {
+                        <p class="muted">当前平台暂无可用的更新包，请到 GitHub 手动下载。</p>
+                    }
                 }
-                else if (hasNewer)
-                {
-                    <p class="muted">@(Model.IsFnos ? "当前 release 未附带 fpk 安装包，请到 GitHub 手动下载。" : "当前平台暂无可用的更新包，请到 GitHub 手动下载。")</p>
-                }
+                <form method="post" asp-page-handler="CheckUpdate" class="stack"><button type="submit">检查更新</button></form>
             }
-            <form method="post" asp-page-handler="CheckUpdate" class="stack"><button type="submit">检查更新</button></form>
         </section>
     }
 </div>

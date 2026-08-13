@@ -170,7 +170,7 @@ public sealed class LanServer : IDisposable
 
         client.User = user;
         client.SessionId = proof.DeviceSessionId;
-        Send(client.Socket, Envelope.AuthState(new AuthState { Authenticated = true, User = user }));
+        SendAuthenticatedState(client, user);
         if (_snapshotProvider() is { } snapshot) Send(client.Socket, Envelope.StatePush(snapshot));
         if (_scheduleProvider() is { } schedule) Send(client.Socket, Envelope.ScheduleSync(schedule));
         _logger.LogInformation("局域网设备会话已认证：{Username}/{Role}", user.Username, user.Role);
@@ -194,9 +194,17 @@ public sealed class LanServer : IDisposable
                 continue;
             }
             client.User = refreshed;
-            Send(client.Socket, Envelope.AuthState(new AuthState { Authenticated = true, User = refreshed }));
+            SendAuthenticatedState(client, refreshed);
         }
     }
+
+    private void SendAuthenticatedState(LanClient client, UserProfile user) =>
+        Send(client.Socket, Envelope.AuthState(new AuthState
+        {
+            Authenticated = true,
+            ServerVersion = _accounts.ServerVersion,
+            User = user,
+        }));
 
     private IEnumerable<LanClient> AuthenticatedClients() =>
         _clients.Values.Where(x => x.User is not null && x.Socket.IsAvailable);

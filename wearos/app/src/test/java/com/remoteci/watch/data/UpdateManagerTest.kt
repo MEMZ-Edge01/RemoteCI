@@ -46,4 +46,64 @@ class UpdateManagerTest {
 
         assertNull(UpdateManager.findApkAsset(release))
     }
+
+    @Test
+    fun `selectCompatibleUpdate never exceeds connected server version`() {
+        val releases = listOf(
+            release("v0.3.2"),
+            release("v0.3.1"),
+            release("v0.3.0"),
+        )
+
+        val selected = UpdateManager.selectCompatibleUpdate(
+            releases = releases,
+            currentVersion = "0.2.0",
+            serverVersion = "0.3.1",
+        )
+
+        assertEquals("v0.3.1", selected?.release?.tagName)
+        assertEquals("RemoteCI.Watch-0.3.1.apk", selected?.asset?.name)
+    }
+
+    @Test
+    fun `selectCompatibleUpdate returns null when server has no newer compatible watch`() {
+        val selected = UpdateManager.selectCompatibleUpdate(
+            releases = listOf(release("v0.3.2"), release("v0.3.1")),
+            currentVersion = "0.3.1",
+            serverVersion = "0.3.1",
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
+    fun `selectCompatibleUpdate ignores beta and draft releases`() {
+        val selected = UpdateManager.selectCompatibleUpdate(
+            releases = listOf(
+                release("v0.3.2-beta.1", prerelease = true),
+                release("v0.3.2", draft = true),
+                release("v0.3.1"),
+            ),
+            currentVersion = "0.3.0",
+            serverVersion = "0.3.2",
+        )
+
+        assertEquals("v0.3.1", selected?.release?.tagName)
+    }
+
+    private fun release(
+        version: String,
+        prerelease: Boolean = false,
+        draft: Boolean = false,
+    ) = GitHubRelease(
+        tagName = version,
+        prerelease = prerelease,
+        draft = draft,
+        assets = listOf(
+            GitHubAsset(
+                name = "RemoteCI.Watch-${version.removePrefix("v")}.apk",
+                browserDownloadUrl = "https://example/${version.removePrefix("v")}.apk",
+            ),
+        ),
+    )
 }

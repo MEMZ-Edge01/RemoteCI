@@ -25,6 +25,7 @@ public sealed class AccountMirror
     }
 
     public long Version { get { lock (_gate) return _sync.Version; } }
+    public string ServerVersion { get { lock (_gate) return _sync.ServerVersion; } }
     public DateTimeOffset GeneratedAt { get { lock (_gate) return _sync.GeneratedAt; } }
     public bool AllowsPrivilegedOperations
     {

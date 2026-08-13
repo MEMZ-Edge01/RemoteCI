@@ -14,7 +14,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://0.0.0.0:8080
-      # 标记 fnOS 运行环境，WebUI 系统更新面板会切换到 fpk 下载模式。
+      # 标记 fnOS 运行环境，WebUI 系统更新面板只显示由应用商店管理。
       REMOTECI_RUNTIME: fnos
       REMOTECI_ADMIN_PASSWORD: "${remoteci_admin_password:-}"
       REMOTECI_PLUGIN_PAIR_CODE: "${remoteci_plugin_pair_code:-}"

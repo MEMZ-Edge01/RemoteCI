@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
+using RemoteCI.Server.Services;
 using Xunit;
 
 namespace RemoteCI.Server.Tests;
@@ -13,6 +14,17 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
     private readonly TestWebApplicationFactory _factory;
 
     public WebSocketRelayTests(TestWebApplicationFactory factory) => _factory = factory;
+
+    [Fact]
+    public async Task WatchAuthentication_ReportsConnectedServerVersion()
+    {
+        using var watch = await ConnectWatchAsync();
+
+        var auth = await ReceivePayloadAsync<AuthState>(watch, Protocol.MessageTypeAuthState);
+
+        Assert.True(auth.Authenticated);
+        Assert.Equal(AppVersion.Version, auth.ServerVersion);
+    }
 
     [Fact]
     public async Task PluginPushesCurrentStateAndSevenDaySchedule_AllWatchesReceiveBoth()
@@ -115,6 +127,7 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
     {
         using var plugin = await ConnectPluginAsync();
         var initialSync = await ReceivePayloadAsync<AccountSync>(plugin, Protocol.MessageTypeAccountSync);
+        Assert.Equal(AppVersion.Version, initialSync.ServerVersion);
         var admin = await _factory.LoginAsync();
         var create = await _factory.CreateClient().SendAsync(TestWebApplicationFactory.Bearer(
             HttpMethod.Post,

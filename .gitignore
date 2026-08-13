@@ -7,6 +7,7 @@ obj/
 *.sln.docstates
 packages/
 artifacts/
+.tools/
 .vs/
 # ClassIsland 插件打包产物（可重新生成）
 *.cipx
@@ -43,6 +44,17 @@ Thumbs.db
 *.pid
 *.seed
 server/RemoteCI.Server/Data/*.db*
+server/RemoteCI.Server/Data/updates/
+# 防止把直接 publish 到项目目录产生的运行文件误提交。
+server/RemoteCI.Server/*.dll
+server/RemoteCI.Server/*.exe
+server/RemoteCI.Server/*.pdb
+server/RemoteCI.Server/*.deps.json
+server/RemoteCI.Server/*.runtimeconfig.json
+server/RemoteCI.Server/*.staticwebassets.endpoints.json
+server/RemoteCI.Server/web.config
+server/RemoteCI.Server/wwwroot/**/*.br
+server/RemoteCI.Server/wwwroot/**/*.gz
 # 直接以 dotnet 从仓库根目录运行服务端时产生的本地 SQLite 数据
 /data/
 *.pid.lock

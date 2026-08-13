@@ -7,11 +7,20 @@
     <RootNamespace>RemoteCI.Server</RootNamespace>
     <LangVersion>latest</LangVersion>
     <!-- 与仓库 release 对齐的应用版本，WebUI 更新功能据此比较。 -->
-    <Version>0.2.0</Version>
+    <Version>0.3.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="../../shared/RemoteCI.Shared/RemoteCI.Shared.csproj" />
+  </ItemGroup>
+
+  <!-- 旧版就地更新可能把 publish 产物留在项目根目录；这些文件即使被 Git 忽略，
+       Web SDK 仍会当作内容再次打包，因此在项目层显式排除。 -->
+  <ItemGroup>
+    <Content Remove="RemoteCI.Server.deps.json;RemoteCI.Server.runtimeconfig.json;RemoteCI.Server.staticwebassets.endpoints.json;web.config" />
+    <Content Remove="wwwroot/**/*.br;wwwroot/**/*.gz" />
+    <None Remove="RemoteCI.Server.deps.json;RemoteCI.Server.runtimeconfig.json;RemoteCI.Server.staticwebassets.endpoints.json;web.config" />
+    <None Remove="wwwroot/**/*.br;wwwroot/**/*.gz" />
   </ItemGroup>
 
   <ItemGroup>

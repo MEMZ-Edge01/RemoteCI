@@ -7,6 +7,8 @@ using RemoteCI.Server.Services;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 
+if (await UpdateInstaller.TryRunAsync(args)) return;
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<ServerOptions>(builder.Configuration.GetSection(ServerOptions.SectionName));
 
@@ -47,7 +49,7 @@ builder.Services.AddRazorPages(options => options.Conventions.AllowAnonymousToPa
 builder.Services.AddScoped<IdentityCoordinator>();
 builder.Services.AddSingleton<IStateStore, StateStore>();
 builder.Services.AddSingleton<PeerRegistry>();
-builder.Services.AddSingleton<UpdateService>();
+builder.Services.AddSingleton(new UpdateService(args));
 
 var app = builder.Build();
 app.UseForwardedHeaders(new ForwardedHeadersOptions

@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Text.Json;
@@ -14,28 +15,59 @@ public sealed record ReleaseInfo(
 
 public sealed record ReleaseAsset(string Name, string DownloadUrl, long Size);
 
+public enum UpdateApplyMode
+{
+    ManagedByPlatform,
+    InProcessContainer,
+    ExternalInstaller,
+}
+
+public sealed record PreparedUpdate(
+    string StagingDirectory,
+    string ExtractedDirectory);
+
 /// <summary>
 /// 服务端更新：从 GitHub 仓库最新 release 拉取当前平台的服务端包，
-/// 解压后就地覆盖运行目录，再触发进程退出由宿主（Docker restart 策略）重启。
+/// Docker 内可就地覆盖后由重启策略拉起；Windows 和裸机 Linux 由独立更新进程在
+/// 当前进程退出后替换文件并重新启动，避免 Windows 原生 DLL 文件锁。
 /// </summary>
 public sealed class UpdateService
 {
+    public const string FnosManagedMessage = "由fnOS应用商店管理";
     private const string Repo = "MEMZ-Edge01/RemoteCI";
     private const string LatestApiUrl = $"https://api.github.com/repos/{Repo}/releases/latest";
     private static readonly string UserAgent = $"RemoteCI-Server/{AppVersion.Version}";
 
     private static readonly HttpClient Http = CreateHttpClient();
+    private readonly string[] _serverArguments;
+
+    public UpdateService(string[]? serverArguments = null) => _serverArguments = serverArguments ?? [];
 
     /// <summary>
     /// 是否运行在飞牛 fnOS 应用环境。fpk 的 docker-compose 会注入
-    /// <c>REMOTECI_RUNTIME=fnos</c>；该模式下更新流程改为下载 fpk 安装包，
-    /// 由用户在飞牛应用中心完成安装升级。
+    /// <c>REMOTECI_RUNTIME=fnos</c>；该平台完全由 fnOS 应用商店管理更新。
     /// </summary>
     public static bool IsFnosRuntime =>
         string.Equals(
             Environment.GetEnvironmentVariable("REMOTECI_RUNTIME"),
             "fnos",
             StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsContainerRuntime =>
+        string.Equals(
+            Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+    public static UpdateApplyMode DetermineApplyMode(bool isFnos, bool isContainer) =>
+        isFnos
+            ? UpdateApplyMode.ManagedByPlatform
+            : isContainer
+                ? UpdateApplyMode.InProcessContainer
+                : UpdateApplyMode.ExternalInstaller;
+
+    public static UpdateApplyMode CurrentApplyMode =>
+        DetermineApplyMode(IsFnosRuntime, IsContainerRuntime);
 
     public string CurrentVersion => AppVersion.Version;
 
@@ -82,14 +114,6 @@ public sealed class UpdateService
             asset.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
     }
 
-    /// <summary>挑选 fnOS 平台对应的 fpk 安装包（RemoteCI-&lt;版本&gt;.fpk）。</summary>
-    public ReleaseAsset? SelectFnosAsset(ReleaseInfo release)
-    {
-        var version = NormalizeVersion(release.Tag);
-        return release.Assets.FirstOrDefault(asset =>
-            asset.Name.Equals($"RemoteCI-{version}.fpk", StringComparison.OrdinalIgnoreCase));
-    }
-
     public static string NormalizeVersion(string tag) => tag.TrimStart('v', 'V');
 
     /// <summary>比较语义版本：latest 更新时返回 true。</summary>
@@ -106,10 +130,9 @@ public sealed class UpdateService
     }
 
     /// <summary>
-    /// 下载并应用更新。返回后由调用方在响应送达后触发进程退出。
-    /// 运行目录不可写（例如 Windows 直接运行）时抛出带说明的异常。
+    /// 下载并解压更新到数据库旁的暂存目录；此阶段不触碰运行文件。
     /// </summary>
-    public async Task ApplyUpdateAsync(
+    public async Task<PreparedUpdate> PrepareUpdateAsync(
         ReleaseInfo release,
         ReleaseAsset asset,
         string databasePath,
@@ -128,37 +151,29 @@ public sealed class UpdateService
         Directory.CreateDirectory(extracted);
         ZipFile.ExtractToDirectory(archive, extracted, overwriteFiles: true);
 
-        // 就地覆盖运行目录；Linux 容器内允许替换已加载的程序集，
-        // 进程退出后由 Docker restart 策略以新文件重新启动。
-        CopyDirectory(extracted, contentRoot);
+        var version = NormalizeVersion(release.Tag);
+        ValidatePackageVersion(extracted, version);
+        return new PreparedUpdate(staging, extracted);
     }
 
-    /// <summary>
-    /// 下载 fnOS 安装包（.fpk）到数据卷的 updates 目录，供管理员从
-    /// 飞牛应用中心手动安装。fnOS 当前没有允许容器内应用自我安装的开放接口，
-    /// 因此安装确认这一步需要在应用中心完成。
-    /// </summary>
-    public async Task<string> DownloadFnosFpkAsync(
-        ReleaseInfo release,
-        ReleaseAsset asset,
-        string databasePath,
+    /// <summary>启动对应平台的安全应用流程；成功返回后调用方应平滑退出当前服务端。</summary>
+    public async Task<UpdateApplyMode> BeginApplyAsync(
+        PreparedUpdate update,
         string contentRoot,
         CancellationToken ct)
     {
-        var updatesRoot = GetUpdatesRoot(databasePath, contentRoot);
-        Directory.CreateDirectory(updatesRoot);
-        // 防止 release 附件名携带路径片段；只保留文件名。
-        var safeName = Path.GetFileName(asset.Name);
-        var target = Path.Combine(updatesRoot, safeName);
-        if (File.Exists(target))
+        var mode = CurrentApplyMode;
+        if (mode == UpdateApplyMode.ManagedByPlatform)
+            throw new InvalidOperationException(FnosManagedMessage);
+
+        if (mode == UpdateApplyMode.InProcessContainer)
         {
-            return target;
+            await UpdateInstaller.ApplyFilesAsync(update.ExtractedDirectory, contentRoot, ct);
+            return mode;
         }
 
-        var partial = target + ".part";
-        await DownloadAsync(asset.DownloadUrl, partial, ct);
-        File.Move(partial, target, overwrite: true);
-        return target;
+        StartExternalInstaller(update, contentRoot);
+        return mode;
     }
 
     /// <summary>更新包统一存放在数据库同级目录的 updates 子目录。</summary>
@@ -170,37 +185,82 @@ public sealed class UpdateService
 
     private async Task DownloadAsync(string url, string target, CancellationToken ct)
     {
+        var partial = target + ".part";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.UserAgent.ParseAdd(UserAgent);
         using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
         await using var input = await response.Content.ReadAsStreamAsync(ct);
-        await using var output = File.Create(target);
-        await input.CopyToAsync(output, ct);
+        await using (var output = File.Create(partial))
+        {
+            await input.CopyToAsync(output, ct);
+        }
+        File.Move(partial, target, overwrite: true);
     }
 
-    private static void CopyDirectory(string source, string destination)
+    private void StartExternalInstaller(PreparedUpdate update, string contentRoot)
     {
-        Directory.CreateDirectory(destination);
-        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        var runnerAssembly = Path.Combine(update.ExtractedDirectory, "RemoteCI.Server.dll");
+        if (!File.Exists(runnerAssembly))
+            throw new InvalidDataException("更新包缺少 RemoteCI.Server.dll，无法启动外部安装器。");
+
+        var planPath = Path.Combine(update.StagingDirectory, "install-plan.json");
+        var plan = new UpdateInstallPlan
         {
-            var relative = Path.GetRelativePath(source, file);
-            var target = Path.Combine(destination, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            // 运行中文件被占用时最多重试 10 次；Windows 下仍失败则向上抛出。
-            for (var attempt = 0; ; attempt++)
-            {
-                try
-                {
-                    File.Copy(file, target, overwrite: true);
-                    break;
-                }
-                catch (IOException) when (attempt < 10)
-                {
-                    Thread.Sleep(200);
-                }
-            }
+            SourceDirectory = update.ExtractedDirectory,
+            DestinationDirectory = Path.GetFullPath(contentRoot),
+            DotnetHostPath = ResolveDotnetHost(),
+            ServerAssemblyPath = Path.Combine(Path.GetFullPath(contentRoot), "RemoteCI.Server.dll"),
+            ServerArguments = _serverArguments,
+            ServerProcessId = Environment.ProcessId,
+            LogPath = Path.Combine(update.StagingDirectory, "update.log"),
+        };
+        File.WriteAllText(planPath, JsonSerializer.Serialize(plan));
+
+        var startInfo = new ProcessStartInfo(plan.DotnetHostPath)
+        {
+            WorkingDirectory = update.ExtractedDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add(runnerAssembly);
+        startInfo.ArgumentList.Add(UpdateInstaller.Command);
+        startInfo.ArgumentList.Add(planPath);
+        _ = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("无法启动外部更新器，运行文件未被修改。");
+    }
+
+    private static void ValidatePackageVersion(string extractedDirectory, string expectedVersion)
+    {
+        var assembly = Path.Combine(extractedDirectory, "RemoteCI.Server.dll");
+        if (!File.Exists(assembly)) throw new InvalidDataException("更新包缺少 RemoteCI.Server.dll。");
+        var actual = FileVersionInfo.GetVersionInfo(assembly).ProductVersion?.Split('+', 2)[0];
+        if (!string.Equals(actual, expectedVersion, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException(
+                $"更新包版本不匹配：Release 为 v{expectedVersion}，包内服务端为 v{actual ?? "未知"}。");
+    }
+
+    private static string ResolveDotnetHost()
+    {
+        var current = Environment.ProcessPath;
+        if (current is not null && string.Equals(
+                Path.GetFileNameWithoutExtension(current), "dotnet", StringComparison.OrdinalIgnoreCase))
+            return current;
+
+        var root = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+        if (!string.IsNullOrWhiteSpace(root))
+        {
+            var candidate = Path.Combine(root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+            if (File.Exists(candidate)) return candidate;
         }
+
+        if (OperatingSystem.IsWindows())
+        {
+            var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+            var candidate = Path.Combine(programFiles, "dotnet", "dotnet.exe");
+            if (File.Exists(candidate)) return candidate;
+        }
+        return "dotnet";
     }
 
     private static HttpClient CreateHttpClient()

@@ -76,23 +76,19 @@ docker compose start remoteci
 管理员登录后在“个人账号 → 系统更新”中点击“检查更新”，页面会从 GitHub 仓库
 `MEMZ-Edge01/RemoteCI` 的最新 release 读取版本和更新说明。发现新版本后点击
 “下载并更新”，服务端会下载当前平台（linux-x64 / win-x64）的更新包并就地覆盖，
-然后自动退出进程；Docker 的 `restart: unless-stopped` 策略会以新文件重新启动容器。
+然后自动退出进程。Docker 的 `restart: unless-stopped` 策略会以新文件重新启动容器；
+Windows 与裸机 Linux 会先启动独立更新器，等待旧进程退出和文件锁释放后再替换文件，
+随后自动重新启动服务端。
 普通用户看不到该面板，且该操作仅对管理员开放。
 
-注意：直接以 `dotnet` 在 Windows 上运行服务端时，运行中的程序集会被锁定，
-热更新可能失败，建议使用 Docker 部署。
+下载完成后会核对压缩包内服务端版本是否与 release 标签一致，避免误装名称正确但
+内容仍是旧版本的发布包。
 
 #### 7.1.1 飞牛 fnOS 环境
 
 飞牛 fnOS 安装包（`RemoteCI-<版本>.fpk`）部署时，容器通过环境变量
-`REMOTECI_RUNTIME=fnos` 识别运行环境，“系统更新”面板切换为 fpk 下载模式：
-
-1. 检查更新逻辑不变，从 GitHub 最新 release 读取版本与更新说明。
-2. 点击更新后，服务端自动下载新版本 `RemoteCI-<版本>.fpk` 到数据卷
-   （`/var/apps/remoteci/var/data/updates`），并提供“保存到本机”下载链接。
-3. 在飞牛应用中心选择该 fpk 手动安装，应用中心会自动拉取新版本镜像并重建容器。
-
-fnOS 目前没有开放容器内应用自我安装的接口，因此最后一步需要用户在应用中心确认。
+`REMOTECI_RUNTIME=fnos` 识别运行环境。“系统更新”面板只显示“由fnOS应用商店管理”，
+不再从容器内检查、下载或安装 fpk；版本检查与升级均在 fnOS 应用商店完成。
 fpk 工程的构建与发布流程见 [fnos/README.md](../fnos/README.md)。
 
 ### 7.2 插件更新
@@ -106,3 +102,5 @@ release 都会附带 `RemoteCI.Plugin-<版本>.cipx` 和对应的 `checksums.md`
 手表端在“设置 → 更新”中检查 GitHub 最新 release，发现新版本后下载
 `RemoteCI.Watch-<版本>.apk` 并通过系统安装器覆盖安装。更新要求发布包与当前
 安装包签名一致：首次安装正式签名版后，后续更新才能在同一签名下自动覆盖。
+手表必须先连接 WebUI，且只能选择不高于所连接 WebUI 版本的 APK；下载前会再次
+检查该上限，避免连接状态变化后发生版本倒挂。

@@ -105,6 +105,11 @@ public sealed class AuthState
     [JsonPropertyName("authenticated")]
     public bool Authenticated { get; set; }
 
+    /// <summary>当前认证连接所属的 WebUI/服务端版本，用于限制手表更新上限。</summary>
+    [JsonPropertyName("serverVersion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ServerVersion { get; set; }
+
     [JsonPropertyName("user")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public UserProfile? User { get; set; }
@@ -123,6 +128,10 @@ public sealed class AccountSync
 {
     [JsonPropertyName("version")]
     public long Version { get; set; }
+
+    /// <summary>生成授权镜像的 WebUI/服务端版本，供局域网连接转发给手表。</summary>
+    [JsonPropertyName("serverVersion")]
+    public string ServerVersion { get; set; } = string.Empty;
 
     [JsonPropertyName("generatedAt")]
     public DateTimeOffset GeneratedAt { get; set; }

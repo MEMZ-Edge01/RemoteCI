@@ -45,11 +45,10 @@ public static class WebSocketHub
         {
             try
             {
-                await registry.SendToWatchAsync(connectionId, Envelope.AuthState(new AuthState
-                {
-                    Authenticated = true,
-                    User = principal.User,
-                }), context.RequestAborted);
+                await registry.SendToWatchAsync(
+                    connectionId,
+                    Envelope.AuthState(ServerAuthStateFactory.CreateAuthenticated(principal.User)),
+                    context.RequestAborted);
                 if (store.GetLatestSnapshot() is { } snapshot)
                     await registry.SendToWatchAsync(connectionId, Envelope.StatePush(snapshot), context.RequestAborted);
                 if (store.GetLatestSchedule() is { } schedule)

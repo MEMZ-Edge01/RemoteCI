@@ -14,6 +14,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import com.remoteci.watch.BuildConfig
+import com.remoteci.watch.notif.UpdateReceiver
 
 /** GitHub release 响应中与本应用相关的字段。 */
 @Serializable
@@ -21,6 +23,8 @@ data class GitHubRelease(
     @SerialName("tag_name") val tagName: String = "",
     @SerialName("name") val name: String? = null,
     @SerialName("body") val body: String? = null,
+    @SerialName("prerelease") val prerelease: Boolean = false,
+    @SerialName("draft") val draft: Boolean = false,
     @SerialName("assets") val assets: List<GitHubAsset> = emptyList(),
 )
 
@@ -31,6 +35,11 @@ data class GitHubAsset(
     @SerialName("size") val size: Long = 0,
 )
 
+data class CompatibleUpdate(
+    val release: GitHubRelease,
+    val asset: GitHubAsset,
+)
+
 /**
  * 手表端更新入口：从 GitHub 仓库最新 release 拉取 APK 并安装。
  *
@@ -39,8 +48,8 @@ data class GitHubAsset(
  */
 object UpdateManager {
     private const val REPO = "MEMZ-Edge01/RemoteCI"
-    private const val API_LATEST_RELEASE = "https://api.github.com/repos/$REPO/releases/latest"
-    private const val USER_AGENT = "RemoteCI-Watch/0.2"
+    private const val API_RELEASES = "https://api.github.com/repos/$REPO/releases?per_page=20"
+    private val USER_AGENT = "RemoteCI-Watch/${BuildConfig.VERSION_NAME}"
     private const val APK_PREFIX = "RemoteCI.Watch-"
     const val INSTALL_RESULT_ACTION = "com.remoteci.watch.UPDATE_INSTALL_RESULT"
 
@@ -50,22 +59,37 @@ object UpdateManager {
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
-    /** 拉取最新 release 元数据。 */
-    suspend fun fetchLatestRelease(): GitHubRelease = withContext(Dispatchers.IO) {
+    /** 拉取最近发布列表，以便在 WebUI 版本上限内选择最高兼容手表版本。 */
+    suspend fun fetchReleases(): List<GitHubRelease> = withContext(Dispatchers.IO) {
         val request = Request.Builder()
-            .url(API_LATEST_RELEASE)
+            .url(API_RELEASES)
             .header("User-Agent", USER_AGENT)
             .build()
         okHttp.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("检查更新失败（HTTP ${response.code}）")
-            val text = response.body?.string() ?: throw IOException("检查更新失败（响应为空）")
-            json.decodeFromString<GitHubRelease>(text)
+            json.decodeFromString<List<GitHubRelease>>(response.body.string())
         }
     }
 
     /** 在 release 附件中寻找手表 APK。 */
     fun findApkAsset(release: GitHubRelease): GitHubAsset? =
         release.assets.firstOrNull { it.name.startsWith(APK_PREFIX) && it.name.endsWith(".apk") }
+
+    /** 选择高于手表且不高于已连接服务端的最高版本，避免三端版本倒挂。 */
+    fun selectCompatibleUpdate(
+        releases: List<GitHubRelease>,
+        currentVersion: String,
+        serverVersion: String,
+    ): CompatibleUpdate? = releases
+        .filterNot { it.prerelease || it.draft }
+        .mapNotNull { release -> findApkAsset(release)?.let { CompatibleUpdate(release, it) } }
+        .filter { candidate ->
+            val version = versionFromTag(candidate.release.tagName)
+            isNewer(version, currentVersion) && compareVersions(version, serverVersion) <= 0
+        }
+        .maxWithOrNull { left, right ->
+            compareVersions(left.release.tagName, right.release.tagName)
+        }
 
     /** 去掉 tag 前缀 v，得到可比较的版本号。 */
     fun versionFromTag(tag: String): String = tag.removePrefix("v").trim()
@@ -95,7 +119,7 @@ object UpdateManager {
             .build()
         okHttp.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("下载失败（HTTP ${response.code}）")
-            val body = response.body ?: throw IOException("下载失败（响应为空）")
+            val body = response.body
             body.byteStream().use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
             }
@@ -115,16 +139,22 @@ object UpdateManager {
                 apk.inputStream().use { input -> input.copyTo(output) }
                 session.fsync(output)
             }
-            val intent = Intent(INSTALL_RESULT_ACTION).setPackage(context.packageName)
-            val pending = PendingIntent.getBroadcast(
-                context,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
+            val pending = createInstallResultPendingIntent(context, sessionId)
             session.commit(pending.intentSender)
         } finally {
             session.close()
         }
     }
+
+    /** PackageInstaller 会补充状态字段，因此回调必须可变；显式组件避免可变隐式 Intent 风险。 */
+    fun createInstallResultIntent(context: Context): Intent =
+        Intent(context, UpdateReceiver::class.java).setAction(INSTALL_RESULT_ACTION)
+
+    fun createInstallResultPendingIntent(context: Context, sessionId: Int): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            sessionId,
+            createInstallResultIntent(context),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+        )
 }

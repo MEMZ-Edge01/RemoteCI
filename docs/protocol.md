@@ -43,8 +43,8 @@
 | --- | --- | --- |
 | `auth_challenge` | 插件 → 手表 | `AuthChallenge` |
 | `auth_proof` | 手表 → 插件 | `AuthProof` |
-| `auth_state` | 接入端 → 手表 | 当前用户与有效权限，或错误码 |
-| `account_sync` | 服务端 → 插件 | 账号元数据、有效权限、设备验证器、版本和生成时间 |
+| `auth_state` | 接入端 → 手表 | 当前用户、有效权限、所连接服务端的 `serverVersion`，或错误码 |
+| `account_sync` | 服务端 → 插件 | 账号元数据、有效权限、设备验证器、`serverVersion`、镜像版本和生成时间 |
 | `state_push` | 插件 → 服务端/手表 | 高频当前课程、提醒播放、主界面显隐与可用电源状态，不含完整课表 |
 | `schedule_sync` | 插件 → 服务端/手表 | 今天起七天的日期、课程、科目清单和每日修订号 |
 | `extensions_sync` | 插件 → 服务端/手表 | 扩展功能清单（id、displayName、icon、requiredPermission、parameters） |
@@ -54,6 +54,8 @@
 | `settings_sync` | 服务端 → 手表 | 全局通知设置快照（目前含 `forceSenderInTitle`） |
 
 `command_result.replyToMessageId` 必须等于请求的 `messageId`。服务端只把结果交给对应的 WebSocket 或等待中的 WebUI 请求，等待上限 15 秒。
+
+云端服务端直接在认证成功的 `auth_state.serverVersion` 中下发自身版本；插件通过 `account_sync.serverVersion` 保存同一版本，并在局域网认证成功时转发给手表。手表只允许安装版本号不高于当前连接 WebUI 的 APK。
 
 `event_notify.payload.event` 的值 6 表示 ClassIsland 自动化“显示提醒”行动产生的通知，值 7 表示第三方 ClassIsland 插件产生的通知。手表分别持久化开关；内置课程、天气等通知不会被值 7 重复转发。
 

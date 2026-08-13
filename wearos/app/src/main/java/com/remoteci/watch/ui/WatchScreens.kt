@@ -720,7 +720,7 @@ private fun ThemeOptionButton(
 private sealed interface UpdateUiState {
     data object Idle : UpdateUiState
     data object Checking : UpdateUiState
-    data object UpToDate : UpdateUiState
+    data class UpToDate(val message: String) : UpdateUiState
     data object Downloading : UpdateUiState
     data object Installing : UpdateUiState
     data class Available(
@@ -736,22 +736,34 @@ private sealed interface UpdateUiState {
 internal fun UpdateScreen(
     context: Context,
     currentVersion: String,
+    serverVersion: String?,
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<UpdateUiState>(UpdateUiState.Idle) }
 
     fun checkUpdate(): Unit {
+        val allowedVersion = serverVersion
+        if (allowedVersion.isNullOrBlank()) {
+            state = UpdateUiState.Error("请先连接 WebUI，再检查手表更新")
+            return
+        }
         state = UpdateUiState.Checking
         scope.launch {
             state = try {
-                val release = UpdateManager.fetchLatestRelease()
-                val latest = UpdateManager.versionFromTag(release.tagName)
-                val asset = UpdateManager.findApkAsset(release)
-                if (UpdateManager.isNewer(latest, currentVersion) && asset != null) {
-                    UpdateUiState.Available(latest, release, asset)
+                val selected = UpdateManager.selectCompatibleUpdate(
+                    releases = UpdateManager.fetchReleases(),
+                    currentVersion = currentVersion,
+                    serverVersion = allowedVersion,
+                )
+                if (selected != null) {
+                    UpdateUiState.Available(
+                        UpdateManager.versionFromTag(selected.release.tagName),
+                        selected.release,
+                        selected.asset,
+                    )
                 } else {
-                    UpdateUiState.UpToDate
+                    UpdateUiState.UpToDate("已是 WebUI v$allowedVersion 允许的最新版本")
                 }
             } catch (error: Exception) {
                 UpdateUiState.Error(error.message ?: "检查更新失败")
@@ -761,6 +773,7 @@ internal fun UpdateScreen(
 
     WatchList(title = "更新") {
         item { Hint("当前版本 v$currentVersion") }
+        item { Hint("已连接 WebUI v${serverVersion ?: "未知"}") }
         when (val current = state) {
             UpdateUiState.Idle, UpdateUiState.Checking -> {
                 if (current == UpdateUiState.Checking) {
@@ -776,8 +789,8 @@ internal fun UpdateScreen(
                 }
             }
 
-            UpdateUiState.UpToDate -> {
-                item { Hint("已是最新版本") }
+            is UpdateUiState.UpToDate -> {
+                item { Hint(current.message) }
                 item {
                     ActionButton("重新检查", Icons.Rounded.SystemUpdate, true, onClick = ::checkUpdate)
                 }
@@ -791,14 +804,24 @@ internal fun UpdateScreen(
                         state = UpdateUiState.Downloading
                         scope.launch {
                             state = try {
+                                val allowedVersion = serverVersion
+                                    ?: throw IllegalStateException("WebUI 连接已断开，请重新检查更新")
+                                if (UpdateManager.compareVersions(current.latestVersion, allowedVersion) > 0) {
+                                    throw IllegalStateException("手表版本不得超过已连接 WebUI v$allowedVersion")
+                                }
                                 val apk = UpdateManager.downloadApk(context, current.asset)
+                                // 下载期间连接可能断开或切换到更低版本的 WebUI，安装前必须读取实时上限。
+                                val latestAllowedVersion = ConnectionManager.serverVersion.value
+                                    ?: throw IllegalStateException("WebUI 连接已断开，请重新检查更新")
+                                if (UpdateManager.compareVersions(current.latestVersion, latestAllowedVersion) > 0) {
+                                    throw IllegalStateException("手表版本不得超过已连接 WebUI v$latestAllowedVersion")
+                                }
                                 UpdateManager.installApk(context, apk)
                                 UpdateUiState.Installing
                             } catch (error: Exception) {
                                 UpdateUiState.Error(error.message ?: "更新失败")
                             }
                         }
-                        Unit
                     })
                 }
             }
