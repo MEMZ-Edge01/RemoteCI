@@ -127,6 +127,10 @@ jobs:
           file: server/RemoteCI.Server/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # 用 GitHub Actions 缓存，避免 buildx 默认把缓存作为 artifact 上传，
+          # 否则 release 作业下载全部 artifact 时会连带下载 *.dockerbuild 缓存。
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           tags: |
             ghcr.io/memz-edge01/remoteci:${{ steps.meta.outputs.version }}
             ghcr.io/memz-edge01/remoteci:latest
@@ -155,9 +159,31 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: server-linux-x64
+          path: artifacts/server-linux-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: server-win-x64
+          path: artifacts/server-win-x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: plugin-cipx
+          path: artifacts/plugin-cipx
+      - uses: actions/download-artifact@v4
+        with:
+          name: watch-apk
+          path: artifacts/watch-apk
+      - uses: actions/download-artifact@v4
+        with:
+          name: fnos-fpk
+          path: artifacts/fnos-fpk
       - name: 发布
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/server-linux-x64/**
+            artifacts/server-win-x64/**
+            artifacts/plugin-cipx/**
+            artifacts/watch-apk/**
+            artifacts/fnos-fpk/**
           generate_release_notes: true
