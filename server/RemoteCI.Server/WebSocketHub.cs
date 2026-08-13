@@ -43,21 +43,31 @@ public static class WebSocketHub
         }
         else
         {
-            await registry.SendToWatchAsync(connectionId, Envelope.AuthState(new AuthState
+            try
             {
-                Authenticated = true,
-                User = principal.User,
-            }), context.RequestAborted);
-            if (store.GetLatestSnapshot() is { } snapshot)
-                await registry.SendToWatchAsync(connectionId, Envelope.StatePush(snapshot), context.RequestAborted);
-            if (store.GetLatestSchedule() is { } schedule)
-                await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSync(schedule), context.RequestAborted);
-            if (store.GetLatestExtensions() is { } extensions)
-                await registry.SendToWatchAsync(connectionId, Envelope.ExtensionsSync(extensions), context.RequestAborted);
-            await registry.SendToWatchAsync(connectionId, Envelope.SettingsSync(new SettingsSync
+                await registry.SendToWatchAsync(connectionId, Envelope.AuthState(new AuthState
+                {
+                    Authenticated = true,
+                    User = principal.User,
+                }), context.RequestAborted);
+                if (store.GetLatestSnapshot() is { } snapshot)
+                    await registry.SendToWatchAsync(connectionId, Envelope.StatePush(snapshot), context.RequestAborted);
+                if (store.GetLatestSchedule() is { } schedule)
+                    await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSync(schedule), context.RequestAborted);
+                if (store.GetLatestExtensions() is { } extensions)
+                    await registry.SendToWatchAsync(connectionId, Envelope.ExtensionsSync(extensions), context.RequestAborted);
+                await registry.SendToWatchAsync(connectionId, Envelope.SettingsSync(new SettingsSync
+                {
+                    ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(context.RequestAborted),
+                }), context.RequestAborted);
+            }
+            catch (Exception ex)
             {
-                ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(context.RequestAborted),
-            }), context.RequestAborted);
+                // 初始化推送失败时记录原因并关闭连接，避免半初始化状态悬挂。
+                logger.LogError(ex, "WebSocket 初始化推送失败 ({Id})", connectionId);
+                await registry.UnregisterAsync(connectionId, WebSocketCloseStatus.InternalServerError);
+                return;
+            }
         }
 
         try
@@ -88,7 +98,7 @@ public static class WebSocketHub
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
-            // HTTP 请求结束。
+            logger.LogWarning("WebSocket 请求被取消: {Id}", connectionId);
         }
         catch (WebSocketException ex)
         {

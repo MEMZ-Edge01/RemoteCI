@@ -46,6 +46,14 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         {
             // 对端已经断开，无需二次处理。
         }
+        catch (ObjectDisposedException)
+        {
+            // 对端 socket 已释放（测试宿主或连接中断场景），同样无需二次处理。
+        }
+        catch (IOException)
+        {
+            // 连接中断（含测试宿主把已释放连接包装为 IO 异常的情况），由调用方继续清理。
+        }
         finally
         {
             peer.SendLock.Dispose();
