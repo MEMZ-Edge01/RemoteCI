@@ -98,8 +98,12 @@ public sealed class UpdateServiceTests
     [Fact]
     public void GetUpdatesRoot_LivesNextToDatabase()
     {
-        var root = UpdateService.GetUpdatesRoot("C:/data/remoteci.db", "C:/app");
+        // 使用临时目录构造数据库路径，避免 Windows/Linux 对 "C:" 前缀解析不一致。
+        var dataDir = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        var databasePath = Path.Combine(dataDir, "remoteci.db");
 
-        Assert.Equal(Path.Combine("C:", "data", "updates"), root);
+        var root = UpdateService.GetUpdatesRoot(databasePath, "/app");
+
+        Assert.Equal(Path.Combine(dataDir, "updates"), root);
     }
 }
