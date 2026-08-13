@@ -40,6 +40,8 @@ public static class WebSocketHub
         if (principal.IsPlugin)
         {
             await registry.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(context.RequestAborted), context.RequestAborted);
+            // 插件自身的启动推送可能早于云端连接完成；认证后主动拉取可消除这段竞态窗口。
+            await registry.RequestSchedulePullAsync(context.RequestAborted);
         }
         else
         {
@@ -161,6 +163,10 @@ public static class WebSocketHub
 
             case Protocol.MessageTypeCommand when principal.User is not null:
                 await ForwardUserCommandAsync(envelope, principal.User, connectionId, registry, identities, ct);
+                return;
+
+            case Protocol.MessageTypeSchedulePull when principal.User is not null:
+                await registry.RequestSchedulePullAsync(ct);
                 return;
 
             default:

@@ -14,6 +14,10 @@
     <ProjectReference Include="../../shared/RemoteCI.Shared/RemoteCI.Shared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="RemoteCI.Server.Tests" />
+  </ItemGroup>
+
   <!-- 旧版就地更新可能把 publish 产物留在项目根目录；这些文件即使被 Git 忽略，
        Web SDK 仍会当作内容再次打包，因此在项目层显式排除。 -->
   <ItemGroup>

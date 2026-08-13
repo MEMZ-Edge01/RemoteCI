@@ -24,6 +24,17 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
     public async Task<IActionResult> OnPostCreateAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        KeepModelStateEntries(nameof(Create));
+        if (!ModelState.IsValid)
+        {
+            var invalidFields = InvalidCreateFields();
+            var message = ModelState.Values.SelectMany(value => value.Errors)
+                .Select(error => error.ErrorMessage)
+                .FirstOrDefault(message => !string.IsNullOrWhiteSpace(message))
+                ?? "请检查新建账号表单。";
+            return await CreateFailureAsync(message, invalidFields, ct);
+        }
+
         try
         {
             await identities.CreateUserAsync(new CreateUserRequest
@@ -36,9 +47,16 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
             }, ct);
             await SyncAsync(ct);
             TempData["Message"] = "账号已创建。";
+            if (IsAjaxRequest()) return new JsonResult(new { redirectUrl = Url.Page("/Users") });
             return RedirectToPage();
         }
-        catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; return RedirectToPage(); }
+        catch (IdentityOperationException ex)
+        {
+            var invalidFields = ex.Code == "USERNAME_EXISTS"
+                ? new[] { $"{nameof(Create)}.{nameof(UserInput.Username)}" }
+                : Array.Empty<string>();
+            return await CreateFailureAsync(ex.Message, invalidFields, ct);
+        }
     }
 
     public async Task<IActionResult> OnPostUpdateAsync(CancellationToken ct)
@@ -99,12 +117,68 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         await peers.RefreshWatchAuthorizationsAsync(ct);
     }
 
+    private bool IsAjaxRequest() => string.Equals(
+        Request.Headers["X-Requested-With"],
+        "XMLHttpRequest",
+        StringComparison.OrdinalIgnoreCase);
+
+    private string[] InvalidCreateFields() => ModelState
+        .Where(entry =>
+            entry.Key.StartsWith(nameof(Create) + ".", StringComparison.OrdinalIgnoreCase) &&
+            entry.Value is { Errors.Count: > 0 })
+        .Select(entry => entry.Key)
+        .ToArray();
+
+    private async Task<IActionResult> CreateFailureAsync(
+        string message,
+        IReadOnlyCollection<string> invalidFields,
+        CancellationToken ct)
+    {
+        if (IsAjaxRequest())
+            return new JsonResult(new { error = message, invalidFields })
+            {
+                StatusCode = StatusCodes.Status422UnprocessableEntity,
+            };
+
+        // 无 JavaScript 回退会重绘页面；保留非敏感合法字段，但绝不把明文密码写回 HTML。
+        foreach (var field in invalidFields)
+        {
+            ModelState.Remove(field);
+            if (field.EndsWith("." + nameof(UserInput.Username), StringComparison.OrdinalIgnoreCase))
+                Create.Username = string.Empty;
+            else if (field.EndsWith("." + nameof(UserInput.DisplayName), StringComparison.OrdinalIgnoreCase))
+                Create.DisplayName = string.Empty;
+            else if (field.EndsWith("." + nameof(UserInput.Password), StringComparison.OrdinalIgnoreCase))
+                Create.Password = string.Empty;
+        }
+        ModelState.Remove($"{nameof(Create)}.{nameof(UserInput.Password)}");
+        Create.Password = string.Empty;
+        TempData["Error"] = message;
+        Accounts = await identities.ListUsersAsync(ct);
+        return Page();
+    }
+
+    private void KeepModelStateEntries(string prefix)
+    {
+        foreach (var key in ModelState.Keys.Where(key =>
+                     !key.Equals(prefix, StringComparison.OrdinalIgnoreCase) &&
+                     !key.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase)).ToArray())
+            ModelState.Remove(key);
+    }
+
     public sealed class UserInput
     {
         public Guid Id { get; set; }
-        [StringLength(32, MinimumLength = 3)] public string Username { get; set; } = string.Empty;
-        [StringLength(40, MinimumLength = 1)] public string DisplayName { get; set; } = string.Empty;
-        [StringLength(128, MinimumLength = 8)] public string Password { get; set; } = string.Empty;
+        [Required(ErrorMessage = "请输入 ID。")]
+        [RegularExpression("^[A-Za-z0-9._-]{3,32}$", ErrorMessage = "ID 需为 3-32 位字母、数字、点、下划线或短横线")]
+        public string Username { get; set; } = string.Empty;
+        [Required(ErrorMessage = "请输入用户名。")]
+        [StringLength(40, MinimumLength = 1, ErrorMessage = "用户名需为 1-40 个字符")]
+        public string DisplayName { get; set; } = string.Empty;
+        [Required(ErrorMessage = "请输入密码。")]
+        [StringLength(128, MinimumLength = 8, ErrorMessage = "密码需为 8-128 个字符")]
+        public string Password { get; set; } = string.Empty;
+        [EnumDataType(typeof(UserRole), ErrorMessage = "角色无效")]
         public UserRole Role { get; set; } = UserRole.User;
         public bool Enabled { get; set; }
         public bool AccessWebUi { get; set; }

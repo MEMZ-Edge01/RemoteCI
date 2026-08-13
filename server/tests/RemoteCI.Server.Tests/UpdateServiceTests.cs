@@ -5,6 +5,50 @@ namespace RemoteCI.Server.Tests;
 
 public sealed class UpdateServiceTests
 {
+    [Fact]
+    public void SelectReleaseForChannel_StableSkipsPrereleases()
+    {
+        var stable = new ReleaseInfo("v0.3.1", "stable", "", [], Prerelease: false);
+        var beta = new ReleaseInfo("v0.4.0-beta.1", "beta", "", [], Prerelease: true);
+
+        var selected = UpdateService.SelectReleaseForChannel([beta, stable], UpdateChannel.Stable);
+
+        Assert.Same(stable, selected);
+    }
+
+    [Fact]
+    public void SelectReleaseForChannel_BetaIncludesPrereleases()
+    {
+        var draft = new ReleaseInfo("v0.5.0-beta.1", "draft", "", [], Prerelease: true, Draft: true);
+        var beta = new ReleaseInfo("v0.4.0-beta.1", "beta", "", [], Prerelease: true);
+        var stable = new ReleaseInfo("v0.3.1", "stable", "", []);
+
+        var selected = UpdateService.SelectReleaseForChannel([draft, stable, beta], UpdateChannel.Beta);
+
+        Assert.Same(beta, selected);
+    }
+
+    [Fact]
+    public void CanInstall_NormalUpdateRejectsSameVersion()
+    {
+        Assert.False(UpdateService.CanInstall("0.3.1", "0.3.1", force: false));
+    }
+
+    [Fact]
+    public void CanInstall_ForceUpdateAllowsSameVersionButNotDowngrade()
+    {
+        Assert.True(UpdateService.CanInstall("0.3.1", "0.3.1", force: true));
+        Assert.False(UpdateService.CanInstall("0.3.0", "0.3.1", force: true));
+    }
+
+    [Theory]
+    [InlineData("0.4.0-beta.2", "0.4.0-beta.1")]
+    [InlineData("0.4.0", "0.4.0-beta.2")]
+    public void IsNewer_UsesSemanticPrereleasePrecedence(string latest, string current)
+    {
+        Assert.True(UpdateService.IsNewer(latest, current));
+    }
+
     [Theory]
     [InlineData(true, false, UpdateApplyMode.ManagedByPlatform)]
     [InlineData(false, true, UpdateApplyMode.InProcessContainer)]
@@ -14,6 +58,26 @@ public sealed class UpdateServiceTests
         bool isContainer,
         UpdateApplyMode expected) =>
         Assert.Equal(expected, UpdateService.DetermineApplyMode(isFnos, isContainer));
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    public void CanSelfUpdate_BlocksDevelopmentAndPlatformManagedRuntimes(
+        bool isDevelopment,
+        bool isFnos,
+        bool expected) =>
+        Assert.Equal(expected, UpdateService.CanSelfUpdate(isDevelopment, isFnos));
+
+    [Fact]
+    public void ResolveInstallDirectory_UsesApplicationDirectoryInsteadOfContentRoot()
+    {
+        var applicationDirectory = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", "bin", "Debug", "net10.0");
+
+        var resolved = UpdateService.ResolveInstallDirectory(applicationDirectory);
+
+        Assert.Equal(Path.GetFullPath(applicationDirectory), resolved);
+    }
 
     [Fact]
     public async Task ExternalInstaller_RetriesUntilLockedDestinationCanBeReplaced()

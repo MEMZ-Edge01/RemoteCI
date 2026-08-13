@@ -47,8 +47,11 @@ builder.Services.ConfigureApplicationCookie(options =>
 builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
 builder.Services.AddRazorPages(options => options.Conventions.AllowAnonymousToPage("/Login"));
 builder.Services.AddScoped<IdentityCoordinator>();
+builder.Services.AddScoped<SchedulePullSettings>();
 builder.Services.AddSingleton<IStateStore, StateStore>();
 builder.Services.AddSingleton<PeerRegistry>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddHostedService<SchedulePullWorker>();
 builder.Services.AddSingleton(new UpdateService(args));
 
 var app = builder.Build();

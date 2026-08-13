@@ -9,6 +9,18 @@ namespace RemoteCI.Plugin.Tests;
 public sealed class ScheduleMutationTests
 {
     [Fact]
+    public void SchedulePullRequest_TriggersFreshScheduleCollection()
+    {
+        var requested = 0;
+        var handler = new SchedulePullRequestHandler(() => requested++);
+
+        var handled = handler.TryHandle(Envelope.SchedulePull());
+
+        Assert.True(handled);
+        Assert.Equal(1, requested);
+    }
+
+    [Fact]
     public void ExchangeCanBeRolledBackAfterSaveFailure()
     {
         var math = Guid.NewGuid();

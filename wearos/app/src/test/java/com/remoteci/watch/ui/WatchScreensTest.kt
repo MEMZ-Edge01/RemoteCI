@@ -12,6 +12,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.School
+import androidx.compose.ui.unit.dp
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -20,8 +21,63 @@ import kotlin.test.assertTrue
 
 class WatchScreensTest {
     @Test
+    fun `cloud disable toggle belongs only to developer settings`() {
+        assertFalse(shouldShowCloudConnectionToggle(developerSettings = false))
+        assertTrue(shouldShowCloudConnectionToggle(developerSettings = true))
+    }
+
+    @Test
+    fun `empty schedule offers pull only while connected`() {
+        assertTrue(shouldOfferSchedulePull(day = null, connectionReady = true))
+        assertFalse(shouldOfferSchedulePull(day = null, connectionReady = false))
+        assertFalse(
+            shouldOfferSchedulePull(
+                day = ScheduleDay("2026-08-13", "revision", enabled = true),
+                connectionReady = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `rectangular watch surface fills the entire screen without circle clipping`() {
+        val layout = calculateWatchSurfaceLayout(
+            maxWidth = 201.dp,
+            maxHeight = 238.dp,
+            isScreenRound = false,
+        )
+
+        assertEquals(201.dp, layout.width)
+        assertEquals(238.dp, layout.height)
+        assertEquals(201.dp, layout.scale)
+        assertFalse(layout.clipToCircle)
+    }
+
+    @Test
+    fun `round watch surface keeps a square circle canvas`() {
+        val layout = calculateWatchSurfaceLayout(
+            maxWidth = 201.dp,
+            maxHeight = 238.dp,
+            isScreenRound = true,
+        )
+
+        assertEquals(201.dp, layout.width)
+        assertEquals(201.dp, layout.height)
+        assertEquals(201.dp, layout.scale)
+        assertTrue(layout.clipToCircle)
+    }
+
+    @Test
     fun `extractTimeRange keeps the normalized range`() {
         assertEquals("13:00-14:00", extractTimeRange("13:00 至 14:00（第三节）"))
+    }
+
+    @Test
+    fun `home time chip can grow for long ranges without exceeding the safe width`() {
+        val bounds = homeTimeChipWidthBounds(200.dp)
+
+        assertEquals(78.dp, bounds.minWidth)
+        assertEquals(144.dp, bounds.maxWidth)
+        assertTrue(bounds.maxWidth > bounds.minWidth)
     }
 
     @Test
@@ -62,6 +118,65 @@ class WatchScreensTest {
     }
 
     @Test
+    fun `break and upcoming states put the next lesson in the home course button`() {
+        listOf(Protocol.STATE_BREAKING, Protocol.STATE_PREPARE_CLASS).forEach { state ->
+            val content = homeCourseContent(
+                ClassStateSnapshot(
+                    currentState = state,
+                    currentSubject = "语文",
+                    currentTimeLayoutItem = "16:30-17:10 语文",
+                    nextClassSubject = "数学",
+                    nextClassTimeLayoutItem = "17:20-18:00 数学",
+                ),
+            )
+
+            assertEquals("数学", content.subject)
+            assertEquals("17:20-18:00 数学", content.timeLayoutItem)
+            assertTrue(content.targetsNextLesson)
+            assertFalse(shouldShowNextLessonSummary(state))
+        }
+    }
+
+    @Test
+    fun `active class keeps the current lesson and its next lesson summary`() {
+        val content = homeCourseContent(
+            ClassStateSnapshot(
+                currentState = Protocol.STATE_CLASS,
+                currentSubject = "语文",
+                currentTimeLayoutItem = "16:30-17:10 语文",
+                nextClassSubject = "数学",
+                nextClassTimeLayoutItem = "17:20-18:00 数学",
+            ),
+        )
+
+        assertEquals("语文", content.subject)
+        assertEquals("16:30-17:10 语文", content.timeLayoutItem)
+        assertFalse(content.targetsNextLesson)
+        assertTrue(shouldShowNextLessonSummary(Protocol.STATE_CLASS))
+    }
+
+    @Test
+    fun `home quick swap selects the lesson shown in the course button`() {
+        val day = ScheduleDay(
+            date = "2026-08-12",
+            revision = "r1",
+            courses = listOf(
+                CourseEntry(index = 0, label = "第 1 节", subjectId = "a", subject = "语文", startTime = "16:30", endTime = "17:10"),
+                CourseEntry(index = 1, label = "第 2 节", subjectId = "b", subject = "数学", startTime = "17:20", endTime = "18:00"),
+            ),
+        )
+        val upcoming = ClassStateSnapshot(
+            currentState = Protocol.STATE_PREPARE_CLASS,
+            currentTimeLayoutItem = "16:30-17:10 语文",
+            nextClassTimeLayoutItem = "17:20-18:00 数学",
+        )
+        val inClass = upcoming.copy(currentState = Protocol.STATE_CLASS)
+
+        assertEquals(1, homeQuickSwapLessonIndex(day, upcoming))
+        assertEquals(0, homeQuickSwapLessonIndex(day, inClass))
+    }
+
+    @Test
     fun `pluginLocalNow aligns progress with plugin timezone`() {
         // 插件在 UTC+8，快照生成于 08:46:55Z，本地应为 16:46:55。
         val atSnapshot = pluginLocalNow("2026-08-12T08:46:55.0573662+00:00", 480, 1_000L, 1_000L)
@@ -92,7 +207,7 @@ class WatchScreensTest {
 
     @Test
     fun `course state labels distinguish preparation and dismissal`() {
-        assertEquals("准备上课", describeClassState(ClassStateSnapshot(currentState = Protocol.STATE_PREPARE_CLASS)))
+        assertEquals("即将上课", describeClassState(ClassStateSnapshot(currentState = Protocol.STATE_PREPARE_CLASS)))
         assertEquals("下课", describeClassState(ClassStateSnapshot(currentState = Protocol.STATE_BREAKING)))
         assertEquals("放学", describeClassState(ClassStateSnapshot(currentState = Protocol.STATE_AFTER_SCHOOL)))
     }

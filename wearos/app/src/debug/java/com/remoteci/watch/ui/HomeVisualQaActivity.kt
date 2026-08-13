@@ -26,7 +26,7 @@ class HomeVisualQaActivity : ComponentActivity() {
                     user = UserProfile(role = Protocol.ROLE_ADMIN, permissions = 63),
                     onOpenScheduleOverview = {},
                     onOpenScheduleChange = {},
-                    onQuickSwapCurrent = null,
+                    onQuickSwapCourse = null,
                     onOpenNotification = {},
                     onOpenSettings = {},
                     onRetryConnection = {},

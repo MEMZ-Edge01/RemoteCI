@@ -63,6 +63,7 @@ public sealed class RemoteCiService : IDisposable
                 _settings,
                 _accounts,
                 _commandHandler,
+                RequestFreshSchedule,
                 () => _latestSnapshot,
                 () => _latestSchedule,
                 _loggerFactory.CreateLogger<LanServer>());
@@ -71,7 +72,12 @@ public sealed class RemoteCiService : IDisposable
 
         if (_settings.EnableCloud)
         {
-            _cloudClient = new CloudClient(_settings, _accounts, _commandHandler, _loggerFactory.CreateLogger<CloudClient>());
+            _cloudClient = new CloudClient(
+                _settings,
+                _accounts,
+                _commandHandler,
+                RequestFreshSchedule,
+                _loggerFactory.CreateLogger<CloudClient>());
             _ = _cloudClient.StartAsync(_cts.Token);
         }
 
@@ -117,6 +123,8 @@ public sealed class RemoteCiService : IDisposable
     }
 
     private void OnScheduleChanged() => Dispatcher.UIThread.Post(_collector.ForceSchedulePush);
+
+    private void RequestFreshSchedule() => Dispatcher.UIThread.Post(_collector.RequestSchedulePush);
 
     private void OnHostStateChanged() => Dispatcher.UIThread.Post(_collector.ForceSnapshotPush);
 

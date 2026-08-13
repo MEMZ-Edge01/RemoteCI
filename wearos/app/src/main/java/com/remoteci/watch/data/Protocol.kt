@@ -8,6 +8,7 @@ object Protocol {
     const val VERSION = 2
     const val TYPE_STATE_PUSH = "state_push"
     const val TYPE_SCHEDULE_SYNC = "schedule_sync"
+    const val TYPE_SCHEDULE_PULL = "schedule_pull"
     const val TYPE_EVENT_NOTIFY = "event_notify"
     const val TYPE_EXTENSIONS_SYNC = "extensions_sync"
     const val TYPE_COMMAND = "command"

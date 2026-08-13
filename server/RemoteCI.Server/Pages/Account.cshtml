@@ -14,9 +14,24 @@
                 <p class="muted">当前服务端版本 v@(Model.CurrentVersion)。</p>
                 <p class="notice ok">@UpdateService.FnosManagedMessage</p>
             }
+            else if (Model.IsDevelopment)
+            {
+                <p class="muted">当前服务端版本 v@(Model.CurrentVersion)（开发构建）。</p>
+                <p class="notice warn">@UpdateService.DevelopmentManagedMessage</p>
+            }
             else
             {
-                <p class="muted">当前服务端版本 v@(Model.CurrentVersion)，更新从 GitHub 仓库最新 release 拉取。</p>
+                <p class="muted">当前服务端版本 v@(Model.CurrentVersion)，更新从 GitHub Release 拉取。</p>
+                <form method="post" asp-page-handler="CheckUpdate" class="stack">
+                    <label>更新渠道
+                        <select asp-for="UpdateOptions.Channel">
+                            <option value="Stable">正式版</option>
+                            <option value="Beta">Beta版（包含正式版）</option>
+                        </select>
+                    </label>
+                    <label class="check"><input asp-for="UpdateOptions.Force" /> 强制更新（同版本重新下载并覆盖安装）</label>
+                    <button type="submit">检查更新</button>
+                </form>
                 @if (!string.IsNullOrEmpty(Model.CheckMessage))
                 {
                     <p class="notice @(Model.UpdateSucceeded ? "ok" : "warn")">@Model.CheckMessage</p>
@@ -25,15 +40,18 @@
                 {
                     var latestVersion = UpdateService.NormalizeVersion(Model.LatestRelease.Tag);
                     var hasNewer = UpdateService.IsNewer(latestVersion, Model.CurrentVersion);
-                    <p class="muted">最新版本 v@(latestVersion)</p>
+                    var canInstall = UpdateService.CanInstall(latestVersion, Model.CurrentVersion, Model.UpdateOptions.Force);
+                    <p class="muted">所选渠道最新版本 v@(latestVersion)@(Model.LatestRelease.Prerelease ? "（Beta）" : "")</p>
                     @if (!string.IsNullOrEmpty(Model.LatestRelease.Body))
                     {
                         <details class="release-notes"><summary>查看更新说明</summary><pre>@Model.LatestRelease.Body</pre></details>
                     }
-                    @if (hasNewer && Model.ServerAsset is not null)
+                    @if (canInstall && Model.ServerAsset is not null)
                     {
                         <form method="post" asp-page-handler="Update" class="stack" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='处理中…'">
-                            <button type="submit">下载并更新到 v@(latestVersion)</button>
+                            <input type="hidden" asp-for="UpdateOptions.Channel" />
+                            <input type="hidden" asp-for="UpdateOptions.Force" />
+                            <button type="submit">@(hasNewer ? $"下载并更新到 v{latestVersion}" : $"重新下载并覆盖安装 v{latestVersion}")</button>
                         </form>
                     }
                     else if (hasNewer)
@@ -41,7 +59,6 @@
                         <p class="muted">当前平台暂无可用的更新包，请到 GitHub 手动下载。</p>
                     }
                 }
-                <form method="post" asp-page-handler="CheckUpdate" class="stack"><button type="submit">检查更新</button></form>
             }
         </section>
     }

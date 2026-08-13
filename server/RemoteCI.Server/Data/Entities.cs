@@ -41,4 +41,7 @@ public sealed class SystemMetadata
 
     /// <summary>全局通知设置：开启后所有通知标题强制添加“由用户名发送：”前缀。</summary>
     public bool ForceSenderInTitle { get; set; } = true;
+
+    /// <summary>服务端主动向插件拉取课表的间隔分钟数；0 表示关闭定时拉取。</summary>
+    public int SchedulePullIntervalMinutes { get; set; }
 }

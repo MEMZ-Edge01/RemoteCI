@@ -91,6 +91,17 @@ $env:JAVA_HOME = 'E:\Android Studio\jbr'
 - `WatchPalette` 数据类集中管理整套配色；`LocalWatchPalette`（CompositionLocal）由 `AppTheme` 提供，屏幕组件统一从主题取色，禁止再硬编码容器色。
 - 主题 id 通过 `SettingsStore.themeId`（SharedPreferences）持久化；`AppTheme` 在 `RemoteCiApp` 内根据设置提供，切换即时生效。
 
+### 3.6 圆形与矩形屏幕
+
+- 根画布读取 Android `Configuration.isScreenRound`：圆屏使用短边构成的圆形安全画布，矩形屏使用完整可用宽高。
+- 页面内的尺寸仍以屏幕短边作为缩放基准，避免矩形屏变高后按钮和文字被不成比例放大；矩形屏根布局不得再套用 `CircleShape` 裁剪。
+
+### 3.7 云端连接开发者开关
+
+- 手表普通“连接”页只配置云端地址和局域网参数，不显示关闭云端的开关；关闭入口集中在“设置 → 开发者”。
+- 插件普通“RemoteCI 设置”同样不显示关闭云端中转的开关；高级开关位于单独的“RemoteCI 开发者设置”页，保存后重启 ClassIsland 生效。
+- `ConnectionManager` 把密码登录视为必要的云端认证引导，不受开发者的后续云端回退偏好限制；因此旧配置已关闭云端时，退出账号后仍可重新登录。
+
 ## 4. 后续扩展点（v0.2+）
 
 - **Tiles 小组件**：`androidx.wear.tiles` 官方库，数据层（ConnectionManager/StateFlow）已与 UI 分离，Tiles 直接消费同一状态源。

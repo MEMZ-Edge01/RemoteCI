@@ -42,6 +42,7 @@ private enum class Screen {
     ConnectionSettings,
     NotificationSettings,
     AppearanceSettings,
+    DeveloperSettings,
     Update,
 }
 
@@ -156,7 +157,7 @@ fun RemoteCiApp(context: Context) {
             Screen.ExtensionForm -> Screen.Control
             Screen.Power -> Screen.Control
             Screen.Volume -> Screen.Control
-            Screen.ConnectionSettings, Screen.NotificationSettings -> Screen.Settings
+            Screen.ConnectionSettings, Screen.NotificationSettings, Screen.DeveloperSettings -> Screen.Settings
             Screen.AppearanceSettings -> Screen.Settings
             Screen.Update -> Screen.Settings
             else -> Screen.Home
@@ -190,12 +191,12 @@ fun RemoteCiApp(context: Context) {
                     selectedDate = initialScheduleDate(displayedSchedule, afterSchool)
                     screen = Screen.DayPicker
                 },
-                // 主界面课程按钮：有换课权限时直达换课页并预选当前课为源课，返回键直接回主页。
-                onQuickSwapCurrent = if (currentUser?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) {
+                // 主界面课程按钮：有换课权限时直达换课页，并预选按钮当前显示的课程为源课。
+                onQuickSwapCourse = if (currentUser?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) {
                     {
                         val todayDate = displayedSnapshot?.scheduleDate ?: LocalDate.now().toString()
                         val todayDay = displayedSchedule?.days?.firstOrNull { it.date == todayDate }
-                        val index = currentLessonIndex(todayDay, displayedSnapshot?.currentTimeLayoutItem)
+                        val index = homeQuickSwapLessonIndex(todayDay, displayedSnapshot)
                         if (todayDay != null && index != null) {
                             selectedDate = todayDate
                             sourceIndex = index
@@ -215,6 +216,9 @@ fun RemoteCiApp(context: Context) {
 
             Screen.ScheduleOverview -> ScheduleOverviewScreen(
                 day = selectedDay,
+                connectionReady = connectionState is ConnectionManager.State.LanConnected ||
+                    connectionState is ConnectionManager.State.CloudConnected,
+                onRequestSchedule = ConnectionManager::requestSchedulePull,
                 onPickDate = { screen = Screen.ScheduleDatePicker },
                 onBack = { screen = Screen.Home },
             )
@@ -388,6 +392,7 @@ fun RemoteCiApp(context: Context) {
             onOpenNotifications = { screen = Screen.NotificationSettings },
             onOpenAppearance = { screen = Screen.AppearanceSettings },
             onOpenUpdate = { screen = Screen.Update },
+            onOpenDeveloper = { screen = Screen.DeveloperSettings },
             onBack = { screen = Screen.Home },
         )
 
@@ -415,10 +420,26 @@ fun RemoteCiApp(context: Context) {
             onBack = { screen = Screen.Settings },
         )
 
+        Screen.DeveloperSettings -> DeveloperSettingsScreen(
+            cloudConnectionEnabled = settings.cloudConnectionEnabled,
+            onCloudConnectionEnabledChange = { enabled ->
+                settings = settings.copy(cloudConnectionEnabled = enabled)
+                settingsStore.save(settings)
+            },
+            onReconnect = { ConnectionManager.connect(settings) },
+            onBack = { screen = Screen.Settings },
+        )
+
         Screen.Update -> UpdateScreen(
             context = context,
             currentVersion = currentVersion,
             serverVersion = connectedServerVersion,
+            updateChannel = settings.updateChannel,
+            forceUpdate = settings.forceUpdateEnabled,
+            onUpdateOptionsChange = { channel, force ->
+                settings = settings.copy(updateChannel = channel, forceUpdateEnabled = force)
+                settingsStore.save(settings)
+            },
             onBack = { screen = Screen.Settings },
         )
         }
@@ -435,7 +456,7 @@ private fun describeConnection(state: ConnectionManager.State): String = when (s
 
 internal fun describeClassState(snapshot: com.remoteci.watch.data.ClassStateSnapshot?): String = when (snapshot?.currentState) {
     Protocol.STATE_CLASS -> "上课"
-    Protocol.STATE_PREPARE_CLASS -> "准备上课"
+    Protocol.STATE_PREPARE_CLASS -> "即将上课"
     Protocol.STATE_BREAKING -> "下课"
     Protocol.STATE_AFTER_SCHOOL -> "放学"
     else -> "待机"

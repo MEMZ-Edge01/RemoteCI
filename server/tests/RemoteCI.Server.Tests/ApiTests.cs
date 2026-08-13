@@ -1,11 +1,13 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using RemoteCI.Server.Data;
+using RemoteCI.Server.Services;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 using Xunit;
@@ -344,6 +346,124 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task RazorWebUi_SchedulePageExposesManualPullAndIntervalOptions()
+    {
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var scheduleHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Schedule"));
+
+        Assert.Contains("立即向插件拉取课表", scheduleHtml);
+        Assert.Contains("每 15 分钟", scheduleHtml);
+        Assert.Contains("每小时", scheduleHtml);
+        Assert.Contains("每 6 小时", scheduleHtml);
+        Assert.Contains("每天", scheduleHtml);
+
+        var response = await PostRazorFormAsync(
+            browser,
+            "/Schedule?handler=PullInterval",
+            scheduleHtml,
+            new Dictionary<string, string> { ["PullInterval"] = "60" });
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var settings = scope.ServiceProvider.GetRequiredService<SchedulePullSettings>();
+        Assert.Equal(SchedulePullInterval.Hourly, await settings.GetIntervalAsync());
+    }
+
+    [Fact]
+    public async Task RazorWebUi_CheckUpdateDoesNotValidateUntouchedPasswordForm()
+    {
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var accountHtml = await browser.GetStringAsync("/Account");
+        var previousRuntime = Environment.GetEnvironmentVariable("REMOTECI_RUNTIME");
+
+        try
+        {
+            // 让处理器走无需访问 GitHub 的 fnOS 分支，只验证真实 Razor 绑定与 ModelState 行为。
+            Environment.SetEnvironmentVariable("REMOTECI_RUNTIME", "fnos");
+            var response = await PostRazorFormAsync(browser, "/Account?handler=CheckUpdate", accountHtml);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var responseHtml = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
+            Assert.Contains("由fnOS应用商店管理", responseHtml);
+            Assert.DoesNotContain("<li>The CurrentPassword field is required.</li>", responseHtml);
+            Assert.DoesNotContain("<li>The NewPassword field is required.</li>", responseHtml);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("REMOTECI_RUNTIME", previousRuntime);
+        }
+    }
+
+    [Fact]
+    public async Task RazorWebUi_DevelopmentBuildDisablesSelfUpdate()
+    {
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+
+        var response = await browser.GetAsync("/Account");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var html = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
+        Assert.Contains(UpdateService.DevelopmentManagedMessage, html);
+        Assert.DoesNotContain("强制更新（同版本重新下载并覆盖安装）", html);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_PasswordHandlerStillValidatesEmptyPasswordFields()
+    {
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var accountHtml = await browser.GetStringAsync("/Account");
+
+        var response = await PostRazorFormAsync(browser, "/Account?handler=Password", accountHtml);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var responseHtml = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
+        Assert.Contains("<li>The CurrentPassword field is required.</li>", responseHtml);
+        Assert.Contains("<li>The NewPassword field is required.</li>", responseHtml);
+    }
+
+    [Theory]
+    [InlineData("非法 ID", "Valid-Password-2026", "Create.Username")]
+    [InlineData("admin", "Valid-Password-2026", "Create.Username")]
+    [InlineData("valid.id", "short", "Create.Password")]
+    public async Task RazorWebUi_CreateUserClearsOnlyTheInvalidField(
+        string username,
+        string password,
+        string expectedInvalidField)
+    {
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var usersHtml = await browser.GetStringAsync("/Users");
+        var response = await PostRazorFormAsync(
+            browser,
+            "/Users?handler=Create",
+            usersHtml,
+            new Dictionary<string, string>
+            {
+                ["Create.Username"] = username,
+                ["Create.DisplayName"] = "应保留的用户名",
+                ["Create.Password"] = password,
+                ["Create.Role"] = ((int)UserRole.Admin).ToString(),
+                ["Create.AccessWebUi"] = "true",
+                ["Create.ManageSchedule"] = "true",
+            },
+            ajax: true);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var invalidFields = payload.RootElement.GetProperty("invalidFields").EnumerateArray()
+            .Select(item => item.GetString()!).ToArray();
+        Assert.True(
+            invalidFields.SequenceEqual([expectedInvalidField]),
+            $"无效字段不匹配：{payload.RootElement}");
+        Assert.False(payload.RootElement.TryGetProperty("password", out _));
+        Assert.False(payload.RootElement.TryGetProperty("displayName", out _));
+    }
+
+    [Fact]
     public async Task RazorWebUi_PluginActionsLiveOnOverviewAndRetryReportsResult()
     {
         using var browser = CreateBrowserClient();
@@ -427,17 +547,31 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     }
 
     private static async Task<HttpResponseMessage> PostRazorFormAsync(
-        HttpClient browser, string path, string html)
+        HttpClient browser,
+        string path,
+        string html,
+        IReadOnlyDictionary<string, string>? values = null,
+        bool ajax = false)
     {
         var match = Regex.Match(
             html,
             "<input[^>]+name=\"__RequestVerificationToken\"[^>]+value=\"([^\"]+)\"",
             RegexOptions.IgnoreCase);
         Assert.True(match.Success, "Razor 表单页必须包含 CSRF 令牌");
-        return await browser.PostAsync(path, new FormUrlEncodedContent(new Dictionary<string, string>
+        var fields = new Dictionary<string, string>(values ?? new Dictionary<string, string>())
         {
             ["__RequestVerificationToken"] = WebUtility.HtmlDecode(match.Groups[1].Value),
-        }));
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new FormUrlEncodedContent(fields),
+        };
+        if (ajax)
+        {
+            request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+            request.Headers.Accept.ParseAdd("application/json");
+        }
+        return await browser.SendAsync(request);
     }
 
     private async Task<AuthResponse> LoginAsync(string username, string password)

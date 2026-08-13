@@ -17,6 +17,7 @@ public sealed class CloudClient : IDisposable
     private readonly PluginSettings _settings;
     private readonly AccountMirror _accounts;
     private readonly CommandHandler _commands;
+    private readonly SchedulePullRequestHandler _schedulePullRequests;
     private readonly ILogger<CloudClient> _logger;
     private readonly HttpClient _http = new();
     private readonly SemaphoreSlim _sendLock = new(1, 1);
@@ -28,11 +29,13 @@ public sealed class CloudClient : IDisposable
         PluginSettings settings,
         AccountMirror accounts,
         CommandHandler commands,
+        Action requestFreshSchedule,
         ILogger<CloudClient> logger)
     {
         _settings = settings;
         _accounts = accounts;
         _commands = commands;
+        _schedulePullRequests = new SchedulePullRequestHandler(requestFreshSchedule);
         _logger = logger;
     }
 
@@ -156,6 +159,8 @@ public sealed class CloudClient : IDisposable
             }
             return;
         }
+
+        if (_schedulePullRequests.TryHandle(envelope)) return;
 
         if (envelope.Type != Protocol.MessageTypeCommand) return;
         var command = ConvertPayload<CommandMessage>(envelope.Payload);

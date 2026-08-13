@@ -96,6 +96,9 @@ public sealed class StateCollector
         PushEvent(ClassEventKind.ScheduleChanged, null, "课表已更新", pushSnapshot: true);
     }
 
+    /// <summary>响应远端拉取，仅重新生成并推送课表，不伪造“课表已变更”事件。</summary>
+    public void RequestSchedulePush() => PushSchedule(force: true);
+
     public void ForceSnapshotPush() => PushSnapshot();
 
     private void PushSnapshot() => SnapshotPushed?.Invoke(BuildSnapshot());

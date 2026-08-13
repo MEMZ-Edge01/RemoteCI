@@ -16,6 +16,7 @@ public sealed class LanServer : IDisposable
     private readonly PluginSettings _settings;
     private readonly AccountMirror _accounts;
     private readonly CommandHandler _commands;
+    private readonly SchedulePullRequestHandler _schedulePullRequests;
     private readonly Func<ClassStateSnapshot?> _snapshotProvider;
     private readonly Func<ScheduleBundle?> _scheduleProvider;
     private readonly ILogger<LanServer> _logger;
@@ -26,6 +27,7 @@ public sealed class LanServer : IDisposable
         PluginSettings settings,
         AccountMirror accounts,
         CommandHandler commands,
+        Action requestFreshSchedule,
         Func<ClassStateSnapshot?> snapshotProvider,
         Func<ScheduleBundle?> scheduleProvider,
         ILogger<LanServer> logger)
@@ -33,6 +35,7 @@ public sealed class LanServer : IDisposable
         _settings = settings;
         _accounts = accounts;
         _commands = commands;
+        _schedulePullRequests = new SchedulePullRequestHandler(requestFreshSchedule);
         _snapshotProvider = snapshotProvider;
         _scheduleProvider = scheduleProvider;
         _logger = logger;
@@ -105,6 +108,7 @@ public sealed class LanServer : IDisposable
             return;
         }
 
+        if (_schedulePullRequests.TryHandle(envelope)) return;
         if (envelope.Type != Protocol.MessageTypeCommand) return;
         var command = ConvertPayload<CommandMessage>(envelope.Payload);
         if (command is null) return;

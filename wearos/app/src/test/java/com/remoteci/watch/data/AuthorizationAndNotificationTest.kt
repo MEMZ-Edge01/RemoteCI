@@ -1,10 +1,31 @@
 package com.remoteci.watch.data
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AuthorizationAndNotificationTest {
+    @Test
+    fun `password login bootstraps cloud even when developer disabled cloud connection`() {
+        val settings = WatchSettings(cloudConnectionEnabled = false)
+
+        val plan = planConnection(settings, password = "valid-password")
+
+        assertTrue(plan.bootstrapCloudAuthentication)
+        assertFalse(plan.allowCloudFallback)
+    }
+
+    @Test
+    fun `schedule pull envelope uses dedicated read-only protocol message`() {
+        val envelope = schedulePullEnvelope()
+
+        assertEquals(Protocol.TYPE_SCHEDULE_PULL, envelope.type)
+        assertTrue(envelope.messageId.isNotBlank())
+        assertNull(envelope.payload)
+    }
+
     @Test
     fun `new devices receive every supported event type`() {
         val settings = WatchSettings()

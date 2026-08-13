@@ -92,12 +92,12 @@ object ConnectionManager {
         extensions.value = emptyList()
         // 重新连接后以服务端下发的设置快照为准，未同步前 UI 按默认开启处理。
         this@ConnectionManager.settings.value = null
+        val plan = planConnection(settings, password)
 
         activeJob = scope.launch {
             try {
-                if (!password.isNullOrEmpty()) {
-                    if (!settings.cloudConnectionEnabled) throw IOException("首次登录必须启用云服务器")
-                    val auth = loginCloud(settings, password)
+                if (plan.bootstrapCloudAuthentication) {
+                    val auth = loginCloud(settings, password!!)
                     persist(auth)
                     connectCloud(settings, auth, attempt)
                     return@launch
@@ -110,7 +110,7 @@ object ConnectionManager {
                 val lanOk = settings.lanConnectionEnabled && settings.lanHost.isNotBlank() &&
                     connectLan(settings, saved, attempt)
                 if (lanOk) return@launch
-                if (!settings.cloudConnectionEnabled) throw IOException("局域网连接失败")
+                if (!plan.allowCloudFallback) throw IOException("局域网连接失败")
                 val auth = refreshCloud(settings, saved)
                 persist(auth)
                 connectCloud(settings, auth, attempt)
@@ -166,6 +166,12 @@ object ConnectionManager {
             CommandMessage(command = Protocol.CMD_CHANGE_SCHEDULE, scheduleChange = request),
             Protocol.PERMISSION_MANAGE_SCHEDULE,
         )
+    }
+
+    /** 请求当前连接对应的插件重新生成课表；云端和局域网使用同一只读协议消息。 */
+    fun requestSchedulePull() {
+        lastCommandResult.value = null
+        sendEnvelope(schedulePullEnvelope())
     }
 
     fun sendNotification(
@@ -486,3 +492,19 @@ object ConnectionManager {
     private class MissingSessionException : Exception()
     private class AuthenticationException : Exception()
 }
+
+internal data class ConnectionPlan(
+    val bootstrapCloudAuthentication: Boolean,
+    val allowCloudFallback: Boolean,
+)
+
+/** 密码只能由云端验证，因此密码登录始终允许一次云端引导；开发者开关只控制后续连接回退。 */
+internal fun planConnection(settings: WatchSettings, password: String?): ConnectionPlan = ConnectionPlan(
+    bootstrapCloudAuthentication = !password.isNullOrEmpty(),
+    allowCloudFallback = settings.cloudConnectionEnabled,
+)
+
+internal fun schedulePullEnvelope() = Envelope(
+    type = Protocol.TYPE_SCHEDULE_PULL,
+    messageId = UUID.randomUUID().toString().replace("-", ""),
+)

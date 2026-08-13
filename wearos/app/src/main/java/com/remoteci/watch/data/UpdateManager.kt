@@ -40,8 +40,14 @@ data class CompatibleUpdate(
     val asset: GitHubAsset,
 )
 
+enum class UpdateChannel
+{
+    STABLE,
+    BETA,
+}
+
 /**
- * 手表端更新入口：从 GitHub 仓库最新 release 拉取 APK 并安装。
+ * 手表端更新入口：从 GitHub 仓库发布列表选择 APK 并安装。
  *
  * 安装沿用 [PackageInstaller] 官方机制，要求发布 APK 与当前安装包签名一致，
  * 首次安装正式签名版后后续更新即可在同一签名下自动覆盖。
@@ -75,17 +81,21 @@ object UpdateManager {
     fun findApkAsset(release: GitHubRelease): GitHubAsset? =
         release.assets.firstOrNull { it.name.startsWith(APK_PREFIX) && it.name.endsWith(".apk") }
 
-    /** 选择高于手表且不高于已连接服务端的最高版本，避免三端版本倒挂。 */
+    /** 按渠道选择可升级或可强制覆盖、且不高于已连接服务端的最高版本。 */
     fun selectCompatibleUpdate(
         releases: List<GitHubRelease>,
         currentVersion: String,
         serverVersion: String,
+        channel: UpdateChannel = UpdateChannel.STABLE,
+        force: Boolean = false,
     ): CompatibleUpdate? = releases
-        .filterNot { it.prerelease || it.draft }
+        .filterNot { it.draft || channel == UpdateChannel.STABLE && it.prerelease }
         .mapNotNull { release -> findApkAsset(release)?.let { CompatibleUpdate(release, it) } }
         .filter { candidate ->
             val version = versionFromTag(candidate.release.tagName)
-            isNewer(version, currentVersion) && compareVersions(version, serverVersion) <= 0
+            val currentComparison = compareVersions(version, currentVersion)
+            (currentComparison > 0 || force && currentComparison == 0) &&
+                compareVersions(version, serverVersion) <= 0
         }
         .maxWithOrNull { left, right ->
             compareVersions(left.release.tagName, right.release.tagName)
@@ -97,16 +107,45 @@ object UpdateManager {
     /** latest > current 时返回 true。 */
     fun isNewer(latest: String, current: String): Boolean = compareVersions(latest, current) > 0
 
-    /** 简单的语义版本比较，支持 0.2.0 / v0.2.0 / 0.2.0-beta 等形式。 */
+    /** 语义版本比较，正式版在相同核心版本的预发布版之后。 */
     fun compareVersions(a: String, b: String): Int {
-        val left = a.removePrefix("v").split("-", "+").first().split(".").mapNotNull { it.toIntOrNull() }
-        val right = b.removePrefix("v").split("-", "+").first().split(".").mapNotNull { it.toIntOrNull() }
-        val size = maxOf(left.size, right.size)
+        val left = parseVersion(a)
+        val right = parseVersion(b)
+        val size = maxOf(left.core.size, right.core.size)
         for (i in 0 until size) {
-            val diff = (left.getOrElse(i) { 0 }) - (right.getOrElse(i) { 0 })
-            if (diff != 0) return diff
+            val comparison = left.core.getOrElse(i) { 0 }.compareTo(right.core.getOrElse(i) { 0 })
+            if (comparison != 0) return comparison
+        }
+
+        if (left.prerelease.isEmpty()) return if (right.prerelease.isEmpty()) 0 else 1
+        if (right.prerelease.isEmpty()) return -1
+        for (i in 0 until maxOf(left.prerelease.size, right.prerelease.size)) {
+            if (i >= left.prerelease.size) return -1
+            if (i >= right.prerelease.size) return 1
+            val leftPart = left.prerelease[i]
+            val rightPart = right.prerelease[i]
+            val leftNumber = leftPart.toIntOrNull()
+            val rightNumber = rightPart.toIntOrNull()
+            val comparison = when {
+                leftNumber != null && rightNumber != null -> leftNumber.compareTo(rightNumber)
+                leftNumber != null -> -1
+                rightNumber != null -> 1
+                else -> leftPart.compareTo(rightPart)
+            }
+            if (comparison != 0) return comparison
         }
         return 0
+    }
+
+    private data class ParsedVersion(val core: List<Int>, val prerelease: List<String>)
+
+    private fun parseVersion(value: String): ParsedVersion {
+        val withoutBuild = value.removePrefix("v").substringBefore("+")
+        val core = withoutBuild.substringBefore("-").split(".").map { it.toIntOrNull() ?: 0 }
+        val prerelease = withoutBuild.substringAfter("-", "")
+            .split(".")
+            .filter { it.isNotEmpty() }
+        return ParsedVersion(core, prerelease)
     }
 
     /** 下载 APK 到缓存目录，返回本地文件。 */

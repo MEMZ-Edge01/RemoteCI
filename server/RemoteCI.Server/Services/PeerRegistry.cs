@@ -104,6 +104,10 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
     public Task<bool> SendAccountSyncToPluginsAsync(AccountSync sync, CancellationToken ct = default) =>
         SendToPluginAsync(Envelope.AccountSync(sync), ct);
 
+    /// <summary>请求所有在线插件立即重新生成课表；返回是否至少成功发送给一个插件。</summary>
+    public Task<bool> RequestSchedulePullAsync(CancellationToken ct = default) =>
+        SendToPluginAsync(Envelope.SchedulePull(), ct);
+
     public async Task SendToWatchAsync(Guid connectionId, Envelope envelope, CancellationToken ct = default)
     {
         if (_watchPeers.TryGetValue(connectionId, out var peer) && await RefreshAsync(peer, ct) is not null)

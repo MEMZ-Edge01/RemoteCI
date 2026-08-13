@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.wear.compose.foundation.pager.VerticalPager
@@ -30,12 +31,14 @@ import androidx.compose.material.icons.automirrored.rounded.List
 import androidx.compose.material.icons.automirrored.rounded.VolumeOff
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.EditNotifications
 import androidx.compose.material.icons.rounded.NotificationsOff
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Visibility
@@ -61,6 +64,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -89,6 +93,7 @@ import com.remoteci.watch.data.ScheduleDay
 import com.remoteci.watch.data.SubjectEntry
 import com.remoteci.watch.data.UserProfile
 import com.remoteci.watch.data.UpdateManager
+import com.remoteci.watch.data.UpdateChannel
 import com.remoteci.watch.data.WatchSettings
 import java.time.Duration
 import java.time.LocalDate
@@ -100,6 +105,39 @@ import kotlinx.coroutines.launch
 
 internal enum class SwapMode { Exchange, Replace }
 internal enum class LessonTarget { Source, Target }
+internal data class WatchSurfaceLayout(
+    val width: Dp,
+    val height: Dp,
+    val scale: Dp,
+    val clipToCircle: Boolean,
+)
+
+internal data class HomeTimeChipWidthBounds(
+    val minWidth: Dp,
+    val maxWidth: Dp,
+)
+
+/** 时间按钮由文本固有宽度决定实际宽度，同时保留圆屏内的安全上下限。 */
+internal fun homeTimeChipWidthBounds(diameter: Dp): HomeTimeChipWidthBounds =
+    HomeTimeChipWidthBounds(
+        minWidth = diameter * .39f,
+        maxWidth = diameter * .72f,
+    )
+
+/** 圆屏保持圆形安全画布，矩形屏使用完整可用区域。 */
+internal fun calculateWatchSurfaceLayout(
+    maxWidth: Dp,
+    maxHeight: Dp,
+    isScreenRound: Boolean,
+): WatchSurfaceLayout {
+    val diameter = minOf(maxWidth, maxHeight)
+    return if (isScreenRound) {
+        WatchSurfaceLayout(diameter, diameter, diameter, clipToCircle = true)
+    } else {
+        WatchSurfaceLayout(maxWidth, maxHeight, diameter, clipToCircle = false)
+    }
+}
+
 internal data class LessonChoice(
     val id: String,
     val index: Int,
@@ -137,7 +175,7 @@ internal fun HomeScreen(
     user: UserProfile?,
     onOpenScheduleOverview: () -> Unit,
     onOpenScheduleChange: () -> Unit,
-    onQuickSwapCurrent: (() -> Unit)?,
+    onQuickSwapCourse: (() -> Unit)?,
     onOpenNotification: () -> Unit,
     onOpenSettings: () -> Unit,
     onRetryConnection: () -> Unit,
@@ -174,7 +212,7 @@ internal fun HomeScreen(
                         user = user,
                         now = now,
                         diameter = diameter,
-                        onQuickSwapCurrent = onQuickSwapCurrent,
+                        onQuickSwapCourse = onQuickSwapCourse,
                         onRetryConnection = onRetryConnection,
                     )
                 } else {
@@ -203,10 +241,13 @@ private fun HomeStatusPage(
     user: UserProfile?,
     now: LocalTime,
     diameter: Dp,
-    onQuickSwapCurrent: (() -> Unit)?,
+    onQuickSwapCourse: (() -> Unit)?,
     onRetryConnection: () -> Unit,
 ) {
-    val currentSubject = snapshot?.currentSubject ?: "暂无课程"
+    // 下课和即将上课时，主页的主课程入口代表即将发生的下一节课；
+    // 文案、时间和点击后的换课源课必须始终来自同一个目标，避免“显示数学却换了语文”。
+    val courseContent = homeCourseContent(snapshot)
+    val timeChipWidth = homeTimeChipWidthBounds(diameter)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -242,22 +283,25 @@ private fun HomeStatusPage(
         }
         Spacer(Modifier.height(diameter * .10f))
         HomeInfoChip(
-            text = currentSubject,
+            text = courseContent.subject,
             icon = Icons.Rounded.SwapHoriz,
             filled = true,
             modifier = Modifier.width(diameter * .39f).height(diameter * .14f),
-            fontSize = if (currentSubject.length <= 2) 16.sp else 12.sp,
+            fontSize = if (courseContent.subject.length <= 2) 16.sp else 12.sp,
             iconSize = diameter * .055f,
-            onClick = onQuickSwapCurrent,
+            onClick = onQuickSwapCourse,
         )
         Spacer(Modifier.height(diameter * .035f))
         HomeInfoChip(
-            text = extractTimeRange(snapshot?.currentTimeLayoutItem).ifBlank { "--:--" },
+            text = extractTimeRange(courseContent.timeLayoutItem).ifBlank { "--:--" },
             filled = false,
-            modifier = Modifier.width(diameter * .39f).height(diameter * .105f),
+            // widthIn 不强制固定宽度：Row 会按时间文字的固有宽度扩展，并受圆屏安全上限约束。
+            modifier = Modifier
+                .widthIn(min = timeChipWidth.minWidth, max = timeChipWidth.maxWidth)
+                .height(diameter * .105f),
             fontSize = 12.sp,
         )
-        if (canViewExtendedSchedule(user)) {
+        if (canViewExtendedSchedule(user) && shouldShowNextLessonSummary(snapshot?.currentState)) {
             Spacer(Modifier.height(diameter * .035f))
             Text(
                 "下一节课是：${snapshot?.nextClassSubject ?: "无"}",
@@ -315,11 +359,15 @@ private fun HomePageIndicator(currentPage: Int, diameter: Dp, modifier: Modifier
 @Composable
 internal fun ScheduleOverviewScreen(
     day: ScheduleDay?,
+    connectionReady: Boolean,
+    onRequestSchedule: () -> Unit,
     onPickDate: () -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = "课表") {
     if (day == null) {
         item { Hint("尚未同步课表") }
+        if (shouldOfferSchedulePull(day, connectionReady))
+            item { ActionButton("向插件拉取", Icons.Rounded.Refresh, true, onRequestSchedule) }
     } else {
         // 日期标题同时承担切换入口，单页始终只渲染一天，避免七日内容在圆屏上过长。
         item { ActionButton(scheduleDateTitle(day.date), null, true, onPickDate) }
@@ -330,6 +378,9 @@ internal fun ScheduleOverviewScreen(
     }
     item { BackButton(onBack) }
 }
+
+internal fun shouldOfferSchedulePull(day: ScheduleDay?, connectionReady: Boolean): Boolean =
+    day == null && connectionReady
 
 @Composable
 internal fun ScheduleDatePickerScreen(
@@ -657,12 +708,14 @@ internal fun SettingsScreen(
     onOpenNotifications: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenUpdate: () -> Unit,
+    onOpenDeveloper: () -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = "设置") {
     item { ActionButton("连接", Icons.Rounded.Wifi, true, onOpenConnection) }
     item { ActionButton("通知", Icons.Rounded.EditNotifications, true, onOpenNotifications) }
     item { ActionButton("外观", Icons.Rounded.Palette, true, onOpenAppearance) }
     item { ActionButton("更新", Icons.Rounded.SystemUpdate, true, onOpenUpdate) }
+    item { ActionButton("开发者", Icons.Rounded.Code, true, onOpenDeveloper) }
     item { BackButton(onBack) }
 }
 
@@ -737,6 +790,9 @@ internal fun UpdateScreen(
     context: Context,
     currentVersion: String,
     serverVersion: String?,
+    updateChannel: UpdateChannel,
+    forceUpdate: Boolean,
+    onUpdateOptionsChange: (UpdateChannel, Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
@@ -755,6 +811,8 @@ internal fun UpdateScreen(
                     releases = UpdateManager.fetchReleases(),
                     currentVersion = currentVersion,
                     serverVersion = allowedVersion,
+                    channel = updateChannel,
+                    force = forceUpdate,
                 )
                 if (selected != null) {
                     UpdateUiState.Available(
@@ -774,6 +832,20 @@ internal fun UpdateScreen(
     WatchList(title = "更新") {
         item { Hint("当前版本 v$currentVersion") }
         item { Hint("已连接 WebUI v${serverVersion ?: "未知"}") }
+        item { Hint("更新渠道") }
+        item {
+            UpdateChannelSelector(updateChannel) { channel ->
+                state = UpdateUiState.Idle
+                onUpdateOptionsChange(channel, forceUpdate)
+            }
+        }
+        item {
+            Toggle("强制更新", forceUpdate) { enabled ->
+                state = UpdateUiState.Idle
+                onUpdateOptionsChange(updateChannel, enabled)
+            }
+        }
+        if (forceUpdate) item { Hint("允许同版本重新下载并覆盖安装，不允许降级") }
         when (val current = state) {
             UpdateUiState.Idle, UpdateUiState.Checking -> {
                 if (current == UpdateUiState.Checking) {
@@ -797,10 +869,11 @@ internal fun UpdateScreen(
             }
 
             is UpdateUiState.Available -> {
-                item { Hint("发现新版本 v${current.latestVersion}") }
+                val reinstalling = UpdateManager.compareVersions(current.latestVersion, currentVersion) == 0
+                item { Hint(if (reinstalling) "可强制覆盖安装 v${current.latestVersion}" else "发现新版本 v${current.latestVersion}") }
                 item { Hint(releaseNotesPreview(current.release.body)) }
                 item {
-                    ActionButton("下载并安装", Icons.Rounded.Download, true, onClick = {
+                    ActionButton(if (reinstalling) "重新下载并覆盖" else "下载并安装", Icons.Rounded.Download, true, onClick = {
                         state = UpdateUiState.Downloading
                         scope.launch {
                             state = try {
@@ -847,6 +920,22 @@ internal fun UpdateScreen(
     }
 }
 
+@Composable
+private fun UpdateChannelSelector(channel: UpdateChannel, onChange: (UpdateChannel) -> Unit) {
+    Row(Modifier.width(150.dp).height(30.dp).clip(RoundedCornerShape(15.dp)).background(palette.disabledContainer)) {
+        listOf(UpdateChannel.STABLE to "正式版", UpdateChannel.BETA to "Beta版").forEach { (value, label) ->
+            Box(
+                Modifier.weight(1f).fillMaxSize()
+                    .background(if (channel == value) palette.buttonContainer else Color.Transparent)
+                    .clickable { onChange(value) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(label, color = if (channel == value) palette.onButtonContainer else Color.White, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
 /** 截取 release 说明供手表小屏展示。 */
 private fun releaseNotesPreview(body: String?, maxLength: Int = 180): String {
     if (body.isNullOrBlank()) return "暂无更新说明"
@@ -864,7 +953,6 @@ internal fun ConnectionSettingsScreen(
     onBack: () -> Unit,
 ) = WatchList(title = "连接") {
     item { Hint(stateText) }
-    item { Toggle("云服务器", settings.cloudConnectionEnabled) { onSettingsChange(settings.copy(cloudConnectionEnabled = it)) } }
     item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, "云端地址") }
     item { Toggle("局域网直连", settings.lanConnectionEnabled) { onSettingsChange(settings.copy(lanConnectionEnabled = it)) } }
     item { Input(settings.lanHost, { onSettingsChange(settings.copy(lanHost = it)) }, "电脑 IP") }
@@ -872,6 +960,23 @@ internal fun ConnectionSettingsScreen(
     item { ActionButton("退出账号", null, true, onLogout, subtle = true) }
     item { BackButton(onBack) }
 }
+
+@Composable
+internal fun DeveloperSettingsScreen(
+    cloudConnectionEnabled: Boolean,
+    onCloudConnectionEnabledChange: (Boolean) -> Unit,
+    onReconnect: () -> Unit,
+    onBack: () -> Unit,
+) = WatchList(title = "开发者") {
+    item { Hint("关闭云端中转后只能依赖局域网直连；密码登录仍会临时使用云端完成认证。") }
+    if (shouldShowCloudConnectionToggle(developerSettings = true)) {
+        item { Toggle("云服务器", cloudConnectionEnabled, onCloudConnectionEnabledChange) }
+    }
+    item { ActionButton("应用并重连", Icons.Rounded.Wifi, true, onReconnect) }
+    item { BackButton(onBack) }
+}
+
+internal fun shouldShowCloudConnectionToggle(developerSettings: Boolean): Boolean = developerSettings
 
 @Composable
 internal fun NotificationSettingsScreen(
@@ -913,9 +1018,13 @@ private fun WatchList(
 
 @Composable
 private fun WatchSurface(content: @Composable BoxScope.(Dp) -> Unit) {
+    val isScreenRound = LocalConfiguration.current.isScreenRound
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-        val diameter = minOf(maxWidth, maxHeight)
-        Box(Modifier.size(diameter).clip(CircleShape).background(Color.Black), contentAlignment = Alignment.Center) { content(diameter) }
+        val layout = calculateWatchSurfaceLayout(maxWidth, maxHeight, isScreenRound)
+        val surfaceModifier = Modifier.size(layout.width, layout.height)
+            .then(if (layout.clipToCircle) Modifier.clip(CircleShape) else Modifier)
+            .background(Color.Black)
+        Box(surfaceModifier, contentAlignment = Alignment.Center) { content(layout.scale) }
     }
 }
 
@@ -1143,6 +1252,44 @@ internal fun currentLessonIndex(day: ScheduleDay?, value: String?): Int? {
     val (start, end) = parts
     return day.courses.firstOrNull { it.enabled && it.startTime == start && it.endTime == end }?.index
 }
+
+internal data class HomeCourseContent(
+    val subject: String,
+    val timeLayoutItem: String?,
+    val targetsNextLesson: Boolean,
+)
+
+/**
+ * 决定主页主课程按钮代表当前课还是下一节课。
+ * 下课/即将上课阶段没有正在进行的课程，因此按钮直接承载下一节课及其快速换课入口。
+ */
+internal fun homeCourseContent(snapshot: ClassStateSnapshot?): HomeCourseContent {
+    val targetsNextLesson = snapshot?.currentState in setOf(
+        Protocol.STATE_BREAKING,
+        Protocol.STATE_PREPARE_CLASS,
+    )
+    return if (targetsNextLesson) {
+        HomeCourseContent(
+            subject = snapshot?.nextClassSubject ?: "暂无下一节",
+            timeLayoutItem = snapshot?.nextClassTimeLayoutItem,
+            targetsNextLesson = true,
+        )
+    } else {
+        HomeCourseContent(
+            subject = snapshot?.currentSubject ?: "暂无课程",
+            timeLayoutItem = snapshot?.currentTimeLayoutItem,
+            targetsNextLesson = false,
+        )
+    }
+}
+
+/** 主按钮已经显示下一节课时，不再在页面底部重复显示“下一节课是”。 */
+internal fun shouldShowNextLessonSummary(currentState: Int?): Boolean =
+    currentState !in setOf(Protocol.STATE_BREAKING, Protocol.STATE_PREPARE_CLASS)
+
+/** 快速换课预选项必须与主页按钮当前显示的课程一致。 */
+internal fun homeQuickSwapLessonIndex(day: ScheduleDay?, snapshot: ClassStateSnapshot?): Int? =
+    currentLessonIndex(day, homeCourseContent(snapshot).timeLayoutItem)
 
 /** 只有具有明确起止时间的课程阶段才显示环状进度，避免放学等开放状态产生伪进度。 */
 internal fun shouldShowStateProgress(snapshot: ClassStateSnapshot?): Boolean =

@@ -27,6 +27,40 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
     }
 
     [Fact]
+    public async Task PluginConnection_ImmediatelyRequestsFreshSchedule()
+    {
+        using var plugin = await ConnectPluginAsync();
+
+        var request = await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeSchedulePull);
+
+        Assert.Equal(Protocol.Version, request.ProtocolVersion);
+    }
+
+    [Fact]
+    public async Task AuthenticatedWatchSchedulePull_IsForwardedWithoutScheduleManagementPermission()
+    {
+        using var plugin = await ConnectPluginAsync();
+        await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeSchedulePull);
+        var admin = await _factory.LoginAsync();
+        var create = await _factory.CreateClient().SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "schedule.reader",
+                DisplayName = "课表查看者",
+                Password = "Schedule-Reader-Password-2026",
+            }));
+        create.EnsureSuccessStatusCode();
+        using var watch = await ConnectWatchAsync("schedule.reader", "Schedule-Reader-Password-2026");
+
+        await SendAsync(watch, Envelope.SchedulePull());
+
+        await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeSchedulePull);
+    }
+
+    [Fact]
     public async Task PluginPushesCurrentStateAndSevenDaySchedule_AllWatchesReceiveBoth()
     {
         using var plugin = await ConnectPluginAsync();

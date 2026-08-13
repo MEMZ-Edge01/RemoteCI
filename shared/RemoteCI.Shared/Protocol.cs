@@ -7,6 +7,7 @@ public static class Protocol
 
     public const string MessageTypeStatePush = "state_push";
     public const string MessageTypeScheduleSync = "schedule_sync";
+    public const string MessageTypeSchedulePull = "schedule_pull";
     public const string MessageTypeEventNotify = "event_notify";
     public const string MessageTypeCommand = "command";
     public const string MessageTypeCommandResult = "command_result";

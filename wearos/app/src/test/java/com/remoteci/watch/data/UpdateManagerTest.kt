@@ -23,6 +23,13 @@ class UpdateManagerTest {
     }
 
     @Test
+    fun `compareVersions follows prerelease precedence`() {
+        assertTrue(UpdateManager.isNewer("0.4.0-beta.2", "0.4.0-beta.1"))
+        assertTrue(UpdateManager.isNewer("0.4.0", "0.4.0-beta.2"))
+        assertFalse(UpdateManager.isNewer("0.4.0-beta.2", "0.4.0"))
+    }
+
+    @Test
     fun `findApkAsset picks the watch apk only`() {
         val release = GitHubRelease(
             tagName = "v0.2.0",
@@ -89,6 +96,76 @@ class UpdateManagerTest {
         )
 
         assertEquals("v0.3.1", selected?.release?.tagName)
+    }
+
+    @Test
+    fun `stable channel excludes prereleases`() {
+        val selected = UpdateManager.selectCompatibleUpdate(
+            releases = listOf(
+                release("v0.4.0-beta.1", prerelease = true),
+                release("v0.3.1"),
+            ),
+            currentVersion = "0.3.0",
+            serverVersion = "0.4.0-beta.1",
+            channel = UpdateChannel.STABLE,
+            force = false,
+        )
+
+        assertEquals("v0.3.1", selected?.release?.tagName)
+    }
+
+    @Test
+    fun `beta channel includes prereleases`() {
+        val selected = UpdateManager.selectCompatibleUpdate(
+            releases = listOf(
+                release("v0.5.0-beta.1", prerelease = true, draft = true),
+                release("v0.4.0-beta.1", prerelease = true),
+                release("v0.3.1"),
+            ),
+            currentVersion = "0.3.0",
+            serverVersion = "0.4.0-beta.1",
+            channel = UpdateChannel.BETA,
+            force = false,
+        )
+
+        assertEquals("v0.4.0-beta.1", selected?.release?.tagName)
+    }
+
+    @Test
+    fun `force update allows same version but never downgrades`() {
+        val sameVersion = UpdateManager.selectCompatibleUpdate(
+            releases = listOf(release("v0.3.1")),
+            currentVersion = "0.3.1",
+            serverVersion = "0.3.1",
+            channel = UpdateChannel.STABLE,
+            force = true,
+        )
+        val downgrade = UpdateManager.selectCompatibleUpdate(
+            releases = listOf(release("v0.3.0")),
+            currentVersion = "0.3.1",
+            serverVersion = "0.3.1",
+            channel = UpdateChannel.STABLE,
+            force = true,
+        )
+
+        assertEquals("v0.3.1", sameVersion?.release?.tagName)
+        assertNull(downgrade)
+    }
+
+    @Test
+    fun `beta channel and force update still respect server ceiling`() {
+        val selected = UpdateManager.selectCompatibleUpdate(
+            releases = listOf(
+                release("v0.4.0"),
+                release("v0.4.0-beta.2", prerelease = true),
+            ),
+            currentVersion = "0.3.1",
+            serverVersion = "0.4.0-beta.2",
+            channel = UpdateChannel.BETA,
+            force = true,
+        )
+
+        assertEquals("v0.4.0-beta.2", selected?.release?.tagName)
     }
 
     private fun release(

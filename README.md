@@ -10,10 +10,10 @@ RemoteCI 是 ClassIsland 2.x、ASP.NET Core 服务端和 Wear OS 手表组成的
 - 权限：管理员固定拥有全部权限；普通用户默认只查看当前课程，可附加 `AccessWebUi`、`ManageUsers`、`SendNotifications`、`ManageSchedule`。
 - 同步：服务端是账号与权限唯一真源，通过插件 WebSocket 自动同步不含密码的授权镜像；镜像离线超过 24 小时后只允许课程展示。
 - 局域网：手表不发送密码或云端访问令牌，使用设备会话派生验证器完成一次性 HMAC 挑战认证。
-- 课表：状态按秒推送，七日课表单独低频同步；支持指定日期交换两节课或替换科目，并用修订号防止并发覆盖。
+- 课表：状态按秒推送，七日课表单独低频同步；插件每次接入云端时自动刷新，WebUI 和空课表手表页可主动拉取，WebUI 还可设置 15 分钟、1 小时、6 小时或每天的刷新周期；支持指定日期交换两节课或替换科目，并用修订号防止并发覆盖。
 - 通知：WebUI 或手表发送的消息先由 ClassIsland 正式通知提供方显示，成功后再广播给手表。
-- 手表：设备密钥由 Android Keystore AES-GCM 保护；普通用户界面只显示当前课程，五类消息可按设备单独开关；可在“设置 → 外观”切换 Material Design 3 配色方案。
-- 更新：Windows、Linux 与 Docker WebUI 可安全更新；fnOS 由应用商店管理；手表只会安装不高于所连接 WebUI 的版本；插件由 ClassIsland 插件市场管理。
+- 手表：设备密钥由 Android Keystore AES-GCM 保护；普通用户界面只显示当前课程，五类消息可按设备单独开关；可在“设置 → 外观”切换 Material Design 3 配色方案，并自动适配圆形与矩形屏幕；云端中转默认保持开启，关闭入口仅位于开发者设置，且密码登录始终可临时使用云端完成认证。
+- 更新：Windows、Linux 与 Docker WebUI 可安全更新，WebUI 与手表均可选择正式版/Beta 渠道并对同版本强制覆盖；服务端只替换实际程序集目录，Development 环境禁用在线覆盖；fnOS 由应用商店管理；手表仍只会安装不高于所连接 WebUI 的版本；插件由 ClassIsland 插件市场管理。
 
 不存在真实 ClassIsland 写入能力的“切换单双周”功能已经移除。
 
