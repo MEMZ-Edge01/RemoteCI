@@ -1,6 +1,7 @@
 name: Release
 
-# 推送 v* 标签时构建三端产物并发布 GitHub Release。
+# 推送 v* 标签时构建四端产物并发布 GitHub Release。
+# 产物：服务端压缩包、插件 CIPX、手表 APK、飞牛 fnOS 应用（.fpk）与 GHCR 多架构镜像。
 # 手表 APK 使用仓库 Secrets 中的签名密钥（ANDROID_KEYSTORE_B64 等）。
 
 on:
@@ -98,9 +99,58 @@ jobs:
           name: watch-apk
           path: RemoteCI.Watch-*.apk
 
+  build-fnos:
+    name: fnOS 应用 (镜像 + fpk)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: 提取版本号
+        id: meta
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 构建并推送多架构镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/RemoteCI.Server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/memz-edge01/remoteci:${{ steps.meta.outputs.version }}
+            ghcr.io/memz-edge01/remoteci:latest
+      - name: 确保 GHCR 镜像包公开
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 首次推送后镜像包默认为私有，fnOS 拉取需要公开可见；
+          # 若令牌无权修改可见性会失败，可在仓库 Settings -> Packages 中手动设为 Public。
+          gh api --method PATCH /user/packages/container/remoteci -f visibility=public || true
+      - name: 下载 fnpack 并打包 fpk
+        run: |
+          mkdir -p .tools
+          curl -fsSL -o .tools/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          chmod +x .tools/fnpack
+          REMOTECI_VERSION="${{ steps.meta.outputs.version }}" bash fnos/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fnos-fpk
+          path: artifacts/release/RemoteCI-*.fpk
+
   release:
     name: 创建 GitHub Release
-    needs: [build-server, build-plugin, build-wearos]
+    needs: [build-server, build-plugin, build-wearos, build-fnos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

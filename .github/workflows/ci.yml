@@ -39,3 +39,16 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleDebug :app:testDebugUnitTest --console=plain
+
+  fnos:
+    name: fnos fpk 打包检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 下载 fnpack 并打包 fpk
+        run: |
+          mkdir -p .tools
+          curl -fsSL -o .tools/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          chmod +x .tools/fnpack
+          # 用 0.0.0 做占位版本，只验证打包流程与包结构。
+          REMOTECI_VERSION=0.0.0 bash fnos/build.sh

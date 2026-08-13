@@ -43,6 +43,8 @@ Thumbs.db
 *.pid
 *.seed
 server/RemoteCI.Server/Data/*.db*
+# 直接以 dotnet 从仓库根目录运行服务端时产生的本地 SQLite 数据
+/data/
 *.pid.lock
 npm-debug.log*
 yarn-debug.log*

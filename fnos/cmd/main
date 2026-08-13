@@ -1,0 +1,31 @@
+#!/bin/bash
+# Docker 应用的启动/停止由飞牛 fnOS 应用中心接管，这里只负责状态上报。
+set -u
+
+# 必须与 docker-compose.yaml 中的 container_name 保持一致。
+CONTAINER_NAME="remoteci"
+
+is_running() {
+  docker inspect "$CONTAINER_NAME" 2>/dev/null | grep -q '"Status": "running"'
+}
+
+case "${1:-}" in
+  start)
+    # 应用中心会执行 docker compose up，无需额外处理。
+    exit 0
+    ;;
+  stop)
+    # 应用中心会执行 docker compose down，无需额外处理。
+    exit 0
+    ;;
+  status)
+    if is_running; then
+      exit 0
+    fi
+    exit 3
+    ;;
+  *)
+    echo "Unknown command: ${1:-}" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+    exit 1
+    ;;
+esac

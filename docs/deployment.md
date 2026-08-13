@@ -82,6 +82,19 @@ docker compose start remoteci
 注意：直接以 `dotnet` 在 Windows 上运行服务端时，运行中的程序集会被锁定，
 热更新可能失败，建议使用 Docker 部署。
 
+#### 7.1.1 飞牛 fnOS 环境
+
+飞牛 fnOS 安装包（`RemoteCI-<版本>.fpk`）部署时，容器通过环境变量
+`REMOTECI_RUNTIME=fnos` 识别运行环境，“系统更新”面板切换为 fpk 下载模式：
+
+1. 检查更新逻辑不变，从 GitHub 最新 release 读取版本与更新说明。
+2. 点击更新后，服务端自动下载新版本 `RemoteCI-<版本>.fpk` 到数据卷
+   （`/var/apps/remoteci/var/data/updates`），并提供“保存到本机”下载链接。
+3. 在飞牛应用中心选择该 fpk 手动安装，应用中心会自动拉取新版本镜像并重建容器。
+
+fnOS 目前没有开放容器内应用自我安装的接口，因此最后一步需要用户在应用中心确认。
+fpk 工程的构建与发布流程见 [fnos/README.md](../fnos/README.md)。
+
 ### 7.2 插件更新
 
 插件不做内置更新界面，升级统一交给 ClassIsland 的插件市场管理：每个 GitHub

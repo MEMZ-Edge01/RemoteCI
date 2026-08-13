@@ -60,4 +60,46 @@ public sealed class UpdateServiceTests
 
         Assert.Null(service.SelectServerAsset(release));
     }
+
+    [Fact]
+    public void SelectFnosAsset_PicksVersionedFpk()
+    {
+        var service = new UpdateService();
+        var release = new ReleaseInfo(
+            "v0.3.0",
+            "RemoteCI 0.3.0",
+            "",
+            new[]
+            {
+                new ReleaseAsset("RemoteCI.Watch-0.3.0.apk", "https://example/watch.apk", 1),
+                new ReleaseAsset("RemoteCI-0.3.0.fpk", "https://example/remoteci.fpk", 1),
+                new ReleaseAsset("RemoteCI-0.2.0.fpk", "https://example/old.fpk", 1),
+            });
+
+        var asset = service.SelectFnosAsset(release);
+
+        Assert.NotNull(asset);
+        Assert.Equal("RemoteCI-0.3.0.fpk", asset.Name);
+    }
+
+    [Fact]
+    public void SelectFnosAsset_ReturnsNullWhenFpkMissing()
+    {
+        var service = new UpdateService();
+        var release = new ReleaseInfo(
+            "v0.3.0",
+            "RemoteCI 0.3.0",
+            "",
+            new[] { new ReleaseAsset("RemoteCI.Server-0.3.0-linux-x64.zip", "https://example/linux.zip", 1) });
+
+        Assert.Null(service.SelectFnosAsset(release));
+    }
+
+    [Fact]
+    public void GetUpdatesRoot_LivesNextToDatabase()
+    {
+        var root = UpdateService.GetUpdatesRoot("C:/data/remoteci.db", "C:/app");
+
+        Assert.Equal(Path.Combine("C:", "data", "updates"), root);
+    }
 }

@@ -29,11 +29,18 @@ public sealed class AccountModel(
     public ReleaseAsset? ServerAsset { get; private set; }
     public string? CheckMessage { get; private set; }
     public bool UpdateSucceeded { get; private set; }
+    public bool IsFnos => UpdateService.IsFnosRuntime;
+    public string? DownloadedFpk { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
         if (await RequireAsync() is { } denied) return denied;
         Sessions = await identities.ListSessionsAsync(CurrentUser.Id, null, ct);
+        if (IsFnos)
+        {
+            // 刷新页面后仍展示已下载的 fpk（取 updates 目录中最新一个）。
+            DownloadedFpk = await FindLatestDownloadedFpkAsync(ct);
+        }
         return Page();
     }
 
@@ -93,7 +100,9 @@ public sealed class AccountModel(
             }
             else
             {
-                ServerAsset = updates.SelectServerAsset(LatestRelease);
+                ServerAsset = IsFnos
+                    ? updates.SelectFnosAsset(LatestRelease)
+                    : updates.SelectServerAsset(LatestRelease);
                 CheckMessage = UpdateService.IsNewer(
                     UpdateService.NormalizeVersion(LatestRelease.Tag), CurrentVersion)
                     ? "发现新版本，可下载更新。"
@@ -115,8 +124,6 @@ public sealed class AccountModel(
         {
             LatestRelease = await updates.FetchLatestReleaseAsync(ct)
                 ?? throw new InvalidOperationException("仓库暂无 release，无法更新。");
-            ServerAsset = updates.SelectServerAsset(LatestRelease)
-                ?? throw new InvalidOperationException("未找到当前平台的更新包，请到 GitHub 手动下载。");
             var latestVersion = UpdateService.NormalizeVersion(LatestRelease.Tag);
             if (!UpdateService.IsNewer(latestVersion, CurrentVersion))
                 throw new InvalidOperationException("已是最新版本，无需更新。");
@@ -124,6 +131,20 @@ public sealed class AccountModel(
             var databasePath = Path.IsPathRooted(serverOptions.Value.DatabasePath)
                 ? serverOptions.Value.DatabasePath
                 : Path.Combine(environment.ContentRootPath, serverOptions.Value.DatabasePath);
+
+            if (IsFnos)
+            {
+                ServerAsset = updates.SelectFnosAsset(LatestRelease)
+                    ?? throw new InvalidOperationException("未找到 fnOS 安装包（fpk），请到 GitHub 手动下载。");
+                DownloadedFpk = await updates.DownloadFnosFpkAsync(
+                    LatestRelease, ServerAsset, databasePath, environment.ContentRootPath, ct);
+                CheckMessage = "最新版 fpk 安装包已下载到数据卷，请在飞牛应用中心选择“手动安装”该安装包完成升级；"
+                    + "应用中心会自动拉取新镜像并重建容器。";
+                return Page();
+            }
+
+            ServerAsset = updates.SelectServerAsset(LatestRelease)
+                ?? throw new InvalidOperationException("未找到当前平台的更新包，请到 GitHub 手动下载。");
             await updates.ApplyUpdateAsync(
                 LatestRelease, ServerAsset, databasePath, environment.ContentRootPath, ct);
 
@@ -141,6 +162,42 @@ public sealed class AccountModel(
             CheckMessage = "更新失败：" + ex.Message;
         }
         return Page();
+    }
+
+    /// <summary>把已下载的 fnOS 安装包回传给浏览器（仅管理员，且文件名限定在 updates 目录内）。</summary>
+    public async Task<IActionResult> OnGetDownloadFpkAsync(string file, CancellationToken ct)
+    {
+        if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        var databasePath = Path.IsPathRooted(serverOptions.Value.DatabasePath)
+            ? serverOptions.Value.DatabasePath
+            : Path.Combine(environment.ContentRootPath, serverOptions.Value.DatabasePath);
+        var updatesRoot = UpdateService.GetUpdatesRoot(databasePath, environment.ContentRootPath);
+        var safeName = Path.GetFileName(file);
+        var target = Path.Combine(updatesRoot, safeName);
+        if (!System.IO.File.Exists(target))
+        {
+            return NotFound();
+        }
+
+        var stream = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return File(stream, "application/octet-stream", safeName);
+    }
+
+    private async Task<string?> FindLatestDownloadedFpkAsync(CancellationToken ct)
+    {
+        var databasePath = Path.IsPathRooted(serverOptions.Value.DatabasePath)
+            ? serverOptions.Value.DatabasePath
+            : Path.Combine(environment.ContentRootPath, serverOptions.Value.DatabasePath);
+        var updatesRoot = UpdateService.GetUpdatesRoot(databasePath, environment.ContentRootPath);
+        if (!System.IO.Directory.Exists(updatesRoot))
+        {
+            return null;
+        }
+
+        return await Task.Run(() => System.IO.Directory
+            .EnumerateFiles(updatesRoot, "*.fpk")
+            .OrderByDescending(path => System.IO.File.GetLastWriteTimeUtc(path))
+            .FirstOrDefault(), ct);
     }
 
     public sealed class PasswordInput

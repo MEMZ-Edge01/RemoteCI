@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "remoteci.main": {
+      "title": "RemoteCI",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "${remoteci_web_port}",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}
