@@ -108,9 +108,19 @@ jobs:
           mkdir previous-watch
           gh release download --repo "$GITHUB_REPOSITORY" --pattern 'RemoteCI.Watch-*.apk' --dir previous-watch
           previous_apk="$(find previous-watch -type f -name 'RemoteCI.Watch-*.apk' | head -n 1)"
-          previous_digest="$("$apksigner" verify --print-certs "$previous_apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-          current_digest="$("$apksigner" verify --print-certs "RemoteCI.Watch-${version}.apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)"
-          test -n "$previous_digest" && test "$current_digest" = "$previous_digest"
+          certificate_digest() {
+            "$apksigner" verify --print-certs "$1" \
+              | sed -n 's/^.*certificate SHA-256 digest: //p' \
+              | head -n 1
+          }
+          previous_digest="$(certificate_digest "$previous_apk")"
+          current_digest="$(certificate_digest "RemoteCI.Watch-${version}.apk")"
+          test -n "$previous_digest" || { echo "::error::无法读取上一正式版 APK 的签名证书摘要"; exit 1; }
+          test -n "$current_digest" || { echo "::error::无法读取当前 APK 的签名证书摘要"; exit 1; }
+          test "$current_digest" = "$previous_digest" || {
+            echo "::error::当前 APK 与上一正式版签名证书不一致，拒绝发布"
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: watch-apk
