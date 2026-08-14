@@ -322,6 +322,36 @@ public sealed class UpdateServiceTests
     }
 
     [Fact]
+    public async Task ApplyFilesAsync_SuccessCleansStaleRuntimesPayload()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source");
+        var destination = Path.Combine(root, "destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        try
+        {
+            var sourceNative = Path.Combine(source, "runtimes", "win-x64", "native");
+            Directory.CreateDirectory(sourceNative);
+            await File.WriteAllTextAsync(Path.Combine(sourceNative, "e_sqlite3.dll"), "new-native");
+
+            var targetNative = Path.Combine(destination, "runtimes", "win-x64", "native");
+            Directory.CreateDirectory(targetNative);
+            await File.WriteAllTextAsync(Path.Combine(targetNative, "e_sqlite3.dll"), "old-native");
+            await File.WriteAllTextAsync(Path.Combine(targetNative, "legacy-native.dll"), "stale-native");
+
+            await UpdateInstaller.ApplyFilesAsync(source, destination, CancellationToken.None);
+
+            Assert.Equal("new-native", await File.ReadAllTextAsync(Path.Combine(targetNative, "e_sqlite3.dll")));
+            Assert.False(File.Exists(Path.Combine(targetNative, "legacy-native.dll")), "runtimes 中源已不存在的旧原生库应被清理");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WaitForStartupMarkerAsync_SucceedsWhenMarkerAppearsAndCleansUp()
     {
         var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));

@@ -265,8 +265,9 @@ public static class UpdateInstaller
         [".dll", ".pdb", ".exe", ".deps.json", ".runtimeconfig.json", ".staticwebassets.endpoints.json", ".xml", ".txt"];
 
     /// <summary>
-    /// 保守清理：只删除目标目录根部的平面文件（扩展名在运行时产物白名单内且源中已不存在）；
-    /// 子目录（data/、keys/、updates/、wwwroot/、runtimes/ 等）一律不动，配置文件永远保留。
+    /// 保守清理：删除目标目录根部的平面文件（扩展名在运行时产物白名单内且源中已不存在），
+    /// 以及 runtimes/ 子目录中源里已不存在的文件（纯 NuGet 运行时载荷，旧原生库可能带漏洞）。
+    /// 其余子目录（data/、keys/、updates/、wwwroot/ 等）一律不动，配置文件永远保留。
     /// </summary>
     internal static void CleanStaleRuntimeFiles(string source, string destination)
     {
@@ -283,10 +284,29 @@ public static class UpdateInstaller
                         name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))) continue;
                 File.Delete(target);
             }
+
+            CleanStaleRuntimesPayload(source, destination);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // 清理失败不影响更新流程。
+        }
+    }
+
+    private static void CleanStaleRuntimesPayload(string source, string destination)
+    {
+        var sourceRuntimes = Path.Combine(source, "runtimes");
+        var targetRuntimes = Path.Combine(destination, "runtimes");
+        if (!Directory.Exists(sourceRuntimes) || !Directory.Exists(targetRuntimes)) return;
+        var sourceRuntimeFiles = new HashSet<string>(
+            Directory.EnumerateFiles(sourceRuntimes, "*", SearchOption.AllDirectories)
+                .Select(file => Path.GetRelativePath(sourceRuntimes, file)),
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var target in Directory.EnumerateFiles(targetRuntimes, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(targetRuntimes, target);
+            if (sourceRuntimeFiles.Contains(relative)) continue;
+            File.Delete(target);
         }
     }
 
