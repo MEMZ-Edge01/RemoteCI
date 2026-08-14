@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using RemoteCI.Server.Data;
 using RemoteCI.Server.Services;
 using RemoteCI.Shared;
@@ -722,6 +723,79 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
             new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(pluginToken)}"),
             CancellationToken.None));
         Assert.Contains("401", connectError.Message);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_PluginCredentialsVisibleToAdminAndRevocable()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "credential-ui.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
+        var client = factory.CreateClient();
+        await factory.GetPluginTokenAsync(); // 制造一条插件凭证（名称“ClassIsland 插件”）。
+
+        using var browser = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+        });
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+
+        var overview = await browser.GetStringAsync("/");
+        Assert.Contains("插件凭据", WebUtility.HtmlDecode(overview));
+        Assert.Contains("ClassIsland 插件", WebUtility.HtmlDecode(overview));
+        Assert.Contains("最近活跃", WebUtility.HtmlDecode(overview));
+
+        Guid credentialId;
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var database = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            credentialId = (await database.PluginCredentials.SingleAsync()).Id;
+        }
+        var revoke = await PostRazorFormAsync(browser, $"/?handler=RevokeCredential&id={credentialId}", overview);
+        Assert.Equal(HttpStatusCode.Redirect, revoke.StatusCode);
+
+        var afterHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/"));
+        Assert.Contains("已吊销", afterHtml);
+
+        // 普通用户看不到该节。
+        var admin = await factory.LoginAsync();
+        var create = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "view.only",
+                DisplayName = "只读用户",
+                Password = "View-Only-Password-2026",
+                GrantedPermissions = UserPermissions.AccessWebUi,
+            }));
+        create.EnsureSuccessStatusCode();
+        using var userBrowser = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+        });
+        await LoginWebUiAsync(userBrowser, "view.only", "View-Only-Password-2026");
+        var userHtml = WebUtility.HtmlDecode(await userBrowser.GetStringAsync("/"));
+        Assert.DoesNotContain("插件凭据", userHtml);
+    }
+
+    [Fact]
+    public async Task BootstrapWithSecretLoggingDisabled_StillBootsAndBindsOption()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "quiet-bootstrap.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath, new Dictionary<string, string?>
+        {
+            ["Server:LogBootstrapSecrets"] = "false",
+        });
+
+        var options = factory.Services.GetRequiredService<IOptions<ServerOptions>>().Value;
+        Assert.False(options.LogBootstrapSecrets);
+
+        // 关闭日志输出后初始管理员照常创建、可登录（行为不受开关影响）。
+        var admin = await factory.LoginAsync();
+        Assert.True(admin.AccessToken.Length > 0);
     }
 
     private HttpClient CreateBrowserClient() => _factory.CreateClient(new WebApplicationFactoryClientOptions

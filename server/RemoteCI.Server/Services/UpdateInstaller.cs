@@ -273,7 +273,7 @@ public static class UpdateInstaller
         try
         {
             var sourceFiles = new HashSet<string>(
-                Directory.EnumerateFiles(source).Select(Path.GetFileName), StringComparer.OrdinalIgnoreCase);
+                Directory.EnumerateFiles(source).Select(file => Path.GetFileName(file)!), StringComparer.OrdinalIgnoreCase);
             foreach (var target in Directory.EnumerateFiles(destination))
             {
                 var name = Path.GetFileName(target);

@@ -13,4 +13,11 @@ public sealed class ServerOptions
 
     /// <summary>认证端点（登录/刷新/插件配对）每个来源 IP 每分钟的请求上限。</summary>
     public int AuthRateLimitPerMinute { get; set; } = 20;
+
+    /// <summary>
+    /// 首次启动自动生成管理员密码/插件配对码时是否写入日志。
+    /// 默认开启（容器无环境变量部署时这是唯一获取途径）；日志会被集中收集的生产环境建议关闭，
+    /// 改用 REMOTECI_ADMIN_PASSWORD / REMOTECI_PLUGIN_PAIR_CODE 环境变量。
+    /// </summary>
+    public bool LogBootstrapSecrets { get; set; } = true;
 }

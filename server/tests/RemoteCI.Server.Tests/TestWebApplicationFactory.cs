@@ -14,32 +14,47 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
     private readonly SemaphoreSlim _pluginGate = new(1, 1);
     private string? _pluginToken;
 
-    public TestWebApplicationFactory() : this(null) { }
+    public TestWebApplicationFactory() : this(null, null) { }
 
-    private TestWebApplicationFactory(string? databasePath)
+    private TestWebApplicationFactory(
+        string? databasePath,
+        IReadOnlyDictionary<string, string?>? extraConfiguration)
     {
         DatabasePath = databasePath ?? Path.Combine(
             Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "remoteci.db");
+        ExtraConfiguration = extraConfiguration;
     }
 
     public string DatabasePath { get; }
+    private IReadOnlyDictionary<string, string?>? ExtraConfiguration { get; }
 
-    public static TestWebApplicationFactory ForDatabase(string databasePath) => new(databasePath);
+    public static TestWebApplicationFactory ForDatabase(
+        string databasePath,
+        IReadOnlyDictionary<string, string?>? extraConfiguration = null) =>
+        new(databasePath, extraConfiguration);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
-        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
+        builder.ConfigureAppConfiguration((_, config) =>
         {
-            ["Server:DatabasePath"] = DatabasePath,
-            ["Server:BootstrapAdminUsername"] = AdminUsername,
-            ["Server:BootstrapAdminPassword"] = AdminPassword,
-            ["Server:BootstrapPluginPairCode"] = TestPairCode,
-            ["Server:AccessTokenTtl"] = "01:00:00",
-            ["Server:DeviceSessionTtl"] = "30.00:00:00",
-            // 集成测试会高频调用登录端点，放开限流避免 429 干扰断言；锁定逻辑由专门测试覆盖。
-            ["Server:AuthRateLimitPerMinute"] = "100000",
-        }));
+            var values = new Dictionary<string, string?>
+            {
+                ["Server:DatabasePath"] = DatabasePath,
+                ["Server:BootstrapAdminUsername"] = AdminUsername,
+                ["Server:BootstrapAdminPassword"] = AdminPassword,
+                ["Server:BootstrapPluginPairCode"] = TestPairCode,
+                ["Server:AccessTokenTtl"] = "01:00:00",
+                ["Server:DeviceSessionTtl"] = "30.00:00:00",
+                // 集成测试会高频调用登录端点，放开限流避免 429 干扰断言；锁定逻辑由专门测试覆盖。
+                ["Server:AuthRateLimitPerMinute"] = "100000",
+            };
+            // 允许测试覆盖额外选项（如 LogBootstrapSecrets）。
+            if (ExtraConfiguration is not null)
+                foreach (var (key, value) in ExtraConfiguration)
+                    values[key] = value;
+            config.AddInMemoryCollection(values);
+        });
     }
 
     public async Task<AuthResponse> LoginAsync(string username = AdminUsername, string password = AdminPassword)

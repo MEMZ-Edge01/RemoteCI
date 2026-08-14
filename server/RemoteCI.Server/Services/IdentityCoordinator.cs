@@ -63,10 +63,15 @@ public sealed partial class IdentityCoordinator(
             };
             admin.Version = await NextVersionAsync(ct);
             EnsureIdentitySucceeded(await users.CreateAsync(admin, password));
-            if (generatedPassword)
+            if (generatedPassword && _options.LogBootstrapSecrets)
             {
                 logger.LogWarning("首次启动已创建管理员 {Username}，一次性初始密码：{Password}。请立即登录并修改密码。",
                     admin.UserName, password);
+            }
+            else if (generatedPassword)
+            {
+                logger.LogWarning("首次启动已创建管理员 {Username}，一次性初始密码按配置不写入日志。",
+                    admin.UserName);
             }
             else
             {
@@ -82,8 +87,10 @@ public sealed partial class IdentityCoordinator(
             var generatedCode = configuredCode is null;
             var code = configuredCode ?? CreateReadableSecret(12);
             await AddPairingCodeAsync(code, ct);
-            if (generatedCode)
+            if (generatedCode && _options.LogBootstrapSecrets)
                 logger.LogWarning("首次启动插件一次性配对码：{PairCode}。该码使用后立即失效。", code);
+            else if (generatedCode)
+                logger.LogWarning("首次启动插件一次性配对码已生成，按配置不写入日志。");
             else
                 logger.LogInformation("首次启动已使用外部配置初始化插件一次性配对码。");
         }
