@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using ClassIsland.Core.Abstractions.Services;
 using ClassIsland.Shared.Enums;
 using ClassIsland.Shared.Models.Profile;
 using Microsoft.Extensions.Logging;
@@ -11,7 +10,7 @@ namespace RemoteCI.Plugin.Services;
 /// <summary>高频当前状态与低频七日课表分流收集器。</summary>
 public sealed class StateCollector
 {
-    private readonly ILessonsService _lessons;
+    private readonly IStateSource _stateSource;
     private readonly ScheduleCatalog _schedules;
     private readonly ClassIslandHostControlService _hostControl;
     private readonly ILogger<StateCollector> _logger;
@@ -20,12 +19,12 @@ public sealed class StateCollector
     private string? _lastScheduleSignature;
 
     public StateCollector(
-        ILessonsService lessons,
+        IStateSource stateSource,
         ScheduleCatalog schedules,
         ClassIslandHostControlService hostControl,
         ILogger<StateCollector> logger)
     {
-        _lessons = lessons;
+        _stateSource = stateSource;
         _schedules = schedules;
         _hostControl = hostControl;
         _logger = logger;
@@ -37,11 +36,11 @@ public sealed class StateCollector
 
     public void Start()
     {
-        _lessons.OnClass += LessonsOnOnClass;
-        _lessons.OnBreakingTime += LessonsOnOnBreakingTime;
-        _lessons.OnAfterSchool += LessonsOnOnAfterSchool;
-        _lessons.CurrentTimeStateChanged += LessonsOnCurrentTimeStateChanged;
-        _lessons.PostMainTimerTicked += LessonsOnPostMainTimerTicked;
+        _stateSource.OnClass += LessonsOnOnClass;
+        _stateSource.OnBreakingTime += LessonsOnOnBreakingTime;
+        _stateSource.OnAfterSchool += LessonsOnOnAfterSchool;
+        _stateSource.CurrentTimeStateChanged += LessonsOnCurrentTimeStateChanged;
+        _stateSource.PostMainTimerTicked += LessonsOnPostMainTimerTicked;
         PushSnapshot();
         PushSchedule(force: true);
         _logger.LogInformation("RemoteCI v2 状态与七日课表收集已启动");
@@ -49,34 +48,34 @@ public sealed class StateCollector
 
     public void Stop()
     {
-        _lessons.OnClass -= LessonsOnOnClass;
-        _lessons.OnBreakingTime -= LessonsOnOnBreakingTime;
-        _lessons.OnAfterSchool -= LessonsOnOnAfterSchool;
-        _lessons.CurrentTimeStateChanged -= LessonsOnCurrentTimeStateChanged;
-        _lessons.PostMainTimerTicked -= LessonsOnPostMainTimerTicked;
+        _stateSource.OnClass -= LessonsOnOnClass;
+        _stateSource.OnBreakingTime -= LessonsOnOnBreakingTime;
+        _stateSource.OnAfterSchool -= LessonsOnOnAfterSchool;
+        _stateSource.CurrentTimeStateChanged -= LessonsOnCurrentTimeStateChanged;
+        _stateSource.PostMainTimerTicked -= LessonsOnPostMainTimerTicked;
     }
 
     public ClassStateSnapshot BuildSnapshot()
     {
-        var currentSubject = SubjectName(_lessons.CurrentSubject);
-        var nextSubject = SubjectName(_lessons.NextClassSubject);
+        var currentSubject = SubjectName(_stateSource.CurrentSubject);
+        var nextSubject = SubjectName(_stateSource.NextClassSubject);
         var hasVolume = _hostControl.TryGetVolumeState(out var volumePercent, out var isMuted);
         return new ClassStateSnapshot
         {
             ScheduleDate = DateTime.Today.ToString("yyyy-MM-dd"),
             CurrentSubject = currentSubject,
             NextClassSubject = nextSubject,
-            CurrentState = MapState(_lessons.CurrentState),
-            CurrentTimeLayoutItem = FormatTimeLayoutItem(_lessons.CurrentTimeLayoutItem, currentSubject),
+            CurrentState = MapState(_stateSource.CurrentState),
+            CurrentTimeLayoutItem = FormatTimeLayoutItem(_stateSource.CurrentTimeLayoutItem, currentSubject),
             // 随快照带上插件本地时区偏移，手表端据此对齐时间，避免两端时区不一致时进度环为空。
             TimeZoneOffsetMinutes = (int)TimeZoneInfo.Local.GetUtcOffset(DateTimeOffset.UtcNow).TotalMinutes,
-            NextClassTimeLayoutItem = FormatTimeLayoutItem(_lessons.NextClassTimeLayoutItem, nextSubject),
-            ClassPlanName = _lessons.CurrentClassPlan?.Name,
-            IsClassPlanEnabled = _lessons.IsClassPlanEnabled,
-            IsClassPlanLoaded = _lessons.IsClassPlanLoaded,
-            OnClassLeftTime = _lessons.OnClassLeftTime,
-            OnBreakingLeftTime = _lessons.OnBreakingTimeLeftTime,
-            LessonConfirmed = _lessons.IsLessonConfirmed,
+            NextClassTimeLayoutItem = FormatTimeLayoutItem(_stateSource.NextClassTimeLayoutItem, nextSubject),
+            ClassPlanName = _stateSource.CurrentClassPlan?.Name,
+            IsClassPlanEnabled = _stateSource.IsClassPlanEnabled,
+            IsClassPlanLoaded = _stateSource.IsClassPlanLoaded,
+            OnClassLeftTime = _stateSource.OnClassLeftTime,
+            OnBreakingLeftTime = _stateSource.OnBreakingTimeLeftTime,
+            LessonConfirmed = _stateSource.IsLessonConfirmed,
             IsNotificationPlaying = _hostControl.IsNotificationPlaying,
             IsMainMenuVisible = _hostControl.IsMainMenuVisible,
             IsSleepAvailable = _hostControl.IsSleepAvailable,
@@ -150,7 +149,7 @@ public sealed class StateCollector
     }
 
     private void LessonsOnOnClass(object? sender, EventArgs e) =>
-        PushEvent(ClassEventKind.OnClass, SubjectName(_lessons.CurrentSubject), $"上课了：{SubjectName(_lessons.CurrentSubject)}");
+        PushEvent(ClassEventKind.OnClass, SubjectName(_stateSource.CurrentSubject), $"上课了：{SubjectName(_stateSource.CurrentSubject)}");
 
     private void LessonsOnOnBreakingTime(object? sender, EventArgs e) =>
         PushEvent(ClassEventKind.OnBreaking, null, "下课休息");

@@ -52,6 +52,7 @@ public class Plugin : PluginBase
         // 课表读取防腐层:隔离 ClassIsland 服务接口(含 internal 成员),使核心逻辑可单元测试。
         services.AddSingleton<IScheduleBackend, ScheduleBackendAdapter>();
         services.AddSingleton<IProfileWriteOperations, ProfileWriteAdapter>();
+        services.AddSingleton<IStateSource, StateSourceAdapter>();
         services.AddSingleton<ScheduleCatalog>();
         services.AddSingleton<ClassIslandHostControlService>();
         services.AddSingleton<CommandHandler>();

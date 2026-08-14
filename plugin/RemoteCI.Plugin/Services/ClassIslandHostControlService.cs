@@ -14,13 +14,13 @@ namespace RemoteCI.Plugin.Services;
 /// ClassIsland 2.x 尚未为插件公开清除提醒和主界面显隐的写接口，相关兼容访问只保留在此处。
 /// </summary>
 public sealed class ClassIslandHostControlService(
-    INotificationHostService notificationHost,
-    IServiceProvider services,
+    INotificationHostService? notificationHost,
+    IServiceProvider? services,
     ILogger<ClassIslandHostControlService> logger)
 {
     private static CancellationTokenSource? _pendingPowerAction;
 
-    public bool IsNotificationPlaying => notificationHost.IsNotificationsPlaying;
+    public bool IsNotificationPlaying => notificationHost?.IsNotificationsPlaying ?? false;
 
     public bool IsMainMenuVisible => TryGetMainMenuVisibility(out var visible) ? visible : true;
 
@@ -65,6 +65,8 @@ public sealed class ClassIslandHostControlService(
 
     public async Task ClearNotificationsAsync()
     {
+        if (notificationHost is null)
+            throw new NotSupportedException("当前 ClassIsland 版本不支持由插件清除提醒");
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             var method = notificationHost.GetType().GetMethod(
@@ -153,7 +155,7 @@ public sealed class ClassIslandHostControlService(
         var serviceType = AppDomain.CurrentDomain.GetAssemblies()
             .Select(x => x.GetType("ClassIsland.Services.SettingsService", throwOnError: false))
             .FirstOrDefault(x => x is not null);
-        if (serviceType is null || services.GetService(serviceType) is not { } settingsService) return false;
+        if (serviceType is null || services?.GetService(serviceType) is not { } settingsService) return false;
         settings = serviceType.GetProperty("Settings", BindingFlags.Instance | BindingFlags.Public)?.GetValue(settingsService)!;
         if (settings is null) return false;
         visibilityProperty = settings.GetType().GetProperty("IsMainWindowVisible", BindingFlags.Instance | BindingFlags.Public)!;
