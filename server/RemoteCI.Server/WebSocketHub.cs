@@ -39,9 +39,9 @@ public static class WebSocketHub
 
         if (principal.IsPlugin)
         {
-            // 本版本按“单教室单插件”设计：命令会广播给所有在线插件并以首个回执为准。
+            // 本版本按“单教室单插件”设计：命令与拉取请求只投递给最早接入的插件，授权镜像仍广播给全部插件。
             if (registry.PluginCount > 1)
-                logger.LogWarning("检测到 {Count} 个插件同时在线，命令将广播给全部插件并以首个回执为准，请确认是否为预期部署", registry.PluginCount);
+                logger.LogWarning("检测到 {Count} 个插件同时在线，命令将只投递给最早接入的插件，请确认是否为预期部署", registry.PluginCount);
             await registry.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(context.RequestAborted), context.RequestAborted);
             // 插件自身的启动推送可能早于云端连接完成；认证后主动拉取可消除这段竞态窗口。
             await registry.RequestSchedulePullAsync(context.RequestAborted);

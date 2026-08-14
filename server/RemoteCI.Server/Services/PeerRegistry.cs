@@ -107,7 +107,8 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         }
     }
 
-    public async Task<bool> SendToPluginAsync(Envelope envelope, CancellationToken ct = default)
+    /// <summary>广播给全部插件（幂等内容：授权镜像同步）。失效连接顺带清理。</summary>
+    public async Task<bool> BroadcastToPluginsAsync(Envelope envelope, CancellationToken ct = default)
     {
         var sent = false;
         foreach (var peer in _pluginPeers.Values)
@@ -124,8 +125,23 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         return sent;
     }
 
+    /// <summary>
+    /// 命令与只读请求只投递给一个插件：多插件在线时选择最早接入（最小连接 Id）的健康插件，
+    /// 避免同一命令被多个 ClassIsland 实例重复执行（换课/关机/通知各执行一次以上）。
+    /// </summary>
+    public async Task<bool> SendToPluginAsync(Envelope envelope, CancellationToken ct = default)
+    {
+        foreach (var peer in _pluginPeers.Values.OrderBy(x => x.Id))
+        {
+            if (await RefreshAsync(peer, ct) is not null && await TrySendAsync(peer, envelope, ct))
+                return true;
+            await UnregisterAsync(peer.Id, WebSocketCloseStatus.PolicyViolation);
+        }
+        return false;
+    }
+
     public Task<bool> SendAccountSyncToPluginsAsync(AccountSync sync, CancellationToken ct = default) =>
-        SendToPluginAsync(Envelope.AccountSync(sync), ct);
+        BroadcastToPluginsAsync(Envelope.AccountSync(sync), ct);
 
     /// <summary>请求所有在线插件立即重新生成课表；返回是否至少成功发送给一个插件。</summary>
     public Task<bool> RequestSchedulePullAsync(CancellationToken ct = default) =>

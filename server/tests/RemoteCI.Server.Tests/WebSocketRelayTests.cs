@@ -37,6 +37,26 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
     }
 
     [Fact]
+    public async Task RequestIsDeliveredToOnlyOnePluginWhenMultipleConnected()
+    {
+        using var pluginA = await ConnectPluginAsync();
+        await ReceiveEnvelopeAsync(pluginA, Protocol.MessageTypeSchedulePull); // 连接后的初始拉取。
+        using var pluginB = await ConnectPluginAsync();
+        await ReceiveEnvelopeAsync(pluginB, Protocol.MessageTypeSchedulePull);
+        using var watch = await ConnectWatchAsync();
+
+        await SendAsync(watch, Envelope.SchedulePull());
+
+        // 最早接入的插件 A 收到请求；插件 B 在接收超时内不应收到（避免多插件重复执行）。
+        var receiveA = ReceiveEnvelopeAsync(pluginA, Protocol.MessageTypeSchedulePull);
+        var receiveB = ReceiveEnvelopeAsync(pluginB, Protocol.MessageTypeSchedulePull);
+        var winner = await Task.WhenAny(receiveA, receiveB);
+        Assert.Equal(Protocol.MessageTypeSchedulePull, (await winner).Type);
+        var loser = ReferenceEquals(winner, receiveA) ? receiveB : receiveA;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await loser);
+    }
+
+    [Fact]
     public async Task AuthenticatedWatchSchedulePull_IsForwardedWithoutScheduleManagementPermission()
     {
         using var plugin = await ConnectPluginAsync();
