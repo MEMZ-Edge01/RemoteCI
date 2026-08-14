@@ -261,12 +261,14 @@ public sealed class CloudClient : IDisposable
 
     public void Dispose()
     {
+        // 只停止与取消，不销毁仍在被 RunLoop/在途发送引用的对象：
+        // 在 Avalonia UI 线程上同步等待循环退出会因同步上下文死锁，
+        // 销毁 _sendLock/_cts 则会让并发发送与退避等待抛 ObjectDisposedException。
+        // 句柄由 GC 终结器回收；插件停止频率极低，无实际资源累积。
         _running = false;
         _cts?.Cancel();
         DisposeSocket();
         _http.Dispose();
-        _sendLock.Dispose();
-        _cts?.Dispose();
     }
 
     private sealed class PluginAuthenticationException : Exception;

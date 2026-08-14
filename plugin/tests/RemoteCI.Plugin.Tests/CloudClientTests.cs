@@ -2,6 +2,7 @@ using System.Net.WebSockets;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteCI.Plugin.Services;
 using RemoteCI.Plugin.Settings;
+using RemoteCI.Shared.Models;
 using Xunit;
 
 namespace RemoteCI.Plugin.Tests;
@@ -18,6 +19,7 @@ public sealed class CloudClientTests
         public WebSocketReceiveResult? NextReceive { get; set; }
         public Exception? ReceiveError { get; set; }
         public Exception? SendError { get; set; }
+        public TimeSpan SendDelay { get; set; }
 
         public Task ConnectAsync(Uri uri, CancellationToken ct)
         {
@@ -25,10 +27,10 @@ public sealed class CloudClientTests
             return Task.CompletedTask;
         }
 
-        public Task SendAsync(byte[] buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken ct)
+        public async Task SendAsync(byte[] buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken ct)
         {
             if (SendError is not null) throw SendError;
-            return Task.CompletedTask;
+            if (SendDelay > TimeSpan.Zero) await Task.Delay(SendDelay, ct);
         }
 
         public async Task<WebSocketReceiveResult> ReceiveAsync(byte[] buffer, CancellationToken ct)
@@ -168,5 +170,20 @@ public sealed class CloudClientTests
         {
             client.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task ConcurrentSendsDuringDispose_DoNotThrow()
+    {
+        // 慢速 socket 制造在途发送窗口;Dispose 与并发发送交错时不得抛 ObjectDisposedException。
+        var socket = new FakeSocket { SendDelay = TimeSpan.FromMilliseconds(5) };
+        var (client, _) = Create(preSeeded: socket);
+        var snapshot = new ClassStateSnapshot();
+        var sends = Enumerable.Range(0, 30)
+            .Select(_ => client.SendStateAsync(snapshot))
+            .ToArray();
+        await Task.Delay(2);
+        client.Dispose();
+        await Task.WhenAll(sends); // 全部完成即通过（在途发送不抛异常）。
     }
 }
