@@ -1,6 +1,5 @@
 using System.Globalization;
 using Avalonia.Threading;
-using ClassIsland.Core.Abstractions.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RemoteCI.Plugin.Extensions;
@@ -12,26 +11,26 @@ namespace RemoteCI.Plugin.Services;
 /// <summary>全部远程写操作的唯一执行入口；只返回 ClassIsland 实际执行后的结果。</summary>
 public sealed class CommandHandler
 {
-    private readonly IProfileService _profiles;
-    private readonly ILessonsService _lessons;
     private readonly ScheduleCatalog _schedules;
+    private readonly IScheduleBackend _scheduleBackend;
+    private readonly IProfileWriteOperations _profileOps;
     private readonly RemoteNotificationProvider _notifications;
     private readonly ClassIslandHostControlService _hostControl;
     private readonly ILogger _logger;
     private readonly ExtensionCommandRouter _extensionRouter;
 
     public CommandHandler(
-        IProfileService profiles,
-        ILessonsService lessons,
         ScheduleCatalog schedules,
+        IScheduleBackend scheduleBackend,
+        IProfileWriteOperations profileOps,
         ClassIslandHostControlService hostControl,
         IEnumerable<IHostedService> hostedServices,
         IRemoteCiExtensionRegistry extensions,
         ILoggerFactory loggerFactory)
     {
-        _profiles = profiles;
-        _lessons = lessons;
         _schedules = schedules;
+        _scheduleBackend = scheduleBackend;
+        _profileOps = profileOps;
         _hostControl = hostControl;
         _notifications = hostedServices.OfType<RemoteNotificationProvider>().Single();
         _logger = loggerFactory.CreateLogger<CommandHandler>();
@@ -103,60 +102,10 @@ public sealed class CommandHandler
         return null;
     }
 
-    private CommandResult ApplyScheduleChange(DateTime date, ScheduleChangeRequest request)
-    {
-        var before = _schedules.BuildDay(date);
-        if (!before.Enabled)
-            return Failure(CommandResultCodes.ScheduleUnavailable, $"{date:yyyy-MM-dd} 没有可编辑课表");
-        if (!string.Equals(before.Revision, request.ExpectedRevision, StringComparison.Ordinal))
-            return new CommandResult
-            {
-                Success = false,
-                Code = CommandResultCodes.ScheduleStale,
-                Message = "课表已被其他管理者修改，请刷新后重新确认",
-                ScheduleRevision = before.Revision,
-            };
-
-        var validationError = ScheduleMutation.Validate(
-            before.Courses.Count,
-            request,
-            subjectId => _profiles.Profile.Subjects.ContainsKey(subjectId));
-        if (validationError is not null)
-            return Failure(CommandResultCodes.InvalidRequest, validationError);
-
-        var plan = GetWritablePlan(date);
-        if (plan is null)
-            return Failure(CommandResultCodes.ScheduleUnavailable, $"{date:yyyy-MM-dd} 无法创建临时课表层");
-        validationError = ScheduleMutation.Validate(
-            plan.Classes.Count,
-            request,
-            subjectId => _profiles.Profile.Subjects.ContainsKey(subjectId));
-        if (validationError is not null)
-            return Failure(CommandResultCodes.InvalidRequest, validationError);
-
-        var mutation = ScheduleMutation.Create(plan.Classes, request);
-        mutation.Apply();
-
-        try
-        {
-            _profiles.SaveProfile();
-        }
-        catch (Exception ex)
-        {
-            mutation.Rollback();
-            _logger.LogError(ex, "保存 {Date} 临时课表失败", date);
-            return Failure(CommandResultCodes.SaveFailed, "ClassIsland 保存课表失败，操作未确认");
-        }
-
-        var after = _schedules.BuildDay(date);
-        return new CommandResult
-        {
-            Success = true,
-            Code = CommandResultCodes.Ok,
-            Message = request.Mode == ScheduleChangeMode.Exchange ? "两节课程已临时交换" : "课程已临时替换",
-            ScheduleRevision = after.Revision,
-        };
-    }
+    private CommandResult ApplyScheduleChange(DateTime date, ScheduleChangeRequest request) =>
+        ScheduleChangeExecutor.Apply(
+            date, request, _schedules, _scheduleBackend, _profileOps,
+            ex => _logger.LogError(ex, "保存 {Date} 临时课表失败", date));
 
     private async Task<CommandResult> HandleNotificationAsync(NotificationRequest? request, string senderName)
     {
@@ -247,18 +196,6 @@ public sealed class CommandHandler
     {
         var title = requestedTitle?.Trim();
         return string.IsNullOrWhiteSpace(title) ? "RemoteCI 通知" : title[..Math.Min(title.Length, 60)];
-    }
-
-    private ClassIsland.Shared.Models.Profile.ClassPlan? GetWritablePlan(DateTime date)
-    {
-        var plan = _lessons.GetClassPlanByDate(date, out var planId);
-        if (plan is null || planId is null) return null;
-        if (plan.IsOverlay) return plan;
-        var overlayId = _profiles.CreateTempClassPlan(planId.Value, enableDateTime: date);
-        if (overlayId is null) return null;
-        return _lessons.GetClassPlanByDate(date, out var refreshedId) is { IsOverlay: true } refreshed
-            ? refreshed
-            : _profiles.Profile.ClassPlans.GetValueOrDefault(refreshedId ?? overlayId.Value);
     }
 
     private static bool TryParseDate(string value, out DateTime date) => DateTime.TryParseExact(
