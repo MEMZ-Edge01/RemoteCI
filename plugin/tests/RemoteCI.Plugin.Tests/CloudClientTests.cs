@@ -1,4 +1,7 @@
+using System.Net;
+using System.Net.Http;
 using System.Net.WebSockets;
+using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteCI.Plugin.Services;
 using RemoteCI.Plugin.Settings;
@@ -52,6 +55,7 @@ public sealed class CloudClientTests
         PluginSettings? settings = null,
         TimeSpan? reconnectDelay = null,
         CloudTokenStore? tokenStore = null,
+        HttpMessageHandler? httpHandler = null,
         params FakeSocket[] preSeeded)
     {
         var sockets = new List<FakeSocket>(preSeeded);
@@ -73,6 +77,7 @@ public sealed class CloudClientTests
                 next++;
                 return fresh;
             },
+            httpHandler: httpHandler,
             reconnectDelay: reconnectDelay ?? TimeSpan.FromMilliseconds(20));
         return (client, sockets);
     }
@@ -185,5 +190,59 @@ public sealed class CloudClientTests
         await Task.Delay(2);
         client.Dispose();
         await Task.WhenAll(sends); // 全部完成即通过（在途发送不抛异常）。
+    }
+
+    [Fact]
+    public async Task PairingRequest_IssuesAndPersistsLongTermCredential()
+    {
+        var settings = new PluginSettings { PluginPairCode = "pair-code", EnableCloud = true }; // 无长期凭据。
+        var storePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Plugin.Tests", Guid.NewGuid().ToString("N"), "token.bin");
+        var store = new CloudTokenStore(storePath);
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"token":"paired-token","role":"plugin"}""", Encoding.UTF8, "application/json"),
+        });
+        var (client, _) = Create(settings, tokenStore: store, httpHandler: handler, preSeeded: new FakeSocket());
+        try
+        {
+            _ = client.StartAsync();
+            await WaitUntilAsync(
+                () => settings.CloudToken == "paired-token" && string.IsNullOrEmpty(settings.PluginPairCode), 3000);
+
+            // 凭据经 Token 访问器同步写入加密存储。
+            Assert.Equal("paired-token", store.Load());
+        }
+        finally
+        {
+            client.Dispose();
+            if (File.Exists(storePath)) File.Delete(storePath);
+        }
+    }
+
+    [Fact]
+    public async Task PairingRejection_KeepsPairCodeAndDoesNotInventCredential()
+    {
+        var settings = new PluginSettings { PluginPairCode = "expired-code", EnableCloud = true };
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.Conflict));
+        var (client, _) = Create(settings, httpHandler: handler);
+        try
+        {
+            _ = client.StartAsync();
+            await Task.Delay(150);
+
+            // 409 视为凭据失效：不签发 token，也不清空用户重新填写的配对码。
+            Assert.Null(settings.CloudToken);
+            Assert.Equal("expired-code", settings.PluginPairCode);
+        }
+        finally
+        {
+            client.Dispose();
+        }
+    }
+
+    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(responder(request));
     }
 }
