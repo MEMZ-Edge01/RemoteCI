@@ -18,6 +18,8 @@ public sealed class IndexModel(UserManager<AppUser> users, PeerRegistry peers, I
     public ClassStateSnapshot? Snapshot { get; private set; }
     public ScheduleBundle? Schedule { get; private set; }
     public string? PairCode { get; private set; }
+    public IReadOnlyList<PluginCredentialInfo> PluginCredentials { get; private set; } = [];
+    public bool IsAdmin => CurrentUser.Role == UserRole.Admin;
     public string ServerVersion => AppVersion.Version;
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
@@ -25,6 +27,23 @@ public sealed class IndexModel(UserManager<AppUser> users, PeerRegistry peers, I
         if (await RequireAsync(UserPermissions.AccessWebUi) is { } denied) return denied;
         await LoadAsync(ct);
         return Page();
+    }
+
+    public async Task<IActionResult> OnPostRevokeCredentialAsync(Guid id, CancellationToken ct)
+    {
+        if (await RequireAsync(UserPermissions.AccessWebUi) is { } denied) return denied;
+        if (CurrentUser.Role != UserRole.Admin)
+        {
+            TempData["Error"] = "仅管理员可吊销插件凭据。";
+            return RedirectToPage();
+        }
+        try
+        {
+            await identities.RevokePluginCredentialAsync(id, ct);
+            TempData["Message"] = "插件凭据已吊销，对应插件将被断开，需用新配对码重新配对。";
+        }
+        catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
+        return RedirectToPage();
     }
 
     public async Task<IActionResult> OnPostRetryConnectionAsync(CancellationToken ct)
@@ -52,5 +71,7 @@ public sealed class IndexModel(UserManager<AppUser> users, PeerRegistry peers, I
         AccountCount = (await identities.ListUsersAsync(ct)).Count;
         Snapshot = state.GetLatestSnapshot();
         Schedule = state.GetLatestSchedule();
+        if (CurrentUser.Role == UserRole.Admin)
+            PluginCredentials = await identities.ListPluginCredentialsAsync(ct);
     }
 }

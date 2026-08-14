@@ -89,6 +89,38 @@
     </dl>
 </section>
 
+@if (Model.IsAdmin)
+{
+    <section class="workspace-section system-section">
+        <h2 class="section-title">插件凭据</h2>
+        @if (Model.PluginCredentials.Count == 0)
+        {
+            <p class="muted">暂无插件凭据，完成首次配对后在此管理。</p>
+        }
+        @foreach (var credential in Model.PluginCredentials)
+        {
+            <dl class="system-table">
+                <div><dt>名称</dt><dd>@credential.Name</dd></div>
+                <div><dt>创建时间</dt><dd>@credential.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</dd></div>
+                <div><dt>最近活跃</dt><dd>@credential.LastSeenAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</dd></div>
+                <div><dt>状态</dt><dd>@(credential.Enabled ? "启用" : "已吊销")</dd></div>
+                @if (credential.Enabled)
+                {
+                    <div>
+                        <dt>操作</dt>
+                        <dd>
+                            <form method="post" asp-page-handler="RevokeCredential" asp-route-id="@credential.Id"
+                                  onsubmit="return confirm('吊销后该插件将被断开，需用新配对码重新配对。确定？')">
+                                <button class="status-action" type="submit">吊销</button>
+                            </form>
+                        </dd>
+                    </div>
+                }
+            </dl>
+        }
+    </section>
+}
+
 <footer class="workspace-footer">
     <span><strong>RemoteCI <small>v@(Model.ServerVersion)</small></strong> 远程课堂控制系统</span>
     <span>日期：@DateTimeOffset.Now.ToLocalTime().ToString("yyyy-MM-dd")</span>
