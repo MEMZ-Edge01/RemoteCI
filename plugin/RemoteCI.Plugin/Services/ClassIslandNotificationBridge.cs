@@ -91,9 +91,13 @@ public sealed class ClassIslandNotificationBridge
     }
 
     // 参数名与 ClassIsland 的内部方法保持一致，Harmony 按名称注入原始参数。
+    // 语义（对照 ClassIsland 源码 NotificationHostService.ShowNotification）：
+    //   isPlayed=false → 宿主负责播放；isPlayed=true → 提供方已自行播放、宿主仅入队记录。
+    // 两种情况用户都真实看到了提醒，都应转发；重复转发由 SeenRequests 按请求实例去重，
+    // 不能依赖 isPlayed 过滤——否则未来提供方自行播放的通知会被手表漏掉。
     private static void AfterShowNotification(HostNotificationRequest request, Guid providerGuid, bool isPlayed)
     {
-        if (!isPlayed) _active?.Capture(request, providerGuid);
+        _active?.Capture(request, providerGuid);
     }
 
     private static void AfterShowChainedNotifications(HostNotificationRequest[] requests, Guid providerGuid)
