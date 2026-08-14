@@ -25,6 +25,10 @@ public static class UpdateInstaller
     private static readonly TimeSpan ProcessExitTimeout = TimeSpan.FromMinutes(2);
     private const int CopyRetryCount = 120;
 
+    /// <summary>更新包自带的是默认配置，直接覆盖会丢失部署目录中用户自定义的数据库路径、监听地址等。</summary>
+    private static readonly string[] NeverOverwriteFiles =
+        ["appsettings.json", "appsettings.Development.json", "appsettings.Production.json", "web.config"];
+
     public static async Task<bool> TryRunAsync(string[] args, CancellationToken ct = default)
     {
         if (args.Length != 2 || !string.Equals(args[0], Command, StringComparison.Ordinal)) return false;
@@ -67,13 +71,14 @@ public static class UpdateInstaller
         AppendLog(plan.LogPath, $"服务端已重新启动，进程 {process.Id}。");
     }
 
-    /// <summary>复制发布目录；短暂文件锁会持续重试，确保旧进程完全释放原生 DLL。</summary>
+    /// <summary>复制发布目录；短暂文件锁会持续重试，确保旧进程完全释放原生 DLL。配置文件一律不覆盖。</summary>
     public static async Task ApplyFilesAsync(string source, string destination, CancellationToken ct)
     {
         Directory.CreateDirectory(destination);
         foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
             var relative = Path.GetRelativePath(source, file);
+            if (NeverOverwriteFiles.Contains(Path.GetFileName(relative), StringComparer.OrdinalIgnoreCase)) continue;
             var target = Path.Combine(destination, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             for (var attempt = 0; ; attempt++)

@@ -32,10 +32,15 @@ jobs:
           grep -Fq "\"RemoteCI.Server/$version\"" "publish/${{ matrix.rid }}/RemoteCI.Server.deps.json"
           cd "publish/${{ matrix.rid }}"
           zip -r "../RemoteCI.Server-${version}-${{ matrix.rid }}.zip" .
+          cd ..
+          # 同名校验和文件随包发布；服务端更新前按此校验完整性。
+          sha256sum "RemoteCI.Server-${version}-${{ matrix.rid }}.zip" > "RemoteCI.Server-${version}-${{ matrix.rid }}.zip.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: server-${{ matrix.rid }}
-          path: publish/RemoteCI.Server-*-${{ matrix.rid }}.zip
+          path: |
+            publish/RemoteCI.Server-*-${{ matrix.rid }}.zip
+            publish/RemoteCI.Server-*-${{ matrix.rid }}.zip.sha256
 
   build-plugin:
     name: 插件 CIPX
@@ -167,9 +172,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 首次推送后镜像包默认为私有，fnOS 拉取需要公开可见；
-          # 若令牌无权修改可见性会失败，可在仓库 Settings -> Packages 中手动设为 Public。
-          gh api --method PATCH /user/packages/container/remoteci -f visibility=public || true
+          # 首次推送后镜像包默认为私有，fnOS 拉取需要公开可见。
+          # 失败必须让发布中断：若吞掉错误继续打包，fpk 会引用私有镜像，fnOS 安装将静默失败。
+          gh api --method PATCH /user/packages/container/remoteci -f visibility=public
+          visibility="$(gh api /user/packages/container/remoteci --jq .visibility)"
+          test "$visibility" = "public" || {
+            echo "::error::GHCR 镜像包可见性仍为 $visibility，fnOS 将无法拉取，拒绝继续发布"
+            exit 1
+          }
       - name: 下载 fnpack 并打包 fpk
         run: |
           mkdir -p .tools
@@ -216,3 +226,6 @@ jobs:
             artifacts/watch-apk/**
             artifacts/fnos-fpk/**
           generate_release_notes: true
+          # 含预发布标识（如 v0.4.0-beta.1）的 tag 必须标记为 prerelease，
+          # 否则会被稳定渠道客户端当作正式版误装。
+          prerelease: ${{ contains(github.ref, '-') }}

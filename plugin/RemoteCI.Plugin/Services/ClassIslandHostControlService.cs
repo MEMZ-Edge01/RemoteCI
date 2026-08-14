@@ -18,6 +18,8 @@ public sealed class ClassIslandHostControlService(
     IServiceProvider services,
     ILogger<ClassIslandHostControlService> logger)
 {
+    private static CancellationTokenSource? _pendingPowerAction;
+
     public bool IsNotificationPlaying => notificationHost.IsNotificationsPlaying;
 
     public bool IsMainMenuVisible => TryGetMainMenuVisibility(out var visible) ? visible : true;
@@ -93,7 +95,8 @@ public sealed class ClassIslandHostControlService(
 
         if (action is PowerActionKind.Shutdown or PowerActionKind.Restart)
         {
-            var arguments = action == PowerActionKind.Shutdown ? "/s /t 1" : "/r /t 1";
+            // 3 秒窗口：先保证 command_result 已经送达发起方，再让系统开始关机流程。
+            var arguments = action == PowerActionKind.Shutdown ? "/s /t 3" : "/r /t 3";
             _ = Process.Start(new ProcessStartInfo
             {
                 FileName = Path.Combine(Environment.SystemDirectory, "shutdown.exe"),
@@ -105,16 +108,34 @@ public sealed class ClassIslandHostControlService(
         }
 
         // 先留出回传命令结果的时间；睡眠后连接会立即中断，不能同步等待系统恢复。
+        // 新电源操作或插件停止会取消待执行的睡眠（可取消生命周期，避免停止后仍触发）。
+        var pending = new CancellationTokenSource();
+        Interlocked.Exchange(ref _pendingPowerAction, pending)?.Cancel();
         _ = Task.Run(async () =>
         {
-            await Task.Delay(750);
-            var succeeded = NativeMethods.SetSuspendState(
-                action == PowerActionKind.Hibernate,
-                force: false,
-                disableWakeEvent: false);
-            if (!succeeded)
-                logger.LogError("Windows 电源操作 {Action} 失败，错误码 {Error}", action, Marshal.GetLastWin32Error());
+            try
+            {
+                await Task.Delay(750, pending.Token);
+                var succeeded = NativeMethods.SetSuspendState(
+                    action == PowerActionKind.Hibernate,
+                    force: false,
+                    disableWakeEvent: false);
+                if (!succeeded)
+                    logger.LogError("Windows 电源操作 {Action} 失败，错误码 {Error}", action, Marshal.GetLastWin32Error());
+            }
+            catch (OperationCanceledException)
+            {
+                // 插件停止或新的电源操作到达，取消待执行的睡眠。
+            }
         });
+    }
+
+    /// <summary>取消尚未执行的睡眠/休眠操作（插件停止时调用）。</summary>
+    public void CancelPendingPowerActions()
+    {
+        var pending = Interlocked.Exchange(ref _pendingPowerAction, null);
+        pending?.Cancel();
+        pending?.Dispose();
     }
 
     private bool TryGetMainMenuVisibility(out bool visible)

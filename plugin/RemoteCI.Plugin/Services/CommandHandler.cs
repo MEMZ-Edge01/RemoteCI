@@ -42,6 +42,9 @@ public sealed class CommandHandler
     public event Action? ScheduleChanged;
     public event Action? HostStateChanged;
 
+    /// <summary>插件停止时取消尚未执行的睡眠/休眠电源操作。</summary>
+    public void CancelPendingPowerActions() => _hostControl.CancelPendingPowerActions();
+
     public async Task<CommandResult> HandleAsync(CommandMessage command)
     {
         // 扩展命令的权限随注册项动态声明，不走静态权限表。

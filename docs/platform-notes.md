@@ -113,7 +113,7 @@ $env:JAVA_HOME = 'E:\Android Studio\jbr'
 
 ### 5.1 工具链（本机已就绪）
 
-- .NET SDK **10.0.302**（`C:\Program Files\dotnet`），三端统一 net10.0。
+- .NET SDK **10.0.x**（`C:\Program Files\dotnet`）。服务端目标 net10.0；插件与共享协议库目标 **net8.0**（ClassIsland 2.x 最低运行时），三端共用协议库。
 - PowerShell 7（pwsh 7.6.4）：ClassIsland 打包工具依赖它生成 cipx 校验文件，**必须安装**。
   - 安装命令：`winget install --id Microsoft.PowerShell --exact`。
   - 若缺失，`-p:CreateCipx=true` 打包会报 `'pwsh' 不是内部或外部命令`（zip 已生成但构建失败）。
@@ -124,10 +124,10 @@ $env:JAVA_HOME = 'E:\Android Studio\jbr'
 # 构建三端（shared / server / plugin + 测试项目）
 dotnet build RemoteCI.slnx
 
-# 服务端单元测试（8 个，覆盖配对认证 / REST / WebSocket 中转）
+# 服务端单元测试（覆盖配对认证 / 登录锁定 / REST / WebSocket 中转 / 自更新）
 dotnet test server/tests/RemoteCI.Server.Tests
 
-# 启动服务端（默认 0.0.0.0:8080，配对码 remoteci-demo，见 appsettings.json）
+# 启动服务端（默认 0.0.0.0:8080；首次启动生成的一次性管理员密码与插件配对码写入控制台日志）
 dotnet run --project server/RemoteCI.Server --no-build
 
 # 插件打包 cipx（输出 plugin/RemoteCI.Plugin/cipx/RemoteCI.Plugin.cipx + checksums.md）
@@ -137,16 +137,17 @@ dotnet build plugin/RemoteCI.Plugin -p:CreateCipx=true
 ### 5.3 服务端 API 冒烟测试（PowerShell）
 
 ```powershell
-$body = @{ pairCode = 'remoteci-demo'; role = 'watch' } | ConvertTo-Json
-$r = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/pair' -Method Post -ContentType 'application/json' -Body $body
-# $r.token 即后续请求的 Bearer token；/api/state、/api/commands、/ws?token= 均用此 token
+# 插件配对码在 WebUI“生成插件配对码”或首次启动的控制台日志中获取，只能被消费一次。
+$body = @{ pairCode = '从 WebUI 获取的配对码'; role = 'plugin' } | ConvertTo-Json
+$r = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/api/plugin/pair' -Method Post -ContentType 'application/json' -Body $body
+# $r.token 即插件长期凭据；手表登录走 /api/auth/login，后续请求用 Bearer accessToken
 ```
 
 注意：在 PowerShell 中用 `curl`（curl.exe）传 JSON 易被引号转义搞坏，冒烟测试建议用 `Invoke-RestMethod`。
 
 ### 5.4 插件在 ClassIsland 中加载调试
 
-- 开发模式：设环境变量 `ClassIsland_DebugBinaryFile` 指向 `plugin/RemoteCI.Plugin/bin/Debug/net10.0/RemoteCI.Plugin.dll`，ClassIsland 启动时自动加载。
+- 开发模式：设环境变量 `ClassIsland_DebugBinaryFile` 指向 `plugin/RemoteCI.Plugin/bin/Debug/net8.0/RemoteCI.Plugin.dll`，ClassIsland 启动时自动加载。
 - 分发模式：把 `cipx/RemoteCI.Plugin.cipx` 放入 ClassIsland 插件目录，或在应用内"插件市场"离线安装。
 - 插件端依赖：`ClassIsland.PluginSdk`（LGPLv3，仅编译期，ExcludeAssets runtime/native）+ `Fleck`（MIT，局域网 WebSocket 服务器）。
 ## Wear OS 构建环境

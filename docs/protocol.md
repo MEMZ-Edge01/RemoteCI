@@ -53,6 +53,18 @@
 | `command` | 手表/服务端 → 插件 | 结构化换课、通知、主界面或电源命令 |
 | `command_result` | 插件 → 发起者 | 真实成功、失败码、消息和可选新修订号 |
 | `settings_sync` | 服务端 → 手表 | 全局通知设置快照（目前含 `forceSenderInTitle`） |
+| `plugin_network_info` | 插件 → 服务端 → 手表 | 插件局域网直连地址与端口（每次云端重连时重新发现网卡） |
+| `connection_bootstrap` | 插件 → 手表 | 用户选中局域网插件后，插件返回的云端连接信息 |
+
+## 局域网设备发现
+
+手表可以在登录页扫描同一局域网中的插件，无需手动填写电脑 IP：
+
+1. 手表向固定 UDP 端口 `48765` 发送广播串 `REMOTECI_DISCOVER_V2`；插件应答 JSON `{protocolVersion, instanceName, port}`，`protocolVersion` 为 `2`，`port` 是插件当前局域网 WebSocket 端口。
+2. 用户选中应答条目后，手表连接 `ws://<应答来源地址>:<port>/bootstrap`，插件返回 `connection_bootstrap` 载荷 `{instanceName, cloudServerUrl}`。该端点未认证，只提供云端地址与实例名，密码和会话凭据始终只交给云服务器。
+3. 插件每次云端重连时重新发现本机网卡，通过 `plugin_network_info`（`{lanServerEnabled, addresses[], port}`）上报服务端；服务端归一化后广播给在线手表并缓存最新一份，新连接的手表在 `auth_state` 之后立即收到。手表据此更新局域网候选地址，地址或端口变化且当前走云端中转时自动重试直连。
+
+发现与 bootstrap 均无认证，理论上可被同一局域网内的设备伪造；手表会原样展示获取到的云服务器地址，明文 HTTP 地址会额外提示风险，用户应在输入密码前确认地址可信。
 
 `command_result.replyToMessageId` 必须等于请求的 `messageId`。服务端只把结果交给对应的 WebSocket 或等待中的 WebUI 请求，等待上限 15 秒。
 

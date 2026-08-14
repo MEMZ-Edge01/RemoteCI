@@ -91,6 +91,11 @@ public sealed class AccountModel(
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
         RemovePasswordValidationErrors();
+        if (CurrentUser.Role != UserRole.Admin)
+        {
+            CheckMessage = "只有管理员可以检查与安装服务端更新。";
+            return Page();
+        }
         if (!UpdateService.CanSelfUpdate(IsDevelopment, IsFnos))
         {
             CheckMessage = IsFnos
@@ -130,6 +135,11 @@ public sealed class AccountModel(
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
         RemovePasswordValidationErrors();
+        if (CurrentUser.Role != UserRole.Admin)
+        {
+            CheckMessage = "只有管理员可以检查与安装服务端更新。";
+            return Page();
+        }
         if (!UpdateService.CanSelfUpdate(IsDevelopment, IsFnos))
         {
             CheckMessage = IsFnos

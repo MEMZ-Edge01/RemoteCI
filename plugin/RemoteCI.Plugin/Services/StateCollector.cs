@@ -101,21 +101,48 @@ public sealed class StateCollector
 
     public void ForceSnapshotPush() => PushSnapshot();
 
-    private void PushSnapshot() => SnapshotPushed?.Invoke(BuildSnapshot());
+    private void PushSnapshot()
+    {
+        // 该链每秒在 ClassIsland 主计时器（UI 线程）上执行，任何异常都不允许逃逸到宿主。
+        try
+        {
+            SnapshotPushed?.Invoke(BuildSnapshot());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "生成或推送状态快照失败");
+        }
+    }
 
     private void PushSchedule(bool force)
     {
-        var bundle = BuildSchedule();
-        var signature = string.Join('|', bundle.Days.Select(x => $"{x.Date}:{x.Revision}"));
-        if (!force && signature == _lastScheduleSignature) return;
-        _lastScheduleSignature = signature;
-        SchedulePushed?.Invoke(bundle);
+        try
+        {
+            var bundle = BuildSchedule();
+            // 修订号只覆盖课程结构；科目改名与课表名变化不改变修订号，必须纳入签名才会重新推送。
+            var signature = string.Join('|', bundle.Days.Select(x => $"{x.Date}:{x.Revision}:{x.ClassPlanName}"))
+                + "|subjects:" + string.Join(',', bundle.Subjects.Select(x => x.Name));
+            if (!force && signature == _lastScheduleSignature) return;
+            _lastScheduleSignature = signature;
+            SchedulePushed?.Invoke(bundle);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "生成或推送七日课表失败");
+        }
     }
 
     private void PushEvent(ClassEventKind kind, string? subject, string message, bool pushSnapshot = true)
     {
-        EventOccurred?.Invoke(new ClassEvent { Event = kind, Subject = subject, Message = message });
-        if (pushSnapshot) PushSnapshot();
+        try
+        {
+            EventOccurred?.Invoke(new ClassEvent { Event = kind, Subject = subject, Message = message });
+            if (pushSnapshot) PushSnapshot();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "推送课程事件失败");
+        }
     }
 
     private void LessonsOnOnClass(object? sender, EventArgs e) =>

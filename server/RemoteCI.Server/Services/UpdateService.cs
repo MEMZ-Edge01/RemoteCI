@@ -2,7 +2,10 @@ using System.IO.Compression;
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace RemoteCI.Server.Services;
 
@@ -49,6 +52,12 @@ public sealed class UpdateService
 
     private static readonly HttpClient Http = CreateHttpClient();
     private readonly string[] _serverArguments;
+    private readonly SemaphoreSlim _prepareGate = new(1, 1);
+
+    /// <summary>release tag 只接受语义化版本（含预发布/构建元数据），杜绝路径穿越类 tag。</summary>
+    private static readonly Regex VersionTagPattern = new(
+        @"^v?\d+\.\d+\.\d+(-[0-9A-Za-z.\-]+)?(\+[0-9A-Za-z.\-]+)?$",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     public UpdateService(string[]? serverArguments = null) => _serverArguments = serverArguments ?? [];
 
@@ -224,21 +233,36 @@ public sealed class UpdateService
         string contentRoot,
         CancellationToken ct)
     {
-        var updatesRoot = GetUpdatesRoot(databasePath, contentRoot);
-        var staging = Path.Combine(updatesRoot, NormalizeVersion(release.Tag));
-        Directory.CreateDirectory(staging);
+        // 并发点击“开始更新”会竞争同一暂存目录与 .part 下载文件，串行化整个准备流程。
+        await _prepareGate.WaitAsync(ct);
+        try
+        {
+            // 只接受语义化版本 tag，防止恶意 tag（含 ../ 等路径片段）把文件写到暂存目录之外。
+            if (!VersionTagPattern.IsMatch(release.Tag))
+                throw new InvalidDataException($"Release tag 格式无效：{release.Tag}");
 
-        var archive = Path.Combine(staging, asset.Name);
-        await DownloadAsync(asset.DownloadUrl, archive, ct);
+            var updatesRoot = GetUpdatesRoot(databasePath, contentRoot);
+            var staging = Path.Combine(updatesRoot, NormalizeVersion(release.Tag));
+            Directory.CreateDirectory(staging);
 
-        var extracted = Path.Combine(staging, "extracted");
-        if (Directory.Exists(extracted)) Directory.Delete(extracted, recursive: true);
-        Directory.CreateDirectory(extracted);
-        ZipFile.ExtractToDirectory(archive, extracted, overwriteFiles: true);
+            // asset 名只取文件名部分，防御下载落盘路径穿越（GitHub API 正常不会返回带路径分隔符的名字）。
+            var archive = Path.Combine(staging, Path.GetFileName(asset.Name));
+            await DownloadAsync(asset.DownloadUrl, archive, ct);
+            await VerifyChecksumAsync(release, asset, archive, ct);
 
-        var version = NormalizeVersion(release.Tag);
-        ValidatePackageVersion(extracted, version);
-        return new PreparedUpdate(staging, extracted);
+            var extracted = Path.Combine(staging, "extracted");
+            if (Directory.Exists(extracted)) Directory.Delete(extracted, recursive: true);
+            Directory.CreateDirectory(extracted);
+            ZipFile.ExtractToDirectory(archive, extracted, overwriteFiles: true);
+
+            var version = NormalizeVersion(release.Tag);
+            ValidatePackageVersion(extracted, version);
+            return new PreparedUpdate(staging, extracted);
+        }
+        finally
+        {
+            _prepareGate.Release();
+        }
     }
 
     /// <summary>启动对应平台的安全应用流程；成功返回后调用方应平滑退出当前服务端。</summary>
@@ -281,6 +305,35 @@ public sealed class UpdateService
             await input.CopyToAsync(output, ct);
         }
         File.Move(partial, target, overwrite: true);
+    }
+
+    /// <summary>
+    /// 发布附带同名校验和文件（&lt;包名&gt;.zip.sha256，第一列为十六进制 SHA-256）时强制校验；
+    /// 旧发布没有校验和资产则跳过，保持向后兼容。
+    /// </summary>
+    private async Task VerifyChecksumAsync(
+        ReleaseInfo release, ReleaseAsset asset, string archivePath, CancellationToken ct)
+    {
+        var checksumAsset = release.Assets.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, asset.Name + ".sha256", StringComparison.OrdinalIgnoreCase));
+        if (checksumAsset is null) return;
+
+        var checksumFile = Path.Combine(Path.GetDirectoryName(archivePath)!, Path.GetFileName(checksumAsset.Name));
+        await DownloadAsync(checksumAsset.DownloadUrl, checksumFile, ct);
+        var firstLine = (await File.ReadAllTextAsync(checksumFile, ct)).Trim();
+        var expected = firstLine.Split(' ', 2)[0].Trim().ToLowerInvariant();
+        await VerifyFileHashAsync(expected, archivePath, ct);
+    }
+
+    /// <summary>校验文件 SHA-256 与期望十六进制摘要一致，不一致即拒绝安装。</summary>
+    internal static async Task VerifyFileHashAsync(string expectedHex, string path, CancellationToken ct = default)
+    {
+        await using var stream = File.OpenRead(path);
+        var actual = Convert.ToHexString(await SHA256.HashDataAsync(stream, ct)).ToLowerInvariant();
+        var expected = expectedHex.Trim().ToLowerInvariant();
+        if (!CryptographicOperations.FixedTimeEquals(
+                Encoding.ASCII.GetBytes(expected), Encoding.ASCII.GetBytes(actual)))
+            throw new InvalidDataException("更新包 SHA-256 校验失败，拒绝安装");
     }
 
     private void StartExternalInstaller(PreparedUpdate update, string contentRoot)

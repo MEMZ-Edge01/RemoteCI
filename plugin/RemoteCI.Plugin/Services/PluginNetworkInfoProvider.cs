@@ -29,10 +29,17 @@ internal static class PluginNetworkInfoProvider
     {
         try
         {
-            return NormalizeAddresses(NetworkInterface.GetAllNetworkInterfaces()
+            var candidates = NetworkInterface.GetAllNetworkInterfaces()
                 .Where(network => network.OperationalStatus == OperationalStatus.Up)
                 .Where(network => network.NetworkInterfaceType is not NetworkInterfaceType.Loopback
                     and not NetworkInterfaceType.Tunnel)
+                .ToList();
+            // 有默认网关的接口才真正承载手表流量；存在时剔除 WireGuard/VMnet/WSL 等无网关的虚拟网卡。
+            var routed = candidates
+                .Where(network => network.GetIPProperties().GatewayAddresses.Any(gateway => gateway.Address is not null))
+                .ToList();
+            var selected = routed.Count > 0 ? routed : candidates;
+            return NormalizeAddresses(selected
                 .SelectMany(network => network.GetIPProperties().UnicastAddresses)
                 .Select(unicast => unicast.Address));
         }

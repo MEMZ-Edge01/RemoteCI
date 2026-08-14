@@ -13,7 +13,6 @@ public interface IStateStore
     void SaveSchedule(ScheduleBundle schedule);
     ScheduleBundle? GetLatestSchedule();
     void SaveEvent(ClassEvent @event);
-    ClassEvent? GetLatestEvent();
     void SaveExtensions(IReadOnlyList<ExtensionDefinition> extensions);
     IReadOnlyList<ExtensionDefinition>? GetLatestExtensions();
 }

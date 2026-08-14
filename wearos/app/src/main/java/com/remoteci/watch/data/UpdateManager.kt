@@ -148,7 +148,7 @@ object UpdateManager {
         return ParsedVersion(core, prerelease)
     }
 
-    /** 下载 APK 到缓存目录，返回本地文件。 */
+    /** 下载 APK 到缓存目录，校验长度后返回本地文件。 */
     suspend fun downloadApk(context: Context, asset: GitHubAsset): File = withContext(Dispatchers.IO) {
         val target = File(context.cacheDir, asset.name)
         if (target.exists()) target.delete()
@@ -158,30 +158,45 @@ object UpdateManager {
             .build()
         okHttp.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("下载失败（HTTP ${response.code}）")
+            val expected = asset.size
+            val announced = response.body?.contentLength() ?: -1L
+            if (expected > 0 && announced >= 0 && announced != expected)
+                throw IOException("下载长度不匹配：发布清单 $expected 字节，实际 $announced 字节")
             val body = response.body
             body.byteStream().use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
             }
         }
+        // 传输中断但连接“正常”关闭时落盘文件会缺尾，落盘后再校验一次；安装器只负责验签不负责验全。
+        if (asset.size > 0 && target.length() != asset.size) {
+            target.delete()
+            throw IOException("APK 下载不完整：预期 ${asset.size} 字节，实际 ${target.length()} 字节")
+        }
         target
     }
 
-    /** 通过系统 PackageInstaller 安装，结果由 UpdateReceiver 接收并提示。 */
+    /** 通过系统 PackageInstaller 安装，结果由 UpdateReceiver 接收并提示；失败时回收会话。 */
     fun installApk(context: Context, apk: File) {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         params.setAppPackageName(context.packageName)
         val sessionId = installer.createSession(params)
-        val session = installer.openSession(sessionId)
         try {
-            session.openWrite(apk.name, 0, apk.length()).use { output ->
-                apk.inputStream().use { input -> input.copyTo(output) }
-                session.fsync(output)
+            val session = installer.openSession(sessionId)
+            try {
+                session.openWrite(apk.name, 0, apk.length()).use { output ->
+                    apk.inputStream().use { input -> input.copyTo(output) }
+                    session.fsync(output)
+                }
+                val pending = createInstallResultPendingIntent(context, sessionId)
+                session.commit(pending.intentSender)
+            } finally {
+                session.close()
             }
-            val pending = createInstallResultPendingIntent(context, sessionId)
-            session.commit(pending.intentSender)
-        } finally {
-            session.close()
+        } catch (error: Exception) {
+            // 写入失败或 commit 前异常时释放会话，避免 PackageInstaller 留下僵尸会话占空间。
+            runCatching { installer.abandonSession(sessionId) }
+            throw error
         }
     }
 

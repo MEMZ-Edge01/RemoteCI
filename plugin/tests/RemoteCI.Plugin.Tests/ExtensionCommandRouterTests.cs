@@ -158,6 +158,27 @@ public sealed class ExtensionCommandRouterTests
         Assert.Equal(CommandResultCodes.InternalError, result.Code);
     }
 
+    [Fact]
+    public async Task RunExtension_TimesOutHungExtension()
+    {
+        // 用毫秒级超时验证取消路径；生产环境默认 15 秒。扩展完全不响应取消也能强制放弃。
+        var router = new ExtensionCommandRouter(_registry, NullLoggerFactory.Instance, TimeSpan.FromMilliseconds(50));
+        _registry.Register(new ExtensionRegistryTests.FakeExtension(
+            "demo.hang",
+            "挂起的扩展",
+            executeWithToken: (_, _, _) => new TaskCompletionSource<CommandResult>().Task));
+
+        var result = await router.RunAsync(new CommandMessage
+        {
+            Command = CommandKind.RunExtension,
+            ExtensionId = "demo.hang",
+            RequestedBy = Admin(),
+        });
+
+        Assert.False(result.Success);
+        Assert.Equal(CommandResultCodes.Timeout, result.Code);
+    }
+
     private static UserProfile Admin() => User(userPermissions: UserPermissions.All);
 
     private static UserProfile User(UserPermissions userPermissions) => new()

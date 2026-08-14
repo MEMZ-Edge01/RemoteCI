@@ -39,6 +39,9 @@ public static class WebSocketHub
 
         if (principal.IsPlugin)
         {
+            // 本版本按“单教室单插件”设计：命令会广播给所有在线插件并以首个回执为准。
+            if (registry.PluginCount > 1)
+                logger.LogWarning("检测到 {Count} 个插件同时在线，命令将广播给全部插件并以首个回执为准，请确认是否为预期部署", registry.PluginCount);
             await registry.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(context.RequestAborted), context.RequestAborted);
             // 插件自身的启动推送可能早于云端连接完成；认证后主动拉取可消除这段竞态窗口。
             await registry.RequestSchedulePullAsync(context.RequestAborted);
@@ -78,16 +81,35 @@ public static class WebSocketHub
             {
                 var json = await ReceiveTextAsync(socket, context.RequestAborted);
                 if (json is null) break;
-                var envelope = JsonSerializer.Deserialize<Envelope>(json, JsonDefaults.Options);
-                if (envelope is null) continue;
+                Envelope envelope;
+                try
+                {
+                    envelope = JsonSerializer.Deserialize<Envelope>(json, JsonDefaults.Options)!;
+                }
+                catch (JsonException)
+                {
+                    // 单条畸形消息不应终止整个健康会话。
+                    logger.LogWarning("忽略无法解析的 WebSocket 消息 ({Id})", connectionId);
+                    continue;
+                }
                 if (envelope.ProtocolVersion != Protocol.Version)
                 {
-                    await registry.SendToWatchAsync(connectionId, Envelope.AuthState(new AuthState
+                    var versionError = Envelope.AuthState(new AuthState
                     {
                         Authenticated = false,
                         ErrorCode = "PROTOCOL_VERSION_UNSUPPORTED",
                         Error = $"需要协议 v{Protocol.Version}，当前为 v{envelope.ProtocolVersion}",
-                    }), context.RequestAborted);
+                    });
+                    if (principal.PeerRole == PeerRole.Plugin)
+                    {
+                        // 插件连接不在手表注册表中，直接写当前 socket。
+                        var bytes = JsonSerializer.SerializeToUtf8Bytes(versionError, JsonDefaults.Options);
+                        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, context.RequestAborted);
+                    }
+                    else
+                    {
+                        await registry.SendToWatchAsync(connectionId, versionError, context.RequestAborted);
+                    }
                     break;
                 }
 
@@ -275,6 +297,8 @@ public static class WebSocketHub
         {
             result = await socket.ReceiveAsync(buffer, ct);
             if (result.MessageType == WebSocketMessageType.Close) return null;
+            if (result.MessageType == WebSocketMessageType.Binary)
+                throw new WebSocketException("不支持二进制帧");
             stream.Write(buffer, 0, result.Count);
             if (stream.Length > ReceiveBufferSize) throw new WebSocketException("消息过大");
         } while (!result.EndOfMessage);

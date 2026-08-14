@@ -68,18 +68,38 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         };
     }
 
+    /// <summary>端口必须在 1-65535；云端地址留空或为合法 http/https URI 才有效。</summary>
+    internal static (bool PortValid, bool UrlValid) ValidateInput(string? portText, string? urlText)
+    {
+        var portValid = int.TryParse(portText, out var port) && port is >= 1 and <= 65535;
+        var url = urlText?.Trim() ?? string.Empty;
+        // 必须给出可解析的 http/https 地址，否则 UriBuilder 会生成畸形目标导致连接永远失败。
+        var urlValid = string.IsNullOrWhiteSpace(url) ||
+            Uri.TryCreate(url, UriKind.Absolute, out var parsedUrl) &&
+            parsedUrl.Scheme is "http" or "https";
+        return (portValid, urlValid);
+    }
+
     private void OnSaveClick(object? sender, RoutedEventArgs e)
     {
-        _settings.LanServerPort = int.TryParse(_portBox.Text, out var port) && port is >= 1 and <= 65535
-            ? port
-            : 8765;
-        _settings.CloudServerUrl = string.IsNullOrWhiteSpace(_cloudUrlBox.Text)
+        var (portValid, urlValid) = ValidateInput(_portBox.Text, _cloudUrlBox.Text);
+        var urlText = _cloudUrlBox.Text?.Trim() ?? string.Empty;
+        if (!portValid || !urlValid)
+        {
+            _hint.Text = !portValid
+                ? "端口必须是 1-65535 的数字，未保存。"
+                : "云端地址必须是以 http:// 或 https:// 开头的完整地址，未保存。";
+            return;
+        }
+
+        _settings.LanServerPort = int.Parse(_portBox.Text!.Trim());
+        _settings.CloudServerUrl = string.IsNullOrWhiteSpace(urlText)
             ? "http://localhost:8080"
-            : _cloudUrlBox.Text.Trim();
+            : urlText;
         _settings.PluginPairCode = _pairCodeBox.Text?.Trim() ?? string.Empty;
 
         SettingsPagePersistence.Save(_settings);
 
-        _hint.Text = "已保存。重启 ClassIsland 后生效。";
+        _hint.Text = "已保存。连接与端口设置在重启 ClassIsland 后生效，云端配对码即时生效。";
     }
 }

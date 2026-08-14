@@ -38,6 +38,8 @@ class UpdateReceiver : BroadcastReceiver() {
     }
 
     private fun notify(context: Context, success: Boolean, message: String?) {
+        // 进程可能只为接收安装结果而启动，App 尚未创建通知渠道；这里幂等补建，避免 API 26+ 静默丢通知。
+        NotificationHelper.ensureChannel(context)
         val title = if (success) "更新完成" else "更新失败"
         val text = when {
             success -> "RemoteCI 已更新到新版本，请重新打开应用。"

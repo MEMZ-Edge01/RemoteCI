@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: server/RemoteCI.Server/Dockerfile
+      args:
+        # 本地容器构建默认跟随仓库当前版本（见 RemoteCI.Server.csproj 的 <Version>）；
+        # 发布时由 release.yml 注入真实 tag 版本。容器自报版本过低会压低手表更新上限。
+        REMOTECI_VERSION: ${REMOTECI_VERSION:-0.3.1}
     restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Production

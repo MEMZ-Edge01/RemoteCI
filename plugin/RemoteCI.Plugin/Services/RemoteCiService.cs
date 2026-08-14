@@ -19,6 +19,7 @@ public sealed class RemoteCiService : IDisposable
     private readonly AccountMirror _accounts;
     private readonly IRemoteCiExtensionRegistry _extensions;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly ILogger<RemoteCiService> _logger;
     private LanServer? _lanServer;
     private CloudClient? _cloudClient;
     private CancellationTokenSource? _cts;
@@ -41,6 +42,7 @@ public sealed class RemoteCiService : IDisposable
         _accounts = accounts;
         _extensions = extensions;
         _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<RemoteCiService>();
     }
 
     public void Start()
@@ -98,6 +100,7 @@ public sealed class RemoteCiService : IDisposable
         _extensions.ExtensionsChanged -= OnExtensionsChanged;
         _notificationBridge.Stop();
         _cts?.Cancel();
+        _commandHandler.CancelPendingPowerActions();
         _cloudClient?.Dispose();
         _cloudClient = null;
         _lanServer?.Dispose();
@@ -110,7 +113,7 @@ public sealed class RemoteCiService : IDisposable
         _lanServer?.BroadcastState(snapshot);
         if (_cloudClient is { } cloud)
         {
-            _ = cloud.SendStateAsync(snapshot); // 异步发送，不阻塞收集线程
+            Observe(cloud.SendStateAsync(snapshot), "状态快照"); // 异步发送，不阻塞收集线程
         }
     }
 
@@ -119,7 +122,7 @@ public sealed class RemoteCiService : IDisposable
         _latestSchedule = schedule;
         _lanServer?.BroadcastSchedule(schedule);
         if (_cloudClient is { } cloud)
-            _ = cloud.SendScheduleAsync(schedule);
+            Observe(cloud.SendScheduleAsync(schedule), "七日课表");
     }
 
     private void OnScheduleChanged() => Dispatcher.UIThread.Post(_collector.ForceSchedulePush);
@@ -133,7 +136,7 @@ public sealed class RemoteCiService : IDisposable
         _lanServer?.BroadcastEvent(@event);
         if (_cloudClient is { } cloud)
         {
-            _ = cloud.SendEventAsync(@event);
+            Observe(cloud.SendEventAsync(@event), "课程事件");
         }
     }
 
@@ -147,9 +150,17 @@ public sealed class RemoteCiService : IDisposable
         _lanServer?.BroadcastExtensions(definitions);
         if (_cloudClient is { } cloud)
         {
-            _ = cloud.SendExtensionsAsync(definitions);
+            Observe(cloud.SendExtensionsAsync(definitions), "扩展清单");
         }
     }
+
+    /// <summary>fire-and-forget 发送统一挂异常观察器，避免未观察异常在重连竞态下丢失。</summary>
+    private void Observe(Task send, string what) =>
+        _ = send.ContinueWith(
+            task => _logger.LogDebug(task.Exception, "云端发送失败（{What}）", what),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
 
     private static ExtensionDefinition ToDefinition(IRemoteCiExtension extension) => new()
     {

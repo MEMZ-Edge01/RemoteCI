@@ -21,11 +21,27 @@ public sealed partial class IdentityCoordinator(
 {
     private readonly ServerOptions _options = options.Value;
 
+    /// <summary>管理员角色的变更串行化：保证“最后管理员”检查与提交之间没有其他管理员变更插入。</summary>
+    private static readonly SemaphoreSlim AdminMutationGate = new(1, 1);
+
+    /// <summary>每个账号同时保持的设备会话上限，超出时撤销最早创建的会话。</summary>
+    private const int MaxActiveSessionsPerUser = 20;
+
     public async Task BootstrapAsync(CancellationToken ct = default)
     {
         await db.Database.MigrateAsync(ct);
         await db.Database.ExecuteSqlRawAsync(
             "INSERT OR IGNORE INTO SystemMetadata (Id, AccountVersion) VALUES (1, 0);", ct);
+
+        // 启动时清理过期超过 30 天的会话行，避免 DeviceSessions 表长期无界增长。
+        // SQLite 不支持 DateTimeOffset 比较的 SQL 翻译，先投影再在内存过滤。
+        var staleThreshold = DateTimeOffset.UtcNow.AddDays(-30);
+        var staleIds = (await db.DeviceSessions.Select(x => new { x.Id, x.ExpiresAt }).ToListAsync(ct))
+            .Where(x => x.ExpiresAt < staleThreshold)
+            .Select(x => x.Id)
+            .ToList();
+        foreach (var chunk in staleIds.Chunk(500))
+            await db.DeviceSessions.Where(x => chunk.Contains(x.Id)).ExecuteDeleteAsync(ct);
 
         if (!await users.Users.AnyAsync(ct))
         {
@@ -79,9 +95,21 @@ public sealed partial class IdentityCoordinator(
     public async Task<AuthResponse> LoginAsync(LoginRequest request, CancellationToken ct = default)
     {
         var user = await users.FindByNameAsync(request.Username.Trim());
-        if (user is null || !user.Enabled || !await users.CheckPasswordAsync(user, request.Password))
+        if (user is null || !user.Enabled)
+        {
+            // 恒定时间：对不存在的账号也执行一次同等成本的 PBKDF2 校验，避免响应时间泄露用户名是否存在。
+            await users.CheckPasswordAsync(TimingUser(), request.Password);
             throw new IdentityOperationException(ApiErrorCodes.Unauthorized, "ID 或密码错误");
-
+        }
+        if (await users.IsLockedOutAsync(user))
+            throw new IdentityOperationException(ApiErrorCodes.Unauthorized, "失败次数过多，账号已临时锁定，请稍后再试");
+        if (!await users.CheckPasswordAsync(user, request.Password))
+        {
+            // 接入 Identity 锁定：连续失败 8 次锁定 10 分钟（与 WebUI 登录行为一致）。
+            await users.AccessFailedAsync(user);
+            throw new IdentityOperationException(ApiErrorCodes.Unauthorized, "ID 或密码错误");
+        }
+        await users.ResetAccessFailedCountAsync(user);
         return await CreateOrRotateSessionAsync(user, request.DeviceName, null, ct);
     }
 
@@ -107,8 +135,13 @@ public sealed partial class IdentityCoordinator(
             session.ExpiresAt <= DateTimeOffset.UtcNow || !session.User.Enabled)
             return null;
 
-        session.LastSeenAt = DateTimeOffset.UtcNow;
-        await db.SaveChangesAsync(ct);
+        // WS 高频消息每条都写 LastSeenAt 会造成 SQLite 写放大与锁竞争；最多每分钟落库一次。
+        var now = DateTimeOffset.UtcNow;
+        if (now - session.LastSeenAt > TimeSpan.FromMinutes(1))
+        {
+            session.LastSeenAt = now;
+            await db.SaveChangesAsync(ct);
+        }
         return new AuthPrincipal(PeerRole.Watch, ToProfile(session.User), session.Id);
     }
 
@@ -118,24 +151,56 @@ public sealed partial class IdentityCoordinator(
         var hash = Hash(token);
         var credential = await db.PluginCredentials.SingleOrDefaultAsync(x => x.TokenHash == hash && x.Enabled, ct);
         if (credential is null) return null;
-        credential.LastSeenAt = DateTimeOffset.UtcNow;
-        await db.SaveChangesAsync(ct);
+        var now = DateTimeOffset.UtcNow;
+        if (now - credential.LastSeenAt > TimeSpan.FromMinutes(1))
+        {
+            credential.LastSeenAt = now;
+            await db.SaveChangesAsync(ct);
+        }
         return new AuthPrincipal(PeerRole.Plugin, null, null);
     }
 
     public async Task<AuthPrincipal?> ValidateAnyTokenAsync(string token, CancellationToken ct = default) =>
         await ValidatePluginTokenAsync(token, ct) ?? await ValidateAccessTokenAsync(token, ct);
 
+    public async Task<IReadOnlyList<PluginCredentialInfo>> ListPluginCredentialsAsync(CancellationToken ct = default)
+    {
+        // SQLite 不支持 DateTimeOffset 排序的 SQL 翻译；凭证数量极少，取回后在内存排序。
+        var credentials = await db.PluginCredentials.AsNoTracking().ToListAsync(ct);
+        return credentials
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new PluginCredentialInfo
+            {
+                Id = x.Id,
+                Name = x.Name,
+                CreatedAt = x.CreatedAt,
+                LastSeenAt = x.LastSeenAt,
+                Enabled = x.Enabled,
+            }).ToList();
+    }
+
+    /// <summary>吊销插件长期凭据；其在线 WebSocket 会在下一条消息的令牌校验时被断开。</summary>
+    public async Task RevokePluginCredentialAsync(Guid id, CancellationToken ct = default)
+    {
+        var credential = await db.PluginCredentials.SingleOrDefaultAsync(x => x.Id == id, ct)
+            ?? throw new IdentityOperationException(ApiErrorCodes.NotFound, "插件凭证不存在");
+        if (!credential.Enabled) return; // 幂等。
+        credential.Enabled = false;
+        await db.SaveChangesAsync(ct);
+    }
+
     public async Task<PairResponse> PairPluginAsync(PairRequest request, CancellationToken ct = default)
     {
         var hash = Hash(request.PairCode);
         var now = DateTimeOffset.UtcNow;
-        var pairing = await db.PluginPairingCodes.SingleOrDefaultAsync(
-            x => x.CodeHash == hash && x.UsedAt == null, ct);
-        if (pairing is null)
+        // 原子消费配对码：并发请求中只有一个能把 UsedAt 从未置位更新为当前时间，
+        // 防止两个请求同时读到“未使用”的配对码并各自签发插件凭证。
+        var consumed = await db.PluginPairingCodes
+            .Where(x => x.CodeHash == hash && x.UsedAt == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.UsedAt, now), ct);
+        if (consumed == 0)
             throw new IdentityOperationException(ApiErrorCodes.PairCodeInvalid, "插件配对码无效或已使用");
 
-        pairing.UsedAt = now;
         var token = CreateSecret(32);
         db.PluginCredentials.Add(new PluginCredential
         {
@@ -201,28 +266,44 @@ public sealed partial class IdentityCoordinator(
     {
         ValidateDisplayName(request.DisplayName);
         ValidateRole(request.Role);
-        var user = await RequireUserAsync(id);
-        if (user.Role == UserRole.Admin && user.Enabled && (request.Role != UserRole.Admin || !request.Enabled))
-            await GuardLastAdminAsync(user.Id, ct);
+        await AdminMutationGate.WaitAsync(ct);
+        try
+        {
+            var user = await RequireUserAsync(id);
+            if (user.Role == UserRole.Admin && user.Enabled && (request.Role != UserRole.Admin || !request.Enabled))
+                await GuardLastAdminAsync(user.Id, ct);
 
-        var mustRevoke = user.Enabled && !request.Enabled;
-        user.DisplayName = request.DisplayName.Trim();
-        user.Role = request.Role;
-        user.GrantedPermissions = NormalizeGrants(request.Role, request.GrantedPermissions);
-        user.Enabled = request.Enabled;
-        user.UpdatedAt = DateTimeOffset.UtcNow;
-        user.Version = await NextVersionAsync(ct);
-        EnsureIdentitySucceeded(await users.UpdateAsync(user));
-        if (mustRevoke) await RevokeAllSessionsAsync(user.Id, ct);
-        return ToListItem(user);
+            var mustRevoke = user.Enabled && !request.Enabled;
+            user.DisplayName = request.DisplayName.Trim();
+            user.Role = request.Role;
+            user.GrantedPermissions = NormalizeGrants(request.Role, request.GrantedPermissions);
+            user.Enabled = request.Enabled;
+            user.UpdatedAt = DateTimeOffset.UtcNow;
+            user.Version = await NextVersionAsync(ct);
+            EnsureIdentitySucceeded(await users.UpdateAsync(user));
+            if (mustRevoke) await RevokeAllSessionsAsync(user.Id, ct);
+            return ToListItem(user);
+        }
+        finally
+        {
+            AdminMutationGate.Release();
+        }
     }
 
     public async Task DeleteUserAsync(Guid id, CancellationToken ct = default)
     {
-        var user = await RequireUserAsync(id);
-        if (user.Role == UserRole.Admin && user.Enabled) await GuardLastAdminAsync(user.Id, ct);
-        EnsureIdentitySucceeded(await users.DeleteAsync(user));
-        await NextVersionAsync(ct);
+        await AdminMutationGate.WaitAsync(ct);
+        try
+        {
+            var user = await RequireUserAsync(id);
+            if (user.Role == UserRole.Admin && user.Enabled) await GuardLastAdminAsync(user.Id, ct);
+            EnsureIdentitySucceeded(await users.DeleteAsync(user));
+            await NextVersionAsync(ct);
+        }
+        finally
+        {
+            AdminMutationGate.Release();
+        }
     }
 
     public async Task ResetPasswordAsync(Guid id, string password, CancellationToken ct = default)
@@ -330,7 +411,21 @@ public sealed partial class IdentityCoordinator(
         session.ExpiresAt = now + _options.DeviceSessionTtl;
         session.LastSeenAt = now;
         session.RevokedAt = null;
-        if (existing is null) db.DeviceSessions.Add(session);
+        if (existing is null)
+        {
+            db.DeviceSessions.Add(session);
+            // 每账号活跃会话上限：超出时撤销最早创建的一批，防止长周期累积。
+            // SQLite 不支持 DateTimeOffset 比较的 SQL 翻译，先取未撤销会话再在内存中过滤。
+            var candidates = await db.DeviceSessions
+                .Where(x => x.UserId == user.Id && x.RevokedAt == null)
+                .ToListAsync(ct);
+            var overflow = candidates
+                .Where(x => x.ExpiresAt > now)
+                .OrderByDescending(x => x.CreatedAt)
+                .Skip(MaxActiveSessionsPerUser - 1)
+                .ToList();
+            foreach (var old in overflow) old.RevokedAt = now;
+        }
         await db.SaveChangesAsync(ct);
         await NextVersionAsync(ct);
         return new AuthResponse
@@ -392,10 +487,23 @@ public sealed partial class IdentityCoordinator(
 
     private async Task<long> NextVersionAsync(CancellationToken ct)
     {
-        var metadata = await db.SystemMetadata.SingleAsync(x => x.Id == 1, ct);
-        metadata.AccountVersion++;
-        await db.SaveChangesAsync(ct);
-        return metadata.AccountVersion;
+        // 事务内原子自增：并发变更各自拿到不同的新版本号，避免读到旧值后各自写同一个 +1 导致丢递增。
+        await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                "UPDATE SystemMetadata SET AccountVersion = AccountVersion + 1 WHERE Id = 1;", ct);
+            var version = await db.SystemMetadata.Where(x => x.Id == 1)
+                .Select(x => x.AccountVersion)
+                .SingleAsync(ct);
+            await db.Database.CommitTransactionAsync(ct);
+            return version;
+        }
+        catch
+        {
+            await db.Database.RollbackTransactionAsync(ct);
+            throw;
+        }
     }
 
     private static UserProfile ToProfile(AppUser user) => new()
@@ -435,6 +543,15 @@ public sealed partial class IdentityCoordinator(
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     private static bool FixedEquals(string left, string right) => CryptographicOperations.FixedTimeEquals(
         Encoding.ASCII.GetBytes(left), Encoding.ASCII.GetBytes(right));
+
+    private AppUser? _timingUser;
+
+    /// <summary>恒定时间校验用的占位用户；首次校验不存在账号时用真实哈希器生成等成本哈希。</summary>
+    private AppUser TimingUser() => _timingUser ??= new AppUser
+    {
+        UserName = "remoteci-timing-equalizer",
+        PasswordHash = users.PasswordHasher.HashPassword(new AppUser(), CreateSecret(16)),
+    };
 
     private static void ValidateUserInput(string username, string displayName, string password, UserRole role)
     {

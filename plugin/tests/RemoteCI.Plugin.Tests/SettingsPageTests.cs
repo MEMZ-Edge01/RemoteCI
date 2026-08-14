@@ -25,6 +25,24 @@ public sealed class SettingsPageTests
         Assert.Contains("启用局域网直连服务", CheckBoxLabels(page.Content));
     }
 
+    [Theory]
+    [InlineData("8765", "http://nas:8080", true, true)]
+    [InlineData("0", "http://nas:8080", false, true)]
+    [InlineData("70000", "http://nas:8080", false, true)]
+    [InlineData("abc", "http://nas:8080", false, true)]
+    [InlineData("8765", "nas:8080", true, false)]
+    [InlineData("8765", "javascript:alert(1)", true, false)]
+    [InlineData("8765", "", true, true)]
+    [InlineData("8765", "https://ci.example.com", true, true)]
+    public void ValidateInput_GuardsPortRangeAndUrlScheme(
+        string portText, string urlText, bool expectedPortValid, bool expectedUrlValid)
+    {
+        var (portValid, urlValid) = RemoteCiSettingsPage.ValidateInput(portText, urlText);
+
+        Assert.Equal(expectedPortValid, portValid);
+        Assert.Equal(expectedUrlValid, urlValid);
+    }
+
     private static IReadOnlyList<string> CheckBoxLabels(object? root)
     {
         var labels = new List<string>();

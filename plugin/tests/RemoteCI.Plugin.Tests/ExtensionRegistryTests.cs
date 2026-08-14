@@ -50,7 +50,8 @@ public sealed class ExtensionRegistryTests
         string displayName,
         UserPermissions permission = UserPermissions.SystemControl,
         IReadOnlyList<ExtensionParameter>? parameters = null,
-        Func<ExtensionExecutionContext, IReadOnlyDictionary<string, string?>, Task<CommandResult>>? execute = null)
+        Func<ExtensionExecutionContext, IReadOnlyDictionary<string, string?>, Task<CommandResult>>? execute = null,
+        Func<ExtensionExecutionContext, IReadOnlyDictionary<string, string?>, CancellationToken, Task<CommandResult>>? executeWithToken = null)
         : IRemoteCiExtension
     {
         public string Id { get; } = id;
@@ -63,6 +64,7 @@ public sealed class ExtensionRegistryTests
             ExtensionExecutionContext context,
             IReadOnlyDictionary<string, string?> args,
             CancellationToken cancellationToken) =>
+            executeWithToken?.Invoke(context, args, cancellationToken) ??
             execute?.Invoke(context, args) ??
             Task.FromResult(new CommandResult { Success = true, Code = CommandResultCodes.Ok, Message = "已执行" });
     }

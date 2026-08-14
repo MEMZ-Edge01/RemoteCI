@@ -4,14 +4,17 @@
 # 用法：
 #   ./fnos/build.sh [版本] [fnpack 路径]
 #
-# 版本缺省从 REMOTECI_VERSION 或最近的 git tag 读取，均无则使用 0.2.0。
+# 版本缺省从 REMOTECI_VERSION 或最近的 git tag 读取，均无时回退到
+# server/RemoteCI.Server/RemoteCI.Server.csproj 的 <Version>（本地默认版本唯一来源）。
 # fnpack 路径缺省为 .tools/fnpack；可通过 FNPACK 环境变量或第二个参数指定。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FNOS_DIR="$ROOT/fnos"
 
-VERSION="${1:-${REMOTECI_VERSION:-$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null || echo 0.2.0)}}"
+LOCAL_FALLBACK="$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' \
+  "$ROOT/server/RemoteCI.Server/RemoteCI.Server.csproj" | head -n 1)"
+VERSION="${1:-${REMOTECI_VERSION:-$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null || echo "${LOCAL_FALLBACK:-0.0.0}")}}"
 VERSION="${VERSION#v}"
 FNPACK="${2:-${FNPACK:-$ROOT/.tools/fnpack}}"
 

@@ -14,16 +14,20 @@ namespace RemoteCI.Plugin.Services;
 public sealed class CloudClient : IDisposable
 {
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan CredentiallessRetryDelay = TimeSpan.FromMinutes(2);
     private readonly PluginSettings _settings;
     private readonly AccountMirror _accounts;
     private readonly CommandHandler _commands;
     private readonly SchedulePullRequestHandler _schedulePullRequests;
     private readonly ILogger<CloudClient> _logger;
-    private readonly HttpClient _http = new();
+    // 配对请求设置显式超时，服务器挂起时不会让重连循环永久阻塞。
+    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private ClientWebSocket? _ws;
     private CancellationTokenSource? _cts;
     private volatile bool _running;
+    private TimeSpan _reconnectDelay = ReconnectDelay;
 
     public CloudClient(
         PluginSettings settings,
@@ -61,6 +65,7 @@ public sealed class CloudClient : IDisposable
             {
                 await EnsureTokenAsync(ct);
                 await ConnectAsync(ct);
+                _reconnectDelay = ReconnectDelay; // 连接成功即复位退避。
                 await ReceiveLoopAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -76,10 +81,18 @@ public sealed class CloudClient : IDisposable
                 }
                 else
                 {
-                    _logger.LogWarning(ex, "云端连接异常，{Delay} 秒后重连", ReconnectDelay.TotalSeconds);
+                    _logger.LogWarning(ex, "云端连接异常，{Delay} 秒后重连", _reconnectDelay.TotalSeconds);
                 }
                 DisposeSocket();
-                await Task.Delay(ReconnectDelay, ct);
+                // 没有任何凭据时退避到 2 分钟，避免每 5 秒刷日志空转；循环仍会周期性拾取新填写的配对码。
+                var delay = string.IsNullOrWhiteSpace(_settings.CloudToken) &&
+                    string.IsNullOrWhiteSpace(_settings.PluginPairCode)
+                    ? CredentiallessRetryDelay
+                    : _reconnectDelay;
+                _reconnectDelay = _reconnectDelay < MaxReconnectDelay
+                    ? _reconnectDelay + TimeSpan.FromSeconds(5)
+                    : MaxReconnectDelay;
+                await Task.Delay(delay, ct);
             }
         }
     }
@@ -94,7 +107,8 @@ public sealed class CloudClient : IDisposable
             $"{_settings.CloudServerUrl.TrimEnd('/')}/api/plugin/pair",
             new PairRequest { PairCode = _settings.PluginPairCode, Role = "plugin" },
             ct);
-        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.Unauthorized)
+        // 409=配对码已用、401=配对码无效、403=端点拒绝（反向代理或权限配置），均视为凭据失效。
+        if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             throw new PluginAuthenticationException();
         response.EnsureSuccessStatusCode();
         var pair = await response.Content.ReadFromJsonAsync<PairResponse>(cancellationToken: ct)
@@ -108,6 +122,8 @@ public sealed class CloudClient : IDisposable
     {
         DisposeSocket();
         _ws = new ClientWebSocket();
+        // 空闲时由 ClientWebSocket 发送协议层 ping；静默断网会在 ping 超时后让接收循环报错并触发重连。
+        _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
         var builder = new UriBuilder(_settings.CloudServerUrl)
         {
             Path = "/ws",
@@ -181,20 +197,31 @@ public sealed class CloudClient : IDisposable
         await _sendLock.WaitAsync(ct);
         try
         {
-            if (_ws is { State: WebSocketState.Open })
-                await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+            if (_ws is { State: WebSocketState.Open } socket)
+                await socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+        }
+        catch (WebSocketException)
+        {
+            // 发送失败说明对端已不可达：立即释放连接，让接收循环解除阻塞并触发外层重连。
+            DisposeSocket();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 与 DisposeSocket/Dispose 的正常竞态，无需处理。
         }
         finally
         {
-            _sendLock.Release();
+            try { _sendLock.Release(); }
+            catch (ObjectDisposedException) { /* 插件正在停止。 */ }
         }
     }
 
     private static T? ConvertPayload<T>(object? payload) => JsonSerializer.Deserialize<T>(
         JsonSerializer.Serialize(payload), JsonDefaults.Options);
 
-    private static bool IsAuthenticationFailure(Exception ex) => ex is PluginAuthenticationException ||
-        ex.Message.Contains("401", StringComparison.OrdinalIgnoreCase);
+    /// <summary>凭据失效只由明确的类型信号判定：配对端点 401/403/409 与 WS 的 PolicyViolation。
+    /// 不再用异常消息字符串匹配，避免错误文本或 URL 恰好含 “401” 时误清长期凭据。</summary>
+    private static bool IsAuthenticationFailure(Exception ex) => ex is PluginAuthenticationException;
 
     private void DisposeSocket()
     {

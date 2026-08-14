@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -523,6 +524,206 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         }
     }
 
+    [Fact]
+    public async Task Login_LocksOutAfterRepeatedFailuresButLeavesOtherAccountsAlone()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "lockout.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
+        var client = factory.CreateClient();
+        var admin = await factory.LoginAsync();
+        var create = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "lockout.user",
+                DisplayName = "锁定测试",
+                Password = "Lockout-Password-2026",
+            }));
+        create.EnsureSuccessStatusCode();
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var failed = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest
+            {
+                Username = "lockout.user",
+                Password = "wrong-password",
+                DeviceName = "Lockout Test",
+            });
+            Assert.Equal(HttpStatusCode.Unauthorized, failed.StatusCode);
+        }
+
+        // 第 9 次即使密码正确也处于锁定状态（与 WebUI 登录行为一致）。
+        var locked = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest
+        {
+            Username = "lockout.user",
+            Password = "Lockout-Password-2026",
+            DeviceName = "Lockout Test",
+        });
+        Assert.Equal(HttpStatusCode.Unauthorized, locked.StatusCode);
+
+        // 其他账号不受影响。
+        var other = await factory.LoginAsync();
+        Assert.True(other.AccessToken.Length > 0);
+    }
+
+    [Fact]
+    public async Task PluginPairingCode_ConcurrentConsumptionOnlySucceedsOnce()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "pair-race.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
+
+        var requests = Enumerable.Range(0, 8).Select(_ => factory.CreateClient().PostAsJsonAsync(
+            "/api/plugin/pair",
+            new PairRequest { PairCode = TestWebApplicationFactory.TestPairCode, Role = "plugin" }));
+        var responses = await Task.WhenAll(requests);
+
+        Assert.Equal(1, responses.Count(response => response.StatusCode == HttpStatusCode.OK));
+        Assert.Equal(7, responses.Count(response => response.StatusCode == HttpStatusCode.Conflict));
+    }
+
+    [Fact]
+    public async Task ManageUsersGrant_CannotCreateEditOrResetAdmins()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "escalation.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
+        var client = factory.CreateClient();
+        var admin = await factory.LoginAsync();
+        var create = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "manager.user",
+                DisplayName = "普通管理者",
+                Password = "Manager-Password-2026",
+                GrantedPermissions = UserPermissions.ManageUsers,
+            }));
+        create.EnsureSuccessStatusCode();
+        var manager = await LoginViaAsync(client, "manager.user", "Manager-Password-2026");
+
+        // 不能创建管理员账号。
+        var createAdmin = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            manager.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "sneaky.admin",
+                DisplayName = "伪装管理员",
+                Password = "Sneaky-Password-2026",
+                Role = UserRole.Admin,
+            }));
+        Assert.Equal(HttpStatusCode.Forbidden, createAdmin.StatusCode);
+
+        // 不能把自己或他人升级为管理员。
+        var promote = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Put,
+            $"/api/users/{manager.User.Id}",
+            manager.AccessToken,
+            new UpdateUserRequest
+            {
+                DisplayName = "普通管理者",
+                Role = UserRole.Admin,
+                Enabled = true,
+            }));
+        Assert.Equal(HttpStatusCode.Forbidden, promote.StatusCode);
+
+        // 不能编辑、重置密码或删除管理员账号。
+        var editAdmin = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Put,
+            $"/api/users/{admin.User.Id}",
+            manager.AccessToken,
+            new UpdateUserRequest
+            {
+                DisplayName = "系统管理员",
+                Role = UserRole.Admin,
+                Enabled = true,
+            }));
+        Assert.Equal(HttpStatusCode.Forbidden, editAdmin.StatusCode);
+        var resetAdmin = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            $"/api/users/{admin.User.Id}/password",
+            manager.AccessToken,
+            new ResetPasswordRequest { Password = "Stolen-Password-2026" }));
+        Assert.Equal(HttpStatusCode.Forbidden, resetAdmin.StatusCode);
+        var deleteAdmin = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Delete,
+            $"/api/users/{admin.User.Id}",
+            manager.AccessToken));
+        Assert.Equal(HttpStatusCode.Forbidden, deleteAdmin.StatusCode);
+
+        // 管理普通账号仍然可行（权限没有被误伤）。
+        var editPeer = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Put,
+            $"/api/users/{manager.User.Id}",
+            manager.AccessToken,
+            new UpdateUserRequest
+            {
+                DisplayName = "普通管理者·改",
+                Role = UserRole.User,
+                Enabled = true,
+                GrantedPermissions = UserPermissions.ManageUsers,
+            }));
+        Assert.Equal(HttpStatusCode.OK, editPeer.StatusCode);
+    }
+
+    [Fact]
+    public async Task PluginCredentials_ListedAndRevokedByAdminOnly_AndRevokedTokenStopsConnecting()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "credential.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
+        var client = factory.CreateClient();
+        var pluginToken = await factory.GetPluginTokenAsync();
+        var admin = await factory.LoginAsync();
+
+        var list = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Get, "/api/plugins/credentials", admin.AccessToken));
+        list.EnsureSuccessStatusCode();
+        var credentials = (await list.Content.ReadFromJsonAsync<List<PluginCredentialInfo>>())!;
+        var credential = Assert.Single(credentials);
+        Assert.True(credential.Enabled);
+
+        // 未登录与仅持有 ManageUsers 的普通用户均不可访问。
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/plugins/credentials")).StatusCode);
+        var create = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "credential.manager",
+                DisplayName = "凭证管理者",
+                Password = "Manager-Password-2026",
+                GrantedPermissions = UserPermissions.ManageUsers,
+            }));
+        create.EnsureSuccessStatusCode();
+        var manager = await LoginViaAsync(client, "credential.manager", "Manager-Password-2026");
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Get, "/api/plugins/credentials", manager.AccessToken))).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Delete, $"/api/plugins/credentials/{credential.Id}", manager.AccessToken))).StatusCode);
+
+        // 管理员吊销后：列表标记禁用，被吊销令牌无法再建立 WebSocket。
+        var revoke = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Delete, $"/api/plugins/credentials/{credential.Id}", admin.AccessToken));
+        Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
+
+        var after = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Get, "/api/plugins/credentials", admin.AccessToken));
+        var afterList = (await after.Content.ReadFromJsonAsync<List<PluginCredentialInfo>>())!;
+        Assert.False(afterList.Single(x => x.Id == credential.Id).Enabled);
+
+        var webSocket = factory.Server.CreateWebSocketClient();
+        // TestServer 握手失败抛 InvalidOperationException 而非 WebSocketException，按状态码断言。
+        var connectError = await Assert.ThrowsAnyAsync<Exception>(() => webSocket.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(pluginToken)}"),
+            CancellationToken.None));
+        Assert.Contains("401", connectError.Message);
+    }
+
     private HttpClient CreateBrowserClient() => _factory.CreateClient(new WebApplicationFactoryClientOptions
     {
         AllowAutoRedirect = false,
@@ -581,6 +782,18 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
             Username = username,
             Password = password,
             DeviceName = "Permission Test",
+        });
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<AuthResponse>())!;
+    }
+
+    private static async Task<AuthResponse> LoginViaAsync(HttpClient client, string username, string password)
+    {
+        var response = await client.PostAsJsonAsync("/api/auth/login", new LoginRequest
+        {
+            Username = username,
+            Password = password,
+            DeviceName = "Isolated Factory Test",
         });
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<AuthResponse>())!;

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using RemoteCI.Server.Services;
 using Xunit;
 
@@ -126,6 +127,48 @@ public sealed class UpdateServiceTests
     public void IsNewer_ComparesSemanticVersions(string latest, string current, bool expected) =>
         Assert.Equal(expected, UpdateService.IsNewer(latest, current));
 
+    [Theory]
+    [InlineData("../evil")]
+    [InlineData("v0.4.0/../../x")]
+    [InlineData("latest")]
+    [InlineData("v0.4.0:with:colons")]
+    public async Task PrepareUpdateAsync_RejectsMalformedReleaseTags(string tag)
+    {
+        var service = new UpdateService();
+        var release = new ReleaseInfo(tag, "恶意 tag", "", []);
+        var asset = new ReleaseAsset("RemoteCI.Server-0.4.0-linux-x64.zip", "https://example.invalid/x.zip", 1);
+
+        // 校验发生在任何文件/网络操作之前，可离线断言。
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.PrepareUpdateAsync(
+            release, asset,
+            Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", "db", "x.db"),
+            "/app",
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task VerifyFileHashAsync_AcceptsMatchingHashAndRejectsTampering()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var file = Path.Combine(root, "archive.zip");
+            await File.WriteAllTextAsync(file, "hello remoteci");
+            var expected = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(file))).ToLowerInvariant();
+
+            await UpdateService.VerifyFileHashAsync(expected, file); // 匹配时不抛异常。
+
+            await File.WriteAllTextAsync(file, "tampered");
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                UpdateService.VerifyFileHashAsync(expected, file));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void SelectServerAsset_PicksMatchingPlatformZip()
     {
@@ -176,5 +219,39 @@ public sealed class UpdateServiceTests
         var root = UpdateService.GetUpdatesRoot(databasePath, "/app");
 
         Assert.Equal(Path.Combine(dataDir, "updates"), root);
+    }
+
+    [Fact]
+    public async Task ApplyFilesAsync_NeverOverwritesRuntimeConfiguration()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source");
+        var destination = Path.Combine(root, "destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        try
+        {
+            // 更新包自带默认配置，部署目录里是用户自定义配置。
+            await File.WriteAllTextAsync(Path.Combine(source, "appsettings.json"), "{\"default\":true}");
+            await File.WriteAllTextAsync(Path.Combine(source, "appsettings.Production.json"), "{}");
+            await File.WriteAllTextAsync(Path.Combine(source, "web.config"), "<configuration/>");
+            await File.WriteAllTextAsync(Path.Combine(source, "RemoteCI.Server.dll"), "new dll");
+            await File.WriteAllTextAsync(Path.Combine(destination, "appsettings.json"), "{\"Server\":{\"DatabasePath\":\"custom.db\"}}");
+            await File.WriteAllTextAsync(Path.Combine(destination, "appsettings.Production.json"), "{\"user\":true}");
+            await File.WriteAllTextAsync(Path.Combine(destination, "web.config"), "<user-web-config/>");
+
+            await UpdateInstaller.ApplyFilesAsync(source, destination, CancellationToken.None);
+
+            Assert.Equal("new dll", await File.ReadAllTextAsync(Path.Combine(destination, "RemoteCI.Server.dll")));
+            Assert.Equal(
+                "{\"Server\":{\"DatabasePath\":\"custom.db\"}}",
+                await File.ReadAllTextAsync(Path.Combine(destination, "appsettings.json")));
+            Assert.Equal("{\"user\":true}", await File.ReadAllTextAsync(Path.Combine(destination, "appsettings.Production.json")));
+            Assert.Equal("<user-web-config/>", await File.ReadAllTextAsync(Path.Combine(destination, "web.config")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }

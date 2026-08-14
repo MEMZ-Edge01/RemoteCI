@@ -6,6 +6,7 @@ using ClassIsland.Shared;
 using ClassIsland.Shared.Helpers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using RemoteCI.Plugin.Extensions;
 using RemoteCI.Plugin.Services;
 using RemoteCI.Plugin.Settings;
@@ -35,7 +36,12 @@ public class Plugin : PluginBase
         // 加载配置；配置目录由 ClassIsland 提供，保存在插件安装目录之外，更新插件不会丢失。
         var settingsPath = Path.Combine(PluginConfigFolder, "Settings.json");
         Settings = ConfigureFileHelper.LoadConfig<PluginSettings>(settingsPath);
-        Settings.PropertyChanged += (_, _) => ConfigureFileHelper.SaveConfig(settingsPath, Settings);
+        Settings.PropertyChanged += (_, _) =>
+        {
+            ConfigureFileHelper.SaveConfig(settingsPath, Settings);
+            // Settings.json 含插件长期凭据，限制为仅当前用户可读。
+            FileProtection.RestrictToCurrentUser(settingsPath);
+        };
 
         services.AddSingleton(Settings);
         services.AddSingleton(new AccountMirror(Path.Combine(PluginConfigFolder, "Accounts.json")));
@@ -54,8 +60,25 @@ public class Plugin : PluginBase
         var app = AppBase.Current;
         app.AppStarted += (_, _) =>
         {
-            _service = IAppHost.GetService<RemoteCiService>();
-            _service.Start();
+            try
+            {
+                _service = IAppHost.GetService<RemoteCiService>();
+                _service.Start();
+            }
+            catch (Exception ex)
+            {
+                // 端口冲突或配置损坏时插件启动失败，绝不能中断 ClassIsland 自身的启动流程。
+                try
+                {
+                    IAppHost.GetService<ILoggerFactory>()
+                        .CreateLogger("RemoteCI.Plugin")
+                        .LogError(ex, "RemoteCI 服务启动失败，插件将在本次运行中不可用");
+                }
+                catch
+                {
+                    Console.Error.WriteLine($"RemoteCI 服务启动失败：{ex}");
+                }
+            }
         };
         app.AppStopping += (_, _) => _service?.Stop();
     }

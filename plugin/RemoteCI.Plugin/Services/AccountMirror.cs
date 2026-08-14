@@ -8,6 +8,9 @@ namespace RemoteCI.Plugin.Services;
 
 /// <summary>
 /// 服务端授权镜像。只保存账号元数据和设备会话验证器，绝不接收或保存用户密码哈希。
+/// 信任窗口说明：镜像通过云端连接更新，服务端撤销权限/禁用账号后，局域网端最长滞后
+/// PrivilegedOfflineTtl（24 小时）才能感知，期间被撤销的账号在 LAN 上仍按旧镜像授权；
+/// 该窗口之后有效权限统一收缩为 ViewCurrentCourse。这是局域网离线可用性的设计权衡。
 /// </summary>
 public sealed class AccountMirror
 {
@@ -23,7 +26,6 @@ public sealed class AccountMirror
         // v1 草稿曾写入密码哈希；启动时立即按 v2 DTO 原子重写，移除所有未知旧字段。
         if (File.Exists(path)) PersistLocked();
     }
-
     public long Version { get { lock (_gate) return _sync.Version; } }
     public string ServerVersion { get { lock (_gate) return _sync.ServerVersion; } }
     public DateTimeOffset GeneratedAt { get { lock (_gate) return _sync.GeneratedAt; } }
@@ -103,7 +105,7 @@ public sealed class AccountMirror
     {
         lock (_gate)
         {
-            if (sync.Version < _sync.Version) return;
+            if (sync.Version <= _sync.Version) return;
             _sync = sync;
             PersistLocked();
         }
@@ -117,11 +119,20 @@ public sealed class AccountMirror
 
     private void PersistLocked()
     {
-        var directory = Path.GetDirectoryName(_path)!;
-        Directory.CreateDirectory(directory);
-        var temporary = _path + ".tmp";
-        File.WriteAllText(temporary, JsonSerializer.Serialize(_sync, JsonDefaults.Options));
-        File.Move(temporary, _path, true);
+        try
+        {
+            var directory = Path.GetDirectoryName(_path)!;
+            Directory.CreateDirectory(directory);
+            var temporary = _path + ".tmp";
+            File.WriteAllText(temporary, JsonSerializer.Serialize(_sync, JsonDefaults.Options));
+            File.Move(temporary, _path, true);
+            // 镜像含设备验证器（LAN HMAC 密钥材料），限制为仅当前用户可读。
+            FileProtection.RestrictToCurrentUser(_path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 镜像文件不可写时降级为纯内存态，不允许插件初始化或同步因此失败。
+        }
     }
 
     private static AccountSync Load(string path)
@@ -132,7 +143,7 @@ public sealed class AccountMirror
             return JsonSerializer.Deserialize<AccountSync>(File.ReadAllText(path), JsonDefaults.Options)
                 ?? new AccountSync();
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             return new AccountSync();
         }

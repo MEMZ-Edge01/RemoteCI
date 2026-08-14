@@ -170,6 +170,9 @@ internal fun LoginScreen(
     item { Input(settings.username, { onSettingsChange(settings.copy(username = it)) }, "ID") }
     item { Input(password, onPasswordChange, "密码", password = true) }
     item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, "云端地址") }
+    if (settings.cloudServerUrl.trim().startsWith("http://")) {
+        item { Hint("云端地址使用明文 HTTP，账号密码可能被同一局域网窃听，建议改用 HTTPS") }
+    }
     item {
         ActionButton(
             if (lanDiscoveryScanning) "正在扫描…" else "扫描局域网设备",

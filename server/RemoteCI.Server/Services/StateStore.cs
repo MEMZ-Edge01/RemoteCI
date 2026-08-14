@@ -25,9 +25,6 @@ public sealed class StateStore : IStateStore
     public void SaveEvent(ClassEvent @event) =>
         Set(ref _event, @event);
 
-    public ClassEvent? GetLatestEvent() =>
-        Get(_event);
-
     public void SaveExtensions(IReadOnlyList<ExtensionDefinition> extensions) =>
         Set(ref _extensions, extensions);
 

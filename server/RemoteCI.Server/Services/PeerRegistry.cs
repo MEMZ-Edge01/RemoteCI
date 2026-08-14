@@ -9,6 +9,7 @@ namespace RemoteCI.Server.Services;
 /// <summary>连接注册表，同时负责命令的定向回执与权限变更后的在线连接刷新。</summary>
 public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
 {
+    private static readonly TimeSpan WatchCommandTimeout = TimeSpan.FromSeconds(15);
     private readonly ConcurrentDictionary<Guid, WsPeer> _pluginPeers = new();
     private readonly ConcurrentDictionary<Guid, WsPeer> _watchPeers = new();
     private readonly ConcurrentDictionary<string, PendingCommand> _pendingCommands = new(StringComparer.Ordinal);
@@ -41,7 +42,16 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         try
         {
             if (peer.Socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-                await peer.Socket.CloseAsync(status ?? WebSocketCloseStatus.NormalClosure, "closed", CancellationToken.None);
+            {
+                // 对端无响应时 CloseAsync 会永远等待关闭握手；5 秒超时后强制中止。
+                using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await peer.Socket.CloseAsync(
+                    status ?? WebSocketCloseStatus.NormalClosure, "closed", closeCts.Token);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            peer.Socket.Abort();
         }
         catch (WebSocketException)
         {
@@ -127,8 +137,25 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
             await TrySendAsync(peer, envelope, ct);
     }
 
-    public void RegisterWatchCommand(string messageId, Guid connectionId) =>
+    public void RegisterWatchCommand(string messageId, Guid connectionId)
+    {
         _pendingCommands[messageId] = new PendingCommand(connectionId, null);
+        _ = ExpireWatchCommandAsync(messageId, connectionId);
+    }
+
+    /// <summary>与 REST 路径的 15 秒上限一致：插件超时未回执就回收挂起项并告知发起手表，避免永久泄漏。</summary>
+    private async Task ExpireWatchCommandAsync(string messageId, Guid connectionId)
+    {
+        await Task.Delay(WatchCommandTimeout);
+        if (!_pendingCommands.TryRemove(messageId, out var pending)) return;
+        if (pending.WatchConnectionId != connectionId || pending.Completion is not null) return;
+        await SendToWatchAsync(connectionId, new Envelope
+        {
+            Type = Protocol.MessageTypeCommandResult,
+            ReplyToMessageId = messageId,
+            Payload = Failure(CommandResultCodes.Timeout, "等待插件回执超时，操作结果未知"),
+        });
+    }
 
     public async Task<CommandResult> SendCommandAndWaitAsync(
         CommandMessage command, TimeSpan timeout, CancellationToken ct = default)

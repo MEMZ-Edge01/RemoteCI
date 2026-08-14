@@ -21,8 +21,10 @@ import com.remoteci.watch.data.SettingsStore
 import com.remoteci.watch.data.SnapshotStore
 import com.remoteci.watch.notif.NotificationHelper
 import java.time.LocalDate
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class Screen {
     Login,
@@ -63,7 +65,8 @@ fun RemoteCiApp(context: Context) {
     var screen by rememberSaveable {
         mutableStateOf(if (ConnectionManager.hasSavedSession()) Screen.Home else Screen.Login)
     }
-    var password by rememberSaveable { mutableStateOf("") }
+    // 密码只保存在内存中：绝不进入 saved instance state（rememberSaveable 会把明文写盘）。
+    var password by remember { mutableStateOf("") }
     var selectedDate by rememberSaveable { mutableStateOf<String?>(null) }
     var swapMode by rememberSaveable { mutableStateOf(SwapMode.Exchange) }
     var pickerTarget by rememberSaveable { mutableStateOf(LessonTarget.Source) }
@@ -108,14 +111,15 @@ fun RemoteCiApp(context: Context) {
     LaunchedEffect(Unit) {
         ConnectionManager.discoveredSettings.collect { updated ->
             settings = updated
-            settingsStore.save(updated)
+            withContext(Dispatchers.IO) { settingsStore.save(updated) }
         }
     }
     LaunchedEffect(liveSnapshot) {
-        liveSnapshot?.let { snapshotStore.save(it); cachedSnapshot = it }
+        // 高频状态推送每秒到达：落盘移到 IO 线程，避免持续阻塞主线程。
+        liveSnapshot?.let { withContext(Dispatchers.IO) { snapshotStore.save(it) }; cachedSnapshot = it }
     }
     LaunchedEffect(liveSchedule) {
-        liveSchedule?.let { snapshotStore.saveSchedule(it); cachedSchedule = it }
+        liveSchedule?.let { withContext(Dispatchers.IO) { snapshotStore.saveSchedule(it) }; cachedSchedule = it }
     }
     LaunchedEffect(currentUser) {
         val user = currentUser

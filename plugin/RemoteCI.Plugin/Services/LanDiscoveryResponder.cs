@@ -54,7 +54,26 @@ internal sealed class LanDiscoveryResponder(
         }
         catch (SocketException ex)
         {
-            logger.LogWarning(ex, "局域网设备扫描监听已中断");
+            // 网卡热插拔或瞬时故障会中断监听；退避后自动重启，而不是永久失效。
+            logger.LogWarning(ex, "局域网设备扫描监听已中断，10 秒后自动重启");
+            await RestartAsync(ct);
+        }
+    }
+
+    private async Task RestartAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10), ct);
+            _udp?.Dispose();
+            if (ct.IsCancellationRequested) return;
+            _udp = new UdpClient(new IPEndPoint(IPAddress.Any, Protocol.LanDiscoveryPort));
+            await ReceiveLoopAsync(_udp, ct);
+        }
+        catch (Exception ex) when (ex is SocketException or ObjectDisposedException or OperationCanceledException)
+        {
+            if (!ct.IsCancellationRequested)
+                logger.LogWarning(ex, "局域网设备扫描重启失败，已停用");
         }
     }
 

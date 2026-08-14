@@ -36,6 +36,25 @@ public sealed class ApiError
     public required string Message { get; set; }
 }
 
+/// <summary>插件长期凭证的管理视图（不含令牌本身）。</summary>
+public sealed class PluginCredentialInfo
+{
+    [JsonPropertyName("id")]
+    public Guid Id { get; set; }
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("createdAt")]
+    public DateTimeOffset CreatedAt { get; set; }
+
+    [JsonPropertyName("lastSeenAt")]
+    public DateTimeOffset LastSeenAt { get; set; }
+
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; }
+}
+
 /// <summary>REST 错误码常量。</summary>
 public static class ApiErrorCodes
 {

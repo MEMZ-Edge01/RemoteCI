@@ -44,11 +44,17 @@ object ConnectionManager {
         data class Error(val message: String) : State
     }
 
+    private const val InitialReconnectDelayMs = 5_000L
+    private const val MaxReconnectDelayMs = 60_000L
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val okHttp = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        // 静默断网（Wi-Fi 掉线、NAT 失效）时 TCP 不会通知应用，依赖 WebSocket ping 主动探测，
+        // 否则连接会“看起来还活着”却永远收不到数据、永不重连。
+        .pingInterval(20, TimeUnit.SECONDS)
         .build()
     private val lanDiscoveryClient = LanDiscoveryClient(okHttp, json)
     private lateinit var sessions: SecureSessionStore
@@ -60,7 +66,10 @@ object ConnectionManager {
     private var desiredSettings: WatchSettings? = null
     private var accessToken: String? = null
     private var lastLanAdvertisement: PluginNetworkInfo? = null
-    private var generation = 0
+    // OkHttp 回调线程、主线程与协程会并发读写 generation，必须用原子操作保证 attempt 校验可靠。
+    private val generation = java.util.concurrent.atomic.AtomicInteger(0)
+    // 断线自动重连的指数退避（连接成功后复位）；避免服务端抖动时 5 秒固定间隔造成重连风暴。
+    private var reconnectDelayMs = InitialReconnectDelayMs
 
     val state = MutableStateFlow<State>(State.Idle)
     /** 当前认证连接所属的 WebUI 版本；未知时禁止手表自行升级。 */
@@ -115,7 +124,13 @@ object ConnectionManager {
             val bootstrap = lanDiscoveryClient.fetchBootstrap(candidate)
             val updated = mergeLanBootstrapInfo(settings, candidate, bootstrap)
             lanPlugins.value = emptyList()
-            lanDiscoveryStatus.value = "已获取云服务器：${updated.cloudServerUrl}，确认后请点安全登录"
+            // 局域网发现与 bootstrap 均无认证：明文 HTTP 提示窃听风险，
+            // 与上次实际使用的地址不同时提示可能被伪造（TOFU 风格校验）。
+            val insecure = updated.cloudServerUrl.startsWith("http://")
+            val changed = bootstrapUrlChanged(settings.cloudServerUrl, updated.cloudServerUrl)
+            lanDiscoveryStatus.value = "已获取云服务器：${updated.cloudServerUrl}，确认后请点安全登录" +
+                (if (insecure) "（明文 HTTP，请确认网络可信）" else "") +
+                (if (changed) "（与上次使用的地址不同，请确认未被伪造）" else "")
             updated
         } catch (error: Exception) {
             if (error is CancellationException) throw error
@@ -129,8 +144,7 @@ object ConnectionManager {
         check(::sessions.isInitialized) { "ConnectionManager 尚未初始化" }
         discoveryJob?.cancel()
         lanDiscoveryScanning.value = false
-        generation++
-        val attempt = generation
+        val attempt = generation.incrementAndGet()
         desiredSettings = settings
         activeJob?.cancel()
         refreshJob?.cancel()
@@ -152,9 +166,12 @@ object ConnectionManager {
                     persist(auth)
                     val session = sessions.load() ?: throw MissingSessionException()
                     if (plan.preferLanAfterCloudAuthentication) {
-                        // 登录端点会先把新设备会话同步给插件；留出消息处理窗口再发起 HMAC 挑战。
-                        delay(400)
-                        if (connectLan(settings, session, attempt)) return@launch
+                        // 登录端点会把新设备会话先同步给插件；镜像传播需要时间，
+                        // 因此短间隔重试几次 HMAC 挑战，全部失败再回退云端中转。
+                        repeat(6) {
+                            delay(400)
+                            if (connectLan(settings, session, attempt)) return@launch
+                        }
                     }
                     if (!plan.allowCloudFallback)
                         throw IOException("云端认证已完成，但局域网连接失败且云端中转已关闭")
@@ -180,12 +197,14 @@ object ConnectionManager {
             } catch (error: Exception) {
                 state.value = State.Error(error.message ?: "连接失败")
                 serverVersion.value = null
+                // 登录虽成功但连接已失败，残留的用户信息会让界面误判为“在线”。
+                currentUser.value = null
             }
         }
     }
 
     fun disconnect(clearUser: Boolean = false) {
-        generation++
+        generation.incrementAndGet()
         desiredSettings = null
         activeJob?.cancel()
         refreshJob?.cancel()
@@ -351,18 +370,16 @@ object ConnectionManager {
 
     private suspend fun connectCloud(settings: WatchSettings, auth: AuthResponse, attempt: Int) {
         accessToken = auth.accessToken
-        val schemeUrl = settings.cloudServerUrl.trimEnd('/')
-            .replaceFirst("https://", "wss://")
-            .replaceFirst("http://", "ws://")
+        // 服务端令牌是标准 Base64，含 +/；不编码时 + 会被服务端解码成空格导致 401。
         if (!connectWebSocket(
-                "$schemeUrl/ws?token=${auth.accessToken}",
+                cloudWebSocketUrl(settings.cloudServerUrl, auth.accessToken),
                 State.CloudConnected,
                 null,
                 attempt,
             )
         ) throw IOException("云端连接失败")
         // 收到插件网络信息后可能已经切换到新的局域网连接尝试，旧云端协程不得再覆盖刷新任务。
-        if (attempt != generation) return
+        if (attempt != generation.get()) return
         scheduleAccessRefresh(settings, auth.accessExpiresAt, attempt)
     }
 
@@ -416,13 +433,16 @@ object ConnectionManager {
         session: PersistedDeviceSession?,
         attempt: Int,
     ): Boolean = suspendCancellableCoroutine { continuation ->
+        // 只有“认证成功进入工作状态”的连接在断开后才允许自动重连；
+        // 连接失败或认证被拒的 socket 由外层流程决定回退，否则每次失败都会调度一次全量重连形成风暴。
+        var authenticated = false
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (attempt != generation) webSocket.close(1000, "superseded") else ConnectionManager.webSocket = webSocket
+                if (attempt != generation.get()) webSocket.close(1000, "superseded") else ConnectionManager.webSocket = webSocket
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                if (attempt != generation) {
+                if (attempt != generation.get()) {
                     webSocket.close(1000, "superseded")
                     if (continuation.isActive) continuation.resume(false)
                     return
@@ -456,6 +476,8 @@ object ConnectionManager {
                 if (auth != null && continuation.isActive) {
                     if (auth.authenticated && auth.user != null) {
                         state.value = successState
+                        authenticated = true
+                        reconnectDelayMs = InitialReconnectDelayMs // 连接成功即复位退避。
                         continuation.resume(true)
                     } else {
                         webSocket.close(1008, "auth failed")
@@ -467,6 +489,10 @@ object ConnectionManager {
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (continuation.isActive) continuation.resume(false)
                 clearActiveConnection(webSocket)
+                // 已建立的连接异常断开：先呈现错误，onClosed 随后调度自动重连。
+                if (authenticated && attempt == generation.get()) {
+                    state.value = State.Error("连接已断开：${t.message ?: "网络不可用"}")
+                }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -475,7 +501,7 @@ object ConnectionManager {
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 clearActiveConnection(webSocket)
-                if (attempt == generation && !continuation.isActive) scheduleReconnect(attempt)
+                if (authenticated && attempt == generation.get() && !continuation.isActive) scheduleReconnect(attempt)
             }
         }
         val socket = okHttp.newWebSocket(Request.Builder().url(url).build(), listener)
@@ -572,16 +598,18 @@ object ConnectionManager {
         }.getOrDefault(50 * 60_000L)
         refreshJob = scope.launch {
             delay(delayMillis)
-            if (attempt == generation) connect(settings)
+            if (attempt == generation.get()) connect(settings)
         }
     }
 
     private fun scheduleReconnect(attempt: Int) {
         val settings = desiredSettings ?: return
         state.value = State.Connecting
+        val delayMs = reconnectDelayMs
+        reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(MaxReconnectDelayMs)
         scope.launch {
-            delay(5_000)
-            if (attempt == generation) connect(settings)
+            delay(delayMs)
+            if (attempt == generation.get()) connect(settings)
         }
     }
 
@@ -600,6 +628,23 @@ internal data class ConnectionPlan(
     val preferLanAfterCloudAuthentication: Boolean,
     val allowCloudFallback: Boolean,
 )
+
+/** 云端 WebSocket 地址；访问令牌必须做 URL 编码，服务端 Base64 令牌中的 + 在查询串里会被解码成空格。 */
+internal fun cloudWebSocketUrl(cloudServerUrl: String, accessToken: String): String {
+    val schemeUrl = cloudServerUrl.trimEnd('/')
+        .replaceFirst("https://", "wss://")
+        .replaceFirst("http://", "ws://")
+    return "$schemeUrl/ws?token=${java.net.URLEncoder.encode(accessToken, Charsets.UTF_8.name())}"
+}
+
+/** 引导返回的云服务器地址与上次实际使用的地址不同（默认开发地址不算“用过”）时提示用户。 */
+internal fun bootstrapUrlChanged(previous: String, current: String): Boolean {
+    val old = previous.trim().trimEnd('/')
+    val fresh = current.trim().trimEnd('/')
+    return old.isNotBlank() &&
+        !old.startsWith("http://10.0.2.2") &&
+        !old.equals(fresh, ignoreCase = true)
+}
 
 /** 密码只能由云端验证，因此密码登录始终允许一次云端引导；开发者开关只控制后续连接回退。 */
 internal fun planConnection(settings: WatchSettings, password: String?): ConnectionPlan = ConnectionPlan(

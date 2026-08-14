@@ -37,6 +37,8 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
             ["Server:BootstrapPluginPairCode"] = TestPairCode,
             ["Server:AccessTokenTtl"] = "01:00:00",
             ["Server:DeviceSessionTtl"] = "30.00:00:00",
+            // 集成测试会高频调用登录端点，放开限流避免 429 干扰断言；锁定逻辑由专门测试覆盖。
+            ["Server:AuthRateLimitPerMinute"] = "100000",
         }));
     }
 

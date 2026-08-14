@@ -137,4 +137,38 @@ class AuthorizationAndNotificationTest {
         assertTrue(user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS))
         assertFalse(user.has(Protocol.PERMISSION_MANAGE_SCHEDULE))
     }
+
+    @Test
+    fun `cloud websocket url url-encodes base64 access token`() {
+        // 服务端令牌是标准 Base64，+ 在查询串里会被解码成空格导致 401。
+        assertEquals(
+            "wss://ci.example.com/ws?token=Ab%2BCd%2Fe%3D%3D",
+            cloudWebSocketUrl("https://ci.example.com", "Ab+Cd/e=="),
+        )
+        assertEquals(
+            "ws://192.168.1.5:8080/ws?token=plainToken",
+            cloudWebSocketUrl("http://192.168.1.5:8080/", "plainToken"),
+        )
+    }
+
+    @Test
+    fun `lan endpoint hosts deduplicate and preserve preferred order`() {
+        assertEquals(
+            listOf("192.168.50.8", "10.0.0.9"),
+            lanEndpointHosts(
+                WatchSettings(lanHost = "192.168.50.8", lanHostCandidates = listOf("192.168.50.8", "10.0.0.9")),
+            ),
+        )
+        assertEquals(emptyList(), lanEndpointHosts(WatchSettings(lanHost = " ", lanHostCandidates = listOf(" "))))
+    }
+
+    @Test
+    fun `bootstrap change detection ignores defaults and matches case-insensitively`() {
+        // 默认开发地址与空值视为“从未使用”，不触发变更警告。
+        assertFalse(bootstrapUrlChanged("http://10.0.2.2:8080", "https://ci.example.com"))
+        assertFalse(bootstrapUrlChanged("", "https://ci.example.com"))
+        // 与上次实际使用的地址不同才警告；大小写与结尾斜杠差异不算变更。
+        assertTrue(bootstrapUrlChanged("https://old.example.com", "https://new.example.com"))
+        assertFalse(bootstrapUrlChanged("https://old.example.com", "https://OLD.example.com/"))
+    }
 }

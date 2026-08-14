@@ -1,11 +1,16 @@
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using System.Net;
 using RemoteCI.Server;
 using RemoteCI.Server.Data;
 using RemoteCI.Server.Services;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
+using System.Threading.RateLimiting;
 
 if (await UpdateInstaller.TryRunAsync(args)) return;
 
@@ -33,6 +38,31 @@ builder.Services.AddIdentity<AppUser, IdentityRole<Guid>>(options =>
     })
     .AddEntityFrameworkStores<AppDbContext>()
     .AddDefaultTokenProviders();
+
+// Cookie 加密密钥持久化到数据库同级目录：容器或服务账号重启后 WebUI 会话保持有效。
+var serverSection = builder.Configuration.GetSection(ServerOptions.SectionName).Get<ServerOptions>() ?? new ServerOptions();
+var dataDirectory = Path.IsPathRooted(serverSection.DatabasePath)
+    ? Path.GetDirectoryName(Path.GetFullPath(serverSection.DatabasePath))!
+    : Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, Path.GetDirectoryName(serverSection.DatabasePath)!));
+Directory.CreateDirectory(dataDirectory);
+builder.Services.AddDataProtection()
+    .SetApplicationName("RemoteCI.Server")
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataDirectory, "keys")));
+
+// 登录/刷新/配对等认证端点按客户端 IP 限流，作为 Identity 锁定之外的第一道爆破防线。
+builder.Services.AddRateLimiter(options =>
+{
+    var authRateLimit = Math.Max(1, serverSection.AuthRateLimitPerMinute);
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = authRateLimit,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
+});
 builder.Services.ConfigureApplicationCookie(options =>
 {
     options.Cookie.Name = "RemoteCI.Web";
@@ -58,6 +88,13 @@ var app = builder.Build();
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    // 显式声明只信任本机回环上的反向代理（框架默认值，此处固化意图）：
+    // 公网直连客户端伪造的 X-Forwarded-Proto/For 会被忽略，无法绕过 HTTPS 重定向与 HSTS。
+    KnownIPNetworks =
+    {
+        new System.Net.IPNetwork(IPAddress.Loopback, 8),
+        new System.Net.IPNetwork(IPAddress.IPv6Loopback, 128),
+    },
 });
 if (!app.Environment.IsDevelopment())
 {
@@ -66,6 +103,7 @@ if (!app.Environment.IsDevelopment())
 }
 app.UseStaticFiles();
 app.UseRouting();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseWebSockets();
@@ -90,7 +128,7 @@ app.MapPost("/api/plugin/pair", async (PairRequest request, IdentityCoordinator 
         return Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "此端点仅用于插件配对"));
     try { return Results.Ok(await identities.PairPluginAsync(request, ct)); }
     catch (IdentityOperationException ex) { return OperationError(ex); }
-});
+}).RequireRateLimiting("auth");
 
 app.MapPost("/api/auth/login", async (
     LoginRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
@@ -102,7 +140,7 @@ app.MapPost("/api/auth/login", async (
         return Results.Ok(response);
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
-});
+}).RequireRateLimiting("auth");
 
 app.MapPost("/api/auth/refresh", async (
     RefreshSessionRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
@@ -114,7 +152,7 @@ app.MapPost("/api/auth/refresh", async (
         return Results.Ok(response);
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
-});
+}).RequireRateLimiting("auth");
 
 app.MapPost("/api/auth/logout", async (
     HttpContext ctx, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
@@ -188,9 +226,13 @@ app.MapPost("/api/commands", async (
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
-    var required = CommandPermissions.Required(command.Command);
-    if (required == UserPermissions.None) return Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "未知命令"));
-    if (!principal.User.Permissions.HasFlag(required)) return Forbidden();
+    // RunExtension 与 WS 路径一致：所需权限由插件按注册项动态校验，服务端只要求已认证用户。
+    if (command.Command != CommandKind.RunExtension)
+    {
+        var required = CommandPermissions.Required(command.Command);
+        if (required == UserPermissions.None) return Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "未知命令"));
+        if (!principal.User.Permissions.HasFlag(required)) return Forbidden();
+    }
     command.RequestedBy = principal.User;
     var result = await peers.SendCommandAndWaitAsync(command, TimeSpan.FromSeconds(15), ct);
     return Results.Json(result, statusCode: CommandStatus(result));
@@ -209,6 +251,8 @@ usersApi.MapPost("/", async (
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
+    // 被授予 ManageUsers 的普通用户只能管理普通账号，不能创建管理员。
+    if (request.Role == UserRole.Admin && principal!.User!.Role != UserRole.Admin) return Forbidden();
     try
     {
         var created = await identities.CreateUserAsync(request, ct);
@@ -222,6 +266,11 @@ usersApi.MapPut("/{id:guid}", async (
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
+    // 不能把账号升级为管理员；管理员账号本身也只有管理员能编辑。
+    if (principal!.User!.Role != UserRole.Admin &&
+        (request.Role == UserRole.Admin ||
+         await identities.GetProfileAsync(id, ct) is { Role: UserRole.Admin }))
+        return Forbidden();
     try
     {
         var updated = await identities.UpdateUserAsync(id, request, ct);
@@ -235,6 +284,10 @@ usersApi.MapPost("/{id:guid}/password", async (
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
+    // 重置管理员密码等于接管管理员账号，仅管理员可执行。
+    if (principal!.User!.Role != UserRole.Admin &&
+        await identities.GetProfileAsync(id, ct) is { Role: UserRole.Admin })
+        return Forbidden();
     try
     {
         await identities.ResetPasswordAsync(id, request.Password, ct);
@@ -248,6 +301,10 @@ usersApi.MapDelete("/{id:guid}", async (
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
+    // 删除管理员账号仅管理员可执行（最后管理员另有 GuardLastAdmin 保护）。
+    if (principal!.User!.Role != UserRole.Admin &&
+        await identities.GetProfileAsync(id, ct) is { Role: UserRole.Admin })
+        return Forbidden();
     try
     {
         await identities.DeleteUserAsync(id, ct);
@@ -264,6 +321,30 @@ app.MapPost("/api/plugin/pairing-code", async (
     return HasPermission(principal, UserPermissions.ManageUsers)
         ? Results.Ok(new { pairCode = await identities.CreatePluginPairingCodeAsync(ct) })
         : Forbidden();
+});
+
+// 插件长期凭据管理：仅管理员可列举与吊销；吊销后插件 WebSocket 在下一条消息校验时被断开。
+app.MapGet("/api/plugins/credentials", async (
+    HttpContext ctx, IdentityCoordinator identities, CancellationToken ct) =>
+{
+    var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
+    if (principal.User.Role != UserRole.Admin) return Forbidden();
+    return Results.Ok(await identities.ListPluginCredentialsAsync(ct));
+});
+
+app.MapDelete("/api/plugins/credentials/{id:guid}", async (
+    Guid id, HttpContext ctx, IdentityCoordinator identities, CancellationToken ct) =>
+{
+    var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
+    if (principal.User.Role != UserRole.Admin) return Forbidden();
+    try
+    {
+        await identities.RevokePluginCredentialAsync(id, ct);
+        return Results.NoContent();
+    }
+    catch (IdentityOperationException ex) { return OperationError(ex); }
 });
 
 app.MapGet("/api/admin/status", async (
