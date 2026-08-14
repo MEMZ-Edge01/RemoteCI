@@ -18,29 +18,60 @@ public sealed class CloudClient : IDisposable
     private static readonly TimeSpan CredentiallessRetryDelay = TimeSpan.FromMinutes(2);
     private readonly PluginSettings _settings;
     private readonly AccountMirror _accounts;
-    private readonly CommandHandler _commands;
+    private readonly CloudTokenStore? _tokenStore;
+    private readonly Func<CommandMessage, Task<CommandResult>> _handleCommand;
     private readonly SchedulePullRequestHandler _schedulePullRequests;
     private readonly ILogger<CloudClient> _logger;
+    private readonly Func<ICloudSocket> _socketFactory;
+    private readonly TimeSpan _initialReconnectDelay;
     // 配对请求设置显式超时，服务器挂起时不会让重连循环永久阻塞。
-    private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
+    private readonly HttpClient _http;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
-    private ClientWebSocket? _ws;
+    private ICloudSocket? _ws;
     private CancellationTokenSource? _cts;
     private volatile bool _running;
-    private TimeSpan _reconnectDelay = ReconnectDelay;
+    private TimeSpan _reconnectDelay;
 
-    public CloudClient(
+    internal CloudClient(
         PluginSettings settings,
         AccountMirror accounts,
-        CommandHandler commands,
+        CommandHandler? commands,
         Action requestFreshSchedule,
-        ILogger<CloudClient> logger)
+        ILogger<CloudClient> logger,
+        CloudTokenStore? tokenStore = null,
+        Func<ICloudSocket>? socketFactory = null,
+        HttpMessageHandler? httpHandler = null,
+        TimeSpan? reconnectDelay = null)
     {
         _settings = settings;
         _accounts = accounts;
-        _commands = commands;
+        _tokenStore = tokenStore;
+        // 测试可注入命令执行替身；生产走 CommandHandler（唯一写操作入口）。
+        _handleCommand = commands is not null
+            ? commands.HandleAsync
+            : _ => Task.FromResult(new CommandResult
+            {
+                Success = false,
+                Code = CommandResultCodes.InternalError,
+                Message = "命令执行器未初始化",
+            });
         _schedulePullRequests = new SchedulePullRequestHandler(requestFreshSchedule);
         _logger = logger;
+        _socketFactory = socketFactory ?? (() => new ClientWebSocketAdapter(new ClientWebSocket()));
+        _http = new HttpClient(httpHandler ?? new HttpClientHandler()) { Timeout = TimeSpan.FromSeconds(30) };
+        _initialReconnectDelay = reconnectDelay ?? ReconnectDelay;
+        _reconnectDelay = _initialReconnectDelay;
+    }
+
+    /// <summary>长期凭据访问器：内存缓存 + DPAPI 落盘（凭据吊销时同步删除存储文件）。</summary>
+    private string? Token
+    {
+        get => _settings.CloudToken;
+        set
+        {
+            _settings.CloudToken = value;
+            _tokenStore?.Save(value);
+        }
     }
 
     public Task StartAsync(CancellationToken stoppingToken = default)
@@ -65,7 +96,7 @@ public sealed class CloudClient : IDisposable
             {
                 await EnsureTokenAsync(ct);
                 await ConnectAsync(ct);
-                _reconnectDelay = ReconnectDelay; // 连接成功即复位退避。
+                _reconnectDelay = _initialReconnectDelay; // 连接成功即复位退避。
                 await ReceiveLoopAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -76,7 +107,7 @@ public sealed class CloudClient : IDisposable
             {
                 if (IsAuthenticationFailure(ex))
                 {
-                    _settings.CloudToken = null;
+                    Token = null;
                     _logger.LogWarning("插件云端凭据已失效，请在 WebUI 生成新的一次性配对码");
                 }
                 else
@@ -85,13 +116,12 @@ public sealed class CloudClient : IDisposable
                 }
                 DisposeSocket();
                 // 没有任何凭据时退避到 2 分钟，避免每 5 秒刷日志空转；循环仍会周期性拾取新填写的配对码。
-                var delay = string.IsNullOrWhiteSpace(_settings.CloudToken) &&
+                var delay = string.IsNullOrWhiteSpace(Token) &&
                     string.IsNullOrWhiteSpace(_settings.PluginPairCode)
                     ? CredentiallessRetryDelay
                     : _reconnectDelay;
-                _reconnectDelay = _reconnectDelay < MaxReconnectDelay
-                    ? _reconnectDelay + TimeSpan.FromSeconds(5)
-                    : MaxReconnectDelay;
+                // 指数退避至上限（生产 5s→10s→…→60s；测试注入毫秒级初始值以便快速验证）。
+                _reconnectDelay = TimeSpan.FromTicks(Math.Min(_reconnectDelay.Ticks * 2, MaxReconnectDelay.Ticks));
                 await Task.Delay(delay, ct);
             }
         }
@@ -99,7 +129,7 @@ public sealed class CloudClient : IDisposable
 
     private async Task EnsureTokenAsync(CancellationToken ct)
     {
-        if (!string.IsNullOrWhiteSpace(_settings.CloudToken)) return;
+        if (!string.IsNullOrWhiteSpace(Token)) return;
         if (string.IsNullOrWhiteSpace(_settings.PluginPairCode))
             throw new InvalidOperationException("尚未配置一次性插件配对码");
 
@@ -113,7 +143,7 @@ public sealed class CloudClient : IDisposable
         response.EnsureSuccessStatusCode();
         var pair = await response.Content.ReadFromJsonAsync<PairResponse>(cancellationToken: ct)
             ?? throw new InvalidDataException("插件配对响应为空");
-        _settings.CloudToken = pair.Token;
+        Token = pair.Token;
         _settings.PluginPairCode = string.Empty;
         _logger.LogInformation("插件云端长期凭据已签发，一次性配对码已清除");
     }
@@ -121,13 +151,13 @@ public sealed class CloudClient : IDisposable
     private async Task ConnectAsync(CancellationToken ct)
     {
         DisposeSocket();
-        _ws = new ClientWebSocket();
-        // 空闲时由 ClientWebSocket 发送协议层 ping；静默断网会在 ping 超时后让接收循环报错并触发重连。
-        _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(20);
+        _ws = _socketFactory();
+        // 空闲时由协议层 ping 探测；静默断网会在 ping 超时后让接收循环报错并触发重连。
+        _ws.KeepAliveInterval = TimeSpan.FromSeconds(20);
         var builder = new UriBuilder(_settings.CloudServerUrl)
         {
             Path = "/ws",
-            Query = $"token={Uri.EscapeDataString(_settings.CloudToken ?? string.Empty)}",
+            Query = $"token={Uri.EscapeDataString(Token ?? string.Empty)}",
         };
         builder.Scheme = builder.Scheme == Uri.UriSchemeHttps ? "wss" : "ws";
         await _ws.ConnectAsync(builder.Uri, ct);
@@ -184,7 +214,7 @@ public sealed class CloudClient : IDisposable
         var command = ConvertPayload<CommandMessage>(envelope.Payload);
         var result = command is null
             ? new CommandResult { Success = false, Code = CommandResultCodes.InvalidRequest, Message = "命令格式无效" }
-            : await _commands.HandleAsync(command);
+            : await _handleCommand(command);
         var response = Envelope.CommandResult(result);
         response.ReplyToMessageId = envelope.MessageId;
         await SendAsync(response, ct);

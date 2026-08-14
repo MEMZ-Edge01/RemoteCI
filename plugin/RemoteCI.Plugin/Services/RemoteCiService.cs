@@ -17,6 +17,7 @@ public sealed class RemoteCiService : IDisposable
     private readonly ClassIslandNotificationBridge _notificationBridge;
     private readonly PluginSettings _settings;
     private readonly AccountMirror _accounts;
+    private readonly CloudTokenStore _tokenStore;
     private readonly IRemoteCiExtensionRegistry _extensions;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RemoteCiService> _logger;
@@ -32,6 +33,7 @@ public sealed class RemoteCiService : IDisposable
         ClassIslandNotificationBridge notificationBridge,
         PluginSettings settings,
         AccountMirror accounts,
+        CloudTokenStore tokenStore,
         IRemoteCiExtensionRegistry extensions,
         ILoggerFactory loggerFactory)
     {
@@ -40,6 +42,7 @@ public sealed class RemoteCiService : IDisposable
         _notificationBridge = notificationBridge;
         _settings = settings;
         _accounts = accounts;
+        _tokenStore = tokenStore;
         _extensions = extensions;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<RemoteCiService>();
@@ -79,7 +82,8 @@ public sealed class RemoteCiService : IDisposable
                 _accounts,
                 _commandHandler,
                 RequestFreshSchedule,
-                _loggerFactory.CreateLogger<CloudClient>());
+                _loggerFactory.CreateLogger<CloudClient>(),
+                tokenStore: _tokenStore);
             _ = _cloudClient.StartAsync(_cts.Token);
         }
 

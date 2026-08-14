@@ -51,7 +51,8 @@ public sealed class PluginSettings : INotifyPropertyChanged
         set => SetField(ref _pluginPairCode, value);
     }
 
-    /// <summary>云端配对后缓存的长期插件凭据。</summary>
+    /// <summary>云端配对后缓存的长期插件凭据。仅存内存；持久化由 CloudTokenStore 用 DPAPI 加密落盘。</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public string? CloudToken
     {
         get => _cloudToken;

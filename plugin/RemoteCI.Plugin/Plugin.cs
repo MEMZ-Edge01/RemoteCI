@@ -36,14 +36,18 @@ public class Plugin : PluginBase
         // 加载配置；配置目录由 ClassIsland 提供，保存在插件安装目录之外，更新插件不会丢失。
         var settingsPath = Path.Combine(PluginConfigFolder, "Settings.json");
         Settings = ConfigureFileHelper.LoadConfig<PluginSettings>(settingsPath);
+        // 长期凭据不随 Settings.json 明文落盘：从 DPAPI 存储加载，兼容迁移旧版明文字段。
+        var tokenStore = new CloudTokenStore(Path.Combine(PluginConfigFolder, "CloudToken.bin"));
+        Settings.CloudToken = tokenStore.Load() ?? CloudTokenStore.TryMigrateLegacyPlaintext(settingsPath);
+        if (Settings.CloudToken is not null) tokenStore.Save(Settings.CloudToken);
         Settings.PropertyChanged += (_, _) =>
         {
             ConfigureFileHelper.SaveConfig(settingsPath, Settings);
-            // Settings.json 含插件长期凭据，限制为仅当前用户可读。
             FileProtection.RestrictToCurrentUser(settingsPath);
         };
 
         services.AddSingleton(Settings);
+        services.AddSingleton(tokenStore);
         services.AddSingleton(new AccountMirror(Path.Combine(PluginConfigFolder, "Accounts.json")));
         services.AddSingleton<ScheduleCatalog>();
         services.AddSingleton<ClassIslandHostControlService>();
