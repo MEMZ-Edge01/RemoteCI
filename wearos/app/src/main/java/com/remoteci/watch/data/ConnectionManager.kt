@@ -86,6 +86,8 @@ object ConnectionManager {
     val lanPlugins = MutableStateFlow<List<LanPluginCandidate>>(emptyList())
     val lanDiscoveryStatus = MutableStateFlow<String?>(null)
     val lanDiscoveryScanning = MutableStateFlow(false)
+    /** 引导返回的云服务器地址与上次使用的不同：等待用户二次确认的候选（TOFU 强阻断）。 */
+    val lanBootstrapPending = MutableStateFlow<Pair<LanPluginCandidate, WatchSettings>?>(null)
 
     fun initialize(context: Context) {
         if (!::sessions.isInitialized) sessions = SecureSessionStore(context.applicationContext)
@@ -124,19 +126,37 @@ object ConnectionManager {
             val bootstrap = lanDiscoveryClient.fetchBootstrap(candidate)
             val updated = mergeLanBootstrapInfo(settings, candidate, bootstrap)
             lanPlugins.value = emptyList()
-            // 局域网发现与 bootstrap 均无认证：明文 HTTP 提示窃听风险，
-            // 与上次实际使用的地址不同时提示可能被伪造（TOFU 风格校验）。
+            // 局域网发现与 bootstrap 均无认证：明文 HTTP 提示窃听风险；
+            // 与上次实际使用的地址不同时强制二次确认（TOFU），防止伪造引导诱导输入密码。
             val insecure = updated.cloudServerUrl.startsWith("http://")
             val changed = bootstrapUrlChanged(settings.cloudServerUrl, updated.cloudServerUrl)
+            if (changed) {
+                lanBootstrapPending.value = candidate to updated
+                lanDiscoveryStatus.value =
+                    "云服务器与上次使用的不同：${updated.cloudServerUrl}。请再次点击确认，否则不要登录" +
+                        (if (insecure) "（且为明文 HTTP）" else "")
+                return null
+            }
+            lanBootstrapPending.value = null
             lanDiscoveryStatus.value = "已获取云服务器：${updated.cloudServerUrl}，确认后请点安全登录" +
-                (if (insecure) "（明文 HTTP，请确认网络可信）" else "") +
-                (if (changed) "（与上次使用的地址不同，请确认未被伪造）" else "")
+                if (insecure) "（明文 HTTP，请确认网络可信）" else ""
             updated
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             lanDiscoveryStatus.value = "连接插件失败：${error.message ?: "未返回云服务器信息"}"
             null
         }
+    }
+
+    /** 用户对 TOFU 候选二次确认；返回待应用的设置（界面层持久化）。 */
+    fun confirmLanBootstrap(): WatchSettings? {
+        val pending = lanBootstrapPending.value ?: return null
+        lanBootstrapPending.value = null
+        val updated = pending.second
+        val insecure = updated.cloudServerUrl.startsWith("http://")
+        lanDiscoveryStatus.value = "已确认使用 ${updated.cloudServerUrl}，请点安全登录" +
+            if (insecure) "（明文 HTTP）" else ""
+        return updated
     }
 
     /** password 仅用于本次 HTTPS 登录；成功后只保存 Keystore 加密的设备会话密钥。 */

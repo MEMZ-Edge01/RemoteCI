@@ -163,8 +163,10 @@ internal fun LoginScreen(
     lanPlugins: List<LanPluginCandidate>,
     lanDiscoveryStatus: String?,
     lanDiscoveryScanning: Boolean,
+    lanBootstrapPending: LanPluginCandidate?,
     onScanLanPlugins: () -> Unit,
     onSelectLanPlugin: (LanPluginCandidate) -> Unit,
+    onConfirmLanBootstrap: () -> Unit,
     onLogin: () -> Unit,
 ) = WatchList(title = "登录 RemoteCI") {
     item { Input(settings.username, { onSettingsChange(settings.copy(username = it)) }, "ID") }
@@ -182,6 +184,17 @@ internal fun LoginScreen(
         )
     }
     if (!lanDiscoveryStatus.isNullOrBlank()) item { Hint(lanDiscoveryStatus) }
+    // 引导返回的云服务器与上次使用的不同：必须再次显式确认（TOFU 强阻断）。
+    if (lanBootstrapPending != null) {
+        item {
+            ActionButton(
+                "确认使用 ${lanBootstrapPending.instanceName} 提供的云服务器",
+                Icons.Rounded.Check,
+                true,
+                onConfirmLanBootstrap,
+            )
+        }
+    }
     lanPlugins.forEach { plugin ->
         item {
             ActionButton(

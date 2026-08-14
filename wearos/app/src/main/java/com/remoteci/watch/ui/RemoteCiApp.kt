@@ -95,6 +95,7 @@ fun RemoteCiApp(context: Context) {
     val lanPlugins by ConnectionManager.lanPlugins.collectAsState()
     val lanDiscoveryStatus by ConnectionManager.lanDiscoveryStatus.collectAsState()
     val lanDiscoveryScanning by ConnectionManager.lanDiscoveryScanning.collectAsState()
+    val lanBootstrapPending by ConnectionManager.lanBootstrapPending.collectAsState()
     val displayedSnapshot = liveSnapshot ?: cachedSnapshot
     val displayedSchedule = liveSchedule ?: cachedSchedule
     val currentSettings by rememberUpdatedState(settings)
@@ -188,6 +189,7 @@ fun RemoteCiApp(context: Context) {
                 lanPlugins = lanPlugins,
                 lanDiscoveryStatus = lanDiscoveryStatus,
                 lanDiscoveryScanning = lanDiscoveryScanning,
+                lanBootstrapPending = lanBootstrapPending?.first,
                 onScanLanPlugins = ConnectionManager::scanLanPlugins,
                 onSelectLanPlugin = { candidate ->
                     scope.launch {
@@ -195,6 +197,11 @@ fun RemoteCiApp(context: Context) {
                         settings = updated
                         settingsStore.save(updated)
                     }
+                },
+                onConfirmLanBootstrap = {
+                    val confirmed = ConnectionManager.confirmLanBootstrap() ?: return@LoginScreen
+                    settings = confirmed
+                    settingsStore.save(confirmed)
                 },
                 onLogin = {
                     settingsStore.save(settings)
