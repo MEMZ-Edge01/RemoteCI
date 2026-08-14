@@ -1,13 +1,12 @@
 using System.Security.Cryptography;
 using System.Text;
-using ClassIsland.Core.Abstractions.Services;
 using ClassIsland.Shared.Models.Profile;
 using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Plugin.Services;
 
-/// <summary>七日课表读取和修订号计算的唯一入口。</summary>
-public sealed class ScheduleCatalog(ILessonsService lessons, IProfileService profiles)
+/// <summary>七日课表读取和修订号计算的唯一入口（经 IScheduleBackend 防腐层，可单元测试）。</summary>
+public sealed class ScheduleCatalog(IScheduleBackend backend)
 {
     public ScheduleBundle BuildBundle(DateTime? start = null)
     {
@@ -17,7 +16,7 @@ public sealed class ScheduleCatalog(ILessonsService lessons, IProfileService pro
             FromDate = from.ToString("yyyy-MM-dd"),
             GeneratedAt = DateTimeOffset.UtcNow,
             Days = Enumerable.Range(0, 7).Select(offset => BuildDay(from.AddDays(offset))).ToList(),
-            Subjects = profiles.Profile.Subjects
+            Subjects = backend.Subjects
                 .Where(x => !string.IsNullOrWhiteSpace(x.Value.Name) && x.Value.Name != "???")
                 .Select(x => new SubjectEntry { Id = x.Key, Name = x.Value.Name })
                 .OrderBy(x => x.Name, StringComparer.CurrentCulture)
@@ -28,7 +27,7 @@ public sealed class ScheduleCatalog(ILessonsService lessons, IProfileService pro
     public ScheduleDay BuildDay(DateTime date)
     {
         var day = date.Date;
-        var plan = lessons.GetClassPlanByDate(day, out var planId);
+        var plan = backend.GetClassPlan(day, out var planId);
         var result = new ScheduleDay
         {
             Date = day.ToString("yyyy-MM-dd"),
@@ -42,7 +41,7 @@ public sealed class ScheduleCatalog(ILessonsService lessons, IProfileService pro
 
     private CourseEntry ToCourse(ClassInfo course, int index)
     {
-        profiles.Profile.Subjects.TryGetValue(course.SubjectId, out var subject);
+        backend.Subjects.TryGetValue(course.SubjectId, out var subject);
         var item = course.CurrentTimeLayoutItem;
         return new CourseEntry
         {

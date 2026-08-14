@@ -81,16 +81,26 @@ public sealed class CommandHandler
 
     private async Task<CommandResult> HandleScheduleChangeAsync(ScheduleChangeRequest? request)
     {
-        if (request is null || !TryParseDate(request.Date, out var date))
-            return Failure(CommandResultCodes.InvalidRequest, "换课日期无效");
-        if (date < DateTime.Today || date >= DateTime.Today.AddDays(7))
-            return Failure(CommandResultCodes.InvalidRequest, "只能修改今天起未来七天的课表");
-        if (string.IsNullOrWhiteSpace(request.ExpectedRevision))
-            return Failure(CommandResultCodes.InvalidRequest, "缺少课表修订号");
+        if (ValidateScheduleChangeRequest(request, DateTime.Today, out var date) is { } validationError)
+            return Failure(CommandResultCodes.InvalidRequest, validationError);
 
-        var result = await Dispatcher.UIThread.InvokeAsync(() => ApplyScheduleChange(date, request));
+        var result = await Dispatcher.UIThread.InvokeAsync(() => ApplyScheduleChange(date, request!));
         if (result.Success) ScheduleChanged?.Invoke();
         return result;
+    }
+
+    /// <summary>换课请求的形态校验（纯逻辑，先于 UI 线程执行）；通过返回 null 并给出解析后的日期。</summary>
+    internal static string? ValidateScheduleChangeRequest(
+        ScheduleChangeRequest? request, DateTime today, out DateTime date)
+    {
+        date = default;
+        if (request is null || !TryParseDate(request.Date, out date))
+            return "换课日期无效";
+        if (date < today || date >= today.AddDays(7))
+            return "只能修改今天起未来七天的课表";
+        if (string.IsNullOrWhiteSpace(request.ExpectedRevision))
+            return "缺少课表修订号";
+        return null;
     }
 
     private CommandResult ApplyScheduleChange(DateTime date, ScheduleChangeRequest request)

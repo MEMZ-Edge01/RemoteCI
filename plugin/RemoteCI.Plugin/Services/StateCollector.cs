@@ -120,8 +120,7 @@ public sealed class StateCollector
         {
             var bundle = BuildSchedule();
             // 修订号只覆盖课程结构；科目改名与课表名变化不改变修订号，必须纳入签名才会重新推送。
-            var signature = string.Join('|', bundle.Days.Select(x => $"{x.Date}:{x.Revision}:{x.ClassPlanName}"))
-                + "|subjects:" + string.Join(',', bundle.Subjects.Select(x => x.Name));
+            var signature = BuildScheduleSignature(bundle);
             if (!force && signature == _lastScheduleSignature) return;
             _lastScheduleSignature = signature;
             SchedulePushed?.Invoke(bundle);
@@ -131,6 +130,11 @@ public sealed class StateCollector
             _logger.LogError(ex, "生成或推送七日课表失败");
         }
     }
+
+    /// <summary>低频推送的变更签名：修订号 + 课表名 + 全部科目名，任一项变化都触发重推。</summary>
+    internal static string BuildScheduleSignature(ScheduleBundle bundle) =>
+        string.Join('|', bundle.Days.Select(x => $"{x.Date}:{x.Revision}:{x.ClassPlanName}"))
+        + "|subjects:" + string.Join(',', bundle.Subjects.Select(x => x.Name));
 
     private void PushEvent(ClassEventKind kind, string? subject, string message, bool pushSnapshot = true)
     {
@@ -170,7 +174,7 @@ public sealed class StateCollector
         }
     }
 
-    private static ClassStateKind MapState(TimeState state) => state switch
+    internal static ClassStateKind MapState(TimeState state) => state switch
     {
         TimeState.OnClass => ClassStateKind.Class,
         TimeState.PrepareOnClass => ClassStateKind.PrepareClass,
@@ -179,13 +183,13 @@ public sealed class StateCollector
         _ => ClassStateKind.None,
     };
 
-    private static string? SubjectName(Subject? subject) => subject?.Name switch
+    internal static string? SubjectName(Subject? subject) => subject?.Name switch
     {
         null or "" or "???" => null,
         var name => name,
     };
 
-    private static string FormatTimeLayoutItem(TimeLayoutItem item, string? subjectName)
+    internal static string FormatTimeLayoutItem(TimeLayoutItem item, string? subjectName)
     {
         if (item == TimeLayoutItem.Empty) return string.Empty;
         var time = $"{item.StartTime:hh\\:mm}-{item.EndTime:hh\\:mm}";
