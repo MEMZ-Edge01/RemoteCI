@@ -16,7 +16,7 @@ public sealed class LanServer : IDisposable
     private static readonly TimeSpan ChallengeTtl = TimeSpan.FromSeconds(30);
     private readonly PluginSettings _settings;
     private readonly AccountMirror _accounts;
-    private readonly CommandHandler _commands;
+    private readonly Func<CommandMessage, Task<CommandResult>> _handleCommand;
     private readonly SchedulePullRequestHandler _schedulePullRequests;
     private readonly Func<ClassStateSnapshot?> _snapshotProvider;
     private readonly Func<ScheduleBundle?> _scheduleProvider;
@@ -28,15 +28,24 @@ public sealed class LanServer : IDisposable
     public LanServer(
         PluginSettings settings,
         AccountMirror accounts,
-        CommandHandler commands,
+        CommandHandler? commands,
         Action requestFreshSchedule,
         Func<ClassStateSnapshot?> snapshotProvider,
         Func<ScheduleBundle?> scheduleProvider,
-        ILogger<LanServer> logger)
+        ILogger<LanServer> logger,
+        Func<CommandMessage, Task<CommandResult>>? commandHandler = null)
     {
         _settings = settings;
         _accounts = accounts;
-        _commands = commands;
+        // 测试可注入命令执行替身；生产走 CommandHandler（唯一写操作入口）。
+        _handleCommand = commandHandler
+            ?? (commands is not null ? new Func<CommandMessage, Task<CommandResult>>(commands.HandleAsync) : null)
+            ?? (_ => Task.FromResult(new CommandResult
+            {
+                Success = false,
+                Code = CommandResultCodes.InternalError,
+                Message = "命令执行器未初始化",
+            }));
         _schedulePullRequests = new SchedulePullRequestHandler(requestFreshSchedule);
         _snapshotProvider = snapshotProvider;
         _scheduleProvider = scheduleProvider;
@@ -92,7 +101,7 @@ public sealed class LanServer : IDisposable
         }
     }
 
-    private void OnOpened(IWebSocketConnection socket)
+    internal void OnOpened(IWebSocketConnection socket)
     {
         var path = socket.ConnectionInfo.Path.TrimEnd('/');
         if (string.Equals(path, "/bootstrap", StringComparison.OrdinalIgnoreCase))
@@ -119,7 +128,7 @@ public sealed class LanServer : IDisposable
         Send(socket, Envelope.AuthChallenge(challenge));
     }
 
-    private async Task OnMessageAsync(IWebSocketConnection socket, string message)
+    internal async Task OnMessageAsync(IWebSocketConnection socket, string message)
     {
         if (!_clients.TryGetValue(socket.ConnectionInfo.Id, out var client)) return;
         // 同一条连接的消息串行处理，避免命令并发执行与回执乱序。
@@ -170,21 +179,20 @@ public sealed class LanServer : IDisposable
         // 授权镜像过期时所有管理命令都必须拒绝；扩展命令的静态权限为 None，
         // 因此需要单独检查镜像状态，避免绕过“仅允许查看课程”的限制。
         var mirrorExpired = !_accounts.AllowsPrivilegedOperations;
-        var permissionDenied = !client.User.Permissions.HasFlag(required);
         CommandResult result;
-        if (mirrorExpired || permissionDenied)
+        if (LanSessionLogic.CommandDenied(mirrorExpired, client.User.Permissions, required))
         {
             result = new CommandResult
             {
                 Success = false,
                 Code = CommandResultCodes.Forbidden,
-                Message = mirrorExpired ? "授权镜像超过 24 小时，仅允许查看课程" : "权限不足",
+                Message = LanSessionLogic.CommandDeniedMessage(mirrorExpired),
             };
         }
         else
         {
             command.RequestedBy = client.User;
-            result = await _commands.HandleAsync(command);
+            result = await _handleCommand(command);
         }
 
         Send(client.Socket, new Envelope
@@ -211,14 +219,14 @@ public sealed class LanServer : IDisposable
 
     private Task AuthenticateAsync(LanClient client, Envelope envelope)
     {
-        if (envelope.Type != Protocol.MessageTypeAuthProof || client.Challenge is not { } challenge ||
-            challenge.ExpiresAt <= DateTimeOffset.UtcNow)
+        var requestError = LanSessionLogic.ValidateAuthProofRequest(envelope, client.Challenge, DateTimeOffset.UtcNow);
+        if (requestError is not null || client.Challenge is not { } challenge)
         {
             Send(client.Socket, Envelope.AuthState(new AuthState
             {
                 Authenticated = false,
                 ErrorCode = ApiErrorCodes.Unauthorized,
-                Error = "局域网认证挑战已失效",
+                Error = requestError ?? "局域网认证挑战已失效",
             }));
             client.Socket.Close();
             return Task.CompletedTask;
