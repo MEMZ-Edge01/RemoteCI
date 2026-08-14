@@ -91,6 +91,32 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
     }
 
     [Fact]
+    public async Task PluginNetworkInfo_IsRelayedAndCachedForWatches()
+    {
+        using var plugin = await ConnectPluginAsync();
+        using var connectedWatch = await ConnectWatchAsync();
+        var expected = new PluginNetworkInfo
+        {
+            LanServerEnabled = true,
+            Port = 9876,
+            Addresses = ["192.168.50.8", "10.0.0.8"],
+        };
+
+        await SendAsync(plugin, Envelope.PluginNetworkInfo(expected));
+
+        var relayed = await ReceivePayloadAsync<PluginNetworkInfo>(
+            connectedWatch, Protocol.MessageTypePluginNetworkInfo);
+        Assert.Equal(expected.Port, relayed.Port);
+        Assert.Equal(expected.Addresses, relayed.Addresses);
+
+        using var laterWatch = await ConnectWatchAsync();
+        var cached = await ReceivePayloadAsync<PluginNetworkInfo>(
+            laterWatch, Protocol.MessageTypePluginNetworkInfo);
+        Assert.Equal(expected.Port, cached.Port);
+        Assert.Equal(expected.Addresses, cached.Addresses);
+    }
+
+    [Fact]
     public async Task AdminCommand_IsForwardedAndResultReturnsOnlyByCorrelationId()
     {
         using var plugin = await ConnectPluginAsync();

@@ -16,7 +16,6 @@ namespace RemoteCI.Plugin.Views.SettingsPages;
 public sealed class RemoteCiSettingsPage : SettingsPageBase
 {
     private readonly PluginSettings _settings;
-    private readonly CheckBox _lanCheck;
     private readonly TextBox _portBox;
     private readonly TextBox _cloudUrlBox;
     private readonly TextBox _pairCodeBox;
@@ -26,7 +25,6 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
     {
         _settings = settings;
 
-        _lanCheck = new CheckBox { Content = "启用局域网直连服务", IsChecked = settings.EnableLanServer };
         _portBox = new TextBox { Text = settings.LanServerPort.ToString(), Watermark = "端口（默认 8765）" };
         _cloudUrlBox = new TextBox { Text = settings.CloudServerUrl, Watermark = "云端地址，如 http://nas:8080" };
         _pairCodeBox = new TextBox { Text = settings.PluginPairCode, Watermark = "WebUI 生成的一次性插件配对码" };
@@ -43,7 +41,6 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
             {
                 new TextBlock { Text = "RemoteCI 课表手表联动", FontSize = 20, FontWeight = Avalonia.Media.FontWeight.Bold },
                 new TextBlock { Text = "把当前状态和七日课表推送到 Wear OS，支持按权限换课与发送通知。", TextWrapping = Avalonia.Media.TextWrapping.Wrap },
-                _lanCheck,
                 new StackPanel
                 {
                     Spacing = 6,
@@ -73,8 +70,9 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
 
     private void OnSaveClick(object? sender, RoutedEventArgs e)
     {
-        _settings.EnableLanServer = _lanCheck.IsChecked == true;
-        _settings.LanServerPort = int.TryParse(_portBox.Text, out var port) ? port : 8765;
+        _settings.LanServerPort = int.TryParse(_portBox.Text, out var port) && port is >= 1 and <= 65535
+            ? port
+            : 8765;
         _settings.CloudServerUrl = string.IsNullOrWhiteSpace(_cloudUrlBox.Text)
             ? "http://localhost:8080"
             : _cloudUrlBox.Text.Trim();

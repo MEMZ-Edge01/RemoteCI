@@ -13,6 +13,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -49,13 +50,16 @@ object ConnectionManager {
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
+    private val lanDiscoveryClient = LanDiscoveryClient(okHttp, json)
     private lateinit var sessions: SecureSessionStore
     private var webSocket: WebSocket? = null
     private var activeJob: Job? = null
     private var refreshJob: Job? = null
     private var volumeJob: Job? = null
+    private var discoveryJob: Job? = null
     private var desiredSettings: WatchSettings? = null
     private var accessToken: String? = null
+    private var lastLanAdvertisement: PluginNetworkInfo? = null
     private var generation = 0
 
     val state = MutableStateFlow<State>(State.Idle)
@@ -68,6 +72,11 @@ object ConnectionManager {
     val settings = MutableStateFlow<SettingsSync?>(null)
     val events = MutableSharedFlow<ClassEvent>(extraBufferCapacity = 32)
     val lastCommandResult = MutableStateFlow<CommandResult?>(null)
+    /** 网络发现或成功直连后产生的本地设置更新，由界面层持久化。 */
+    val discoveredSettings = MutableSharedFlow<WatchSettings>(extraBufferCapacity = 1)
+    val lanPlugins = MutableStateFlow<List<LanPluginCandidate>>(emptyList())
+    val lanDiscoveryStatus = MutableStateFlow<String?>(null)
+    val lanDiscoveryScanning = MutableStateFlow(false)
 
     fun initialize(context: Context) {
         if (!::sessions.isInitialized) sessions = SecureSessionStore(context.applicationContext)
@@ -75,9 +84,51 @@ object ConnectionManager {
 
     fun hasSavedSession(): Boolean = ::sessions.isInitialized && sessions.load() != null
 
+    fun scanLanPlugins() {
+        discoveryJob?.cancel()
+        lanPlugins.value = emptyList()
+        lanDiscoveryStatus.value = "正在扫描同一局域网中的 RemoteCI 插件…"
+        lanDiscoveryScanning.value = true
+        discoveryJob = scope.launch {
+            try {
+                val found = lanDiscoveryClient.scan()
+                lanPlugins.value = found
+                lanDiscoveryStatus.value = if (found.isEmpty())
+                    "未发现插件，可检查 Wi-Fi、UDP ${Protocol.LAN_DISCOVERY_PORT} 防火墙或手动填写地址"
+                else
+                    "发现 ${found.size} 台插件，请选择要连接的电脑"
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                lanDiscoveryStatus.value = "扫描失败：${error.message ?: "网络不可用"}"
+            } finally {
+                lanDiscoveryScanning.value = false
+            }
+        }
+    }
+
+    suspend fun loadLanBootstrap(
+        settings: WatchSettings,
+        candidate: LanPluginCandidate,
+    ): WatchSettings? {
+        lanDiscoveryStatus.value = "正在连接 ${candidate.instanceName}…"
+        return try {
+            val bootstrap = lanDiscoveryClient.fetchBootstrap(candidate)
+            val updated = mergeLanBootstrapInfo(settings, candidate, bootstrap)
+            lanPlugins.value = emptyList()
+            lanDiscoveryStatus.value = "已获取云服务器：${updated.cloudServerUrl}，确认后请点安全登录"
+            updated
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            lanDiscoveryStatus.value = "连接插件失败：${error.message ?: "未返回云服务器信息"}"
+            null
+        }
+    }
+
     /** password 仅用于本次 HTTPS 登录；成功后只保存 Keystore 加密的设备会话密钥。 */
     fun connect(settings: WatchSettings, password: String? = null) {
         check(::sessions.isInitialized) { "ConnectionManager 尚未初始化" }
+        discoveryJob?.cancel()
+        lanDiscoveryScanning.value = false
         generation++
         val attempt = generation
         desiredSettings = settings
@@ -99,6 +150,14 @@ object ConnectionManager {
                 if (plan.bootstrapCloudAuthentication) {
                     val auth = loginCloud(settings, password!!)
                     persist(auth)
+                    val session = sessions.load() ?: throw MissingSessionException()
+                    if (plan.preferLanAfterCloudAuthentication) {
+                        // 登录端点会先把新设备会话同步给插件；留出消息处理窗口再发起 HMAC 挑战。
+                        delay(400)
+                        if (connectLan(settings, session, attempt)) return@launch
+                    }
+                    if (!plan.allowCloudFallback)
+                        throw IOException("云端认证已完成，但局域网连接失败且云端中转已关闭")
                     connectCloud(settings, auth, attempt)
                     return@launch
                 }
@@ -107,7 +166,7 @@ object ConnectionManager {
                 if (settings.username.isNotBlank() && saved.username != settings.username)
                     throw MissingSessionException()
 
-                val lanOk = settings.lanConnectionEnabled && settings.lanHost.isNotBlank() &&
+                val lanOk = settings.lanConnectionEnabled && lanEndpointHosts(settings).isNotEmpty() &&
                     connectLan(settings, saved, attempt)
                 if (lanOk) return@launch
                 if (!plan.allowCloudFallback) throw IOException("局域网连接失败")
@@ -269,12 +328,26 @@ object ConnectionManager {
         settings: WatchSettings,
         session: PersistedDeviceSession,
         attempt: Int,
-    ): Boolean = connectWebSocket(
-        url = "ws://${settings.lanHost}:${settings.lanPort}/ws",
-        successState = State.LanConnected,
-        session = session,
-        attempt = attempt,
-    )
+    ): Boolean {
+        for (host in lanEndpointHosts(settings)) {
+            if (!connectWebSocket(
+                    url = lanWebSocketUrl(host, settings.lanPort),
+                    successState = State.LanConnected,
+                    session = session,
+                    attempt = attempt,
+                )
+            ) continue
+
+            val updated = settings.copy(
+                lanHost = host,
+                lanHostCandidates = listOf(host) + lanEndpointHosts(settings).filterNot { it == host },
+            )
+            desiredSettings = updated
+            if (updated != settings) discoveredSettings.tryEmit(updated)
+            return true
+        }
+        return false
+    }
 
     private suspend fun connectCloud(settings: WatchSettings, auth: AuthResponse, attempt: Int) {
         accessToken = auth.accessToken
@@ -288,6 +361,8 @@ object ConnectionManager {
                 attempt,
             )
         ) throw IOException("云端连接失败")
+        // 收到插件网络信息后可能已经切换到新的局域网连接尝试，旧云端协程不得再覆盖刷新任务。
+        if (attempt != generation) return
         scheduleAccessRefresh(settings, auth.accessExpiresAt, attempt)
     }
 
@@ -347,6 +422,11 @@ object ConnectionManager {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (attempt != generation) {
+                    webSocket.close(1000, "superseded")
+                    if (continuation.isActive) continuation.resume(false)
+                    return
+                }
                 val envelope = runCatching { json.decodeFromString(Envelope.serializer(), text) }.getOrNull() ?: return
                 if (envelope.protocolVersion != Protocol.VERSION) {
                     state.value = State.Error("协议版本不兼容，需要 v${Protocol.VERSION}")
@@ -438,6 +518,12 @@ object ConnectionManager {
             envelope.payload?.let { settings.value = json.decodeFromJsonElement(SettingsSync.serializer(), it) }
             null
         }
+        Protocol.TYPE_PLUGIN_NETWORK_INFO -> {
+            envelope.payload?.let {
+                handlePluginNetworkInfo(json.decodeFromJsonElement(PluginNetworkInfo.serializer(), it))
+            }
+            null
+        }
         Protocol.TYPE_EVENT_NOTIFY -> {
             envelope.payload?.let { events.tryEmit(json.decodeFromJsonElement(ClassEvent.serializer(), it)) }
             null
@@ -447,6 +533,22 @@ object ConnectionManager {
             null
         }
         else -> null
+    }
+
+    private fun handlePluginNetworkInfo(info: PluginNetworkInfo) {
+        val current = desiredSettings ?: return
+        val updated = mergePluginNetworkInfo(current, info)
+        desiredSettings = updated
+        if (updated != current) discoveredSettings.tryEmit(updated)
+
+        // 同一份不可达地址回退到云端后不反复重试；网卡或端口变化时才重新优先直连。
+        val isNewAdvertisement = info != lastLanAdvertisement
+        lastLanAdvertisement = info
+        if (isNewAdvertisement && info.lanServerEnabled && updated.lanConnectionEnabled &&
+            lanEndpointHosts(updated).isNotEmpty() && state.value == State.CloudConnected
+        ) {
+            connect(updated)
+        }
     }
 
     private fun createProof(challenge: AuthChallenge, session: PersistedDeviceSession): AuthProof {
@@ -495,12 +597,15 @@ object ConnectionManager {
 
 internal data class ConnectionPlan(
     val bootstrapCloudAuthentication: Boolean,
+    val preferLanAfterCloudAuthentication: Boolean,
     val allowCloudFallback: Boolean,
 )
 
 /** 密码只能由云端验证，因此密码登录始终允许一次云端引导；开发者开关只控制后续连接回退。 */
 internal fun planConnection(settings: WatchSettings, password: String?): ConnectionPlan = ConnectionPlan(
     bootstrapCloudAuthentication = !password.isNullOrEmpty(),
+    preferLanAfterCloudAuthentication = !password.isNullOrEmpty() && settings.lanConnectionEnabled &&
+        lanEndpointHosts(settings).isNotEmpty(),
     allowCloudFallback = settings.cloudConnectionEnabled,
 )
 

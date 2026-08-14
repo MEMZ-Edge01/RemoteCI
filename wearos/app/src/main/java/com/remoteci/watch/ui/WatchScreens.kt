@@ -87,6 +87,7 @@ import com.remoteci.watch.data.CourseEntry
 import com.remoteci.watch.data.ExtensionDefinition
 import com.remoteci.watch.data.GitHubAsset
 import com.remoteci.watch.data.GitHubRelease
+import com.remoteci.watch.data.LanPluginCandidate
 import com.remoteci.watch.data.Protocol
 import com.remoteci.watch.data.ScheduleBundle
 import com.remoteci.watch.data.ScheduleDay
@@ -159,11 +160,35 @@ internal fun LoginScreen(
     state: ConnectionManager.State,
     onSettingsChange: (WatchSettings) -> Unit,
     onPasswordChange: (String) -> Unit,
+    lanPlugins: List<LanPluginCandidate>,
+    lanDiscoveryStatus: String?,
+    lanDiscoveryScanning: Boolean,
+    onScanLanPlugins: () -> Unit,
+    onSelectLanPlugin: (LanPluginCandidate) -> Unit,
     onLogin: () -> Unit,
 ) = WatchList(title = "登录 RemoteCI") {
     item { Input(settings.username, { onSettingsChange(settings.copy(username = it)) }, "ID") }
     item { Input(password, onPasswordChange, "密码", password = true) }
     item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, "云端地址") }
+    item {
+        ActionButton(
+            if (lanDiscoveryScanning) "正在扫描…" else "扫描局域网设备",
+            Icons.Rounded.Wifi,
+            !lanDiscoveryScanning,
+            onScanLanPlugins,
+        )
+    }
+    if (!lanDiscoveryStatus.isNullOrBlank()) item { Hint(lanDiscoveryStatus) }
+    lanPlugins.forEach { plugin ->
+        item {
+            ActionButton(
+                "${plugin.instanceName} · ${plugin.host}:${plugin.port}",
+                Icons.Rounded.Wifi,
+                !lanDiscoveryScanning,
+                onClick = { onSelectLanPlugin(plugin) },
+            )
+        }
+    }
     item { ActionButton("安全登录", Icons.Rounded.Wifi, settings.username.isNotBlank() && password.length >= 8, onLogin) }
     item { Hint(describeConnectionForScreen(state)) }
 }
@@ -951,32 +976,47 @@ internal fun ConnectionSettingsScreen(
     onReconnect: () -> Unit,
     onLogout: () -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "连接") {
-    item { Hint(stateText) }
-    item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, "云端地址") }
-    item { Toggle("局域网直连", settings.lanConnectionEnabled) { onSettingsChange(settings.copy(lanConnectionEnabled = it)) } }
-    item { Input(settings.lanHost, { onSettingsChange(settings.copy(lanHost = it)) }, "电脑 IP") }
-    item { ActionButton("保存并重连", Icons.Rounded.Wifi, true, onReconnect) }
-    item { ActionButton("退出账号", null, true, onLogout, subtle = true) }
-    item { BackButton(onBack) }
+) {
+    var portText by remember(settings.lanPort) { mutableStateOf(settings.lanPort.toString()) }
+    WatchList(title = "连接") {
+        item { Hint(stateText) }
+        item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, "云端地址") }
+        item { Input(settings.lanHost, { onSettingsChange(settings.copy(lanHost = it)) }, "电脑 IP") }
+        item {
+            Input(portText, { value ->
+                portText = value
+                parseLanPort(value)?.let { onSettingsChange(settings.copy(lanPort = it)) }
+            }, "局域网端口")
+        }
+        item { ActionButton("保存并重连", Icons.Rounded.Wifi, true, onReconnect) }
+        item { ActionButton("退出账号", null, true, onLogout, subtle = true) }
+        item { BackButton(onBack) }
+    }
 }
 
 @Composable
 internal fun DeveloperSettingsScreen(
     cloudConnectionEnabled: Boolean,
+    lanConnectionEnabled: Boolean,
     onCloudConnectionEnabledChange: (Boolean) -> Unit,
+    onLanConnectionEnabledChange: (Boolean) -> Unit,
     onReconnect: () -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = "开发者") {
-    item { Hint("关闭云端中转后只能依赖局域网直连；密码登录仍会临时使用云端完成认证。") }
+    item { Hint("关闭云端后只能依赖局域网直连；关闭局域网后只使用云端。密码登录仍会临时使用云端完成认证。") }
     if (shouldShowCloudConnectionToggle(developerSettings = true)) {
         item { Toggle("云服务器", cloudConnectionEnabled, onCloudConnectionEnabledChange) }
+    }
+    if (shouldShowLanConnectionToggle(developerSettings = true)) {
+        item { Toggle("局域网直连", lanConnectionEnabled, onLanConnectionEnabledChange) }
     }
     item { ActionButton("应用并重连", Icons.Rounded.Wifi, true, onReconnect) }
     item { BackButton(onBack) }
 }
 
 internal fun shouldShowCloudConnectionToggle(developerSettings: Boolean): Boolean = developerSettings
+internal fun shouldShowLanConnectionToggle(developerSettings: Boolean): Boolean = developerSettings
+internal fun parseLanPort(value: String): Int? = value.trim().toIntOrNull()?.takeIf { it in 1..65535 }
 
 @Composable
 internal fun NotificationSettingsScreen(

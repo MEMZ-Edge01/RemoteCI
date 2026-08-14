@@ -22,6 +22,7 @@ public sealed class LanServer : IDisposable
     private readonly ILogger<LanServer> _logger;
     private readonly ConcurrentDictionary<Guid, LanClient> _clients = new();
     private WebSocketServer? _server;
+    private LanDiscoveryResponder? _discovery;
 
     public LanServer(
         PluginSettings settings,
@@ -51,6 +52,8 @@ public sealed class LanServer : IDisposable
             socket.OnMessage = message => _ = OnMessageAsync(socket, message);
             socket.OnClose = () => _clients.TryRemove(socket.ConnectionInfo.Id, out _);
         });
+        _discovery = new LanDiscoveryResponder(_settings, _logger);
+        _discovery.Start();
         _accounts.Changed += RefreshAuthorizations;
         _logger.LogInformation("局域网 v2 服务已启动：{Uri}/ws（授权镜像版本 {Version}）", uri, _accounts.Version);
     }
@@ -67,7 +70,14 @@ public sealed class LanServer : IDisposable
 
     private void OnOpened(IWebSocketConnection socket)
     {
-        if (!string.Equals(socket.ConnectionInfo.Path.TrimEnd('/'), "/ws", StringComparison.OrdinalIgnoreCase))
+        var path = socket.ConnectionInfo.Path.TrimEnd('/');
+        if (string.Equals(path, "/bootstrap", StringComparison.OrdinalIgnoreCase))
+        {
+            // 未登录设备只能读取云端连接信息；密码和会话凭据始终直接交给云服务器。
+            Send(socket, LanDiscoveryProtocol.CreateBootstrapEnvelope(_settings, Environment.MachineName));
+            return;
+        }
+        if (!string.Equals(path, "/ws", StringComparison.OrdinalIgnoreCase))
         {
             socket.Close();
             return;
@@ -224,6 +234,8 @@ public sealed class LanServer : IDisposable
     public void Dispose()
     {
         _accounts.Changed -= RefreshAuthorizations;
+        _discovery?.Dispose();
+        _discovery = null;
         _server?.Dispose();
         _server = null;
         _clients.Clear();

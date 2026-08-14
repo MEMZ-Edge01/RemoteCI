@@ -12,6 +12,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
     private readonly ConcurrentDictionary<Guid, WsPeer> _pluginPeers = new();
     private readonly ConcurrentDictionary<Guid, WsPeer> _watchPeers = new();
     private readonly ConcurrentDictionary<string, PendingCommand> _pendingCommands = new(StringComparer.Ordinal);
+    private PluginNetworkInfo? _latestPluginNetworkInfo;
 
     public bool HasPlugin => !_pluginPeers.IsEmpty;
     public int WatchCount => _watchPeers.Count;
@@ -74,6 +75,18 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
 
     public Task SendSettingsToWatchesAsync(SettingsSync value, CancellationToken ct = default) =>
         BroadcastWatchesAsync(Envelope.SettingsSync(value), ct);
+
+    /// <summary>缓存插件最近一次网卡发现结果，并同步给所有在线手表。</summary>
+    public Task PublishPluginNetworkInfoAsync(PluginNetworkInfo value, CancellationToken ct = default)
+    {
+        Volatile.Write(ref _latestPluginNetworkInfo, value);
+        return BroadcastWatchesAsync(Envelope.PluginNetworkInfo(value), ct);
+    }
+
+    public Task SendLatestPluginNetworkInfoToWatchAsync(Guid connectionId, CancellationToken ct = default) =>
+        Volatile.Read(ref _latestPluginNetworkInfo) is { } value
+            ? SendToWatchAsync(connectionId, Envelope.PluginNetworkInfo(value), ct)
+            : Task.CompletedTask;
 
     public async Task BroadcastWatchesAsync(Envelope envelope, CancellationToken ct = default)
     {

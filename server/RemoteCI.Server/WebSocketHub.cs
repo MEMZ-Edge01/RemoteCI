@@ -51,6 +51,7 @@ public static class WebSocketHub
                     connectionId,
                     Envelope.AuthState(ServerAuthStateFactory.CreateAuthenticated(principal.User)),
                     context.RequestAborted);
+                await registry.SendLatestPluginNetworkInfoToWatchAsync(connectionId, context.RequestAborted);
                 if (store.GetLatestSnapshot() is { } snapshot)
                     await registry.SendToWatchAsync(connectionId, Envelope.StatePush(snapshot), context.RequestAborted);
                 if (store.GetLatestSchedule() is { } schedule)
@@ -156,6 +157,13 @@ public static class WebSocketHub
                 }
                 return;
 
+            case Protocol.MessageTypePluginNetworkInfo when principal.IsPlugin:
+                if (NormalizePluginNetworkInfo(ConvertPayload<PluginNetworkInfo>(envelope.Payload)) is { } networkInfo)
+                    await registry.PublishPluginNetworkInfoAsync(networkInfo, ct);
+                else
+                    logger.LogWarning("插件上报了无效的局域网地址或端口");
+                return;
+
             case Protocol.MessageTypeCommandResult when principal.IsPlugin:
                 if (ConvertPayload<CommandResult>(envelope.Payload) is { } result)
                     await registry.CompleteCommandAsync(envelope, result, ct);
@@ -238,6 +246,25 @@ public static class WebSocketHub
 
     private static T? ConvertPayload<T>(object? payload) => JsonSerializer.Deserialize<T>(
         JsonSerializer.Serialize(payload), JsonDefaults.Options);
+
+    private static PluginNetworkInfo? NormalizePluginNetworkInfo(PluginNetworkInfo? value)
+    {
+        if (value is null || value.Port is < 1 or > 65535) return null;
+        var addresses = value.Addresses
+            .Select(address => address?.Trim())
+            .Where(address => !string.IsNullOrEmpty(address) && System.Net.IPAddress.TryParse(address, out _))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(16)
+            .Cast<string>()
+            .ToArray();
+        if (value.LanServerEnabled && addresses.Length == 0) return null;
+        return new PluginNetworkInfo
+        {
+            LanServerEnabled = value.LanServerEnabled,
+            Addresses = addresses,
+            Port = value.Port,
+        };
+    }
 
     private static async Task<string?> ReceiveTextAsync(WebSocket socket, CancellationToken ct)
     {

@@ -27,6 +27,20 @@ class WatchScreensTest {
     }
 
     @Test
+    fun `lan disable toggle belongs only to developer settings`() {
+        assertFalse(shouldShowLanConnectionToggle(developerSettings = false))
+        assertTrue(shouldShowLanConnectionToggle(developerSettings = true))
+    }
+
+    @Test
+    fun `lan port accepts only tcp port range`() {
+        assertEquals(9123, parseLanPort("9123"))
+        assertNull(parseLanPort("0"))
+        assertNull(parseLanPort("65536"))
+        assertNull(parseLanPort("abc"))
+    }
+
+    @Test
     fun `empty schedule offers pull only while connected`() {
         assertTrue(shouldOfferSchedulePull(day = null, connectionReady = true))
         assertFalse(shouldOfferSchedulePull(day = null, connectionReady = false))

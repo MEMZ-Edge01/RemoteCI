@@ -3,10 +3,73 @@ package com.remoteci.watch.data
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AuthorizationAndNotificationTest {
+    @Test
+    fun `selected lan plugin fills lan endpoint and reachable cloud url`() {
+        val updated = mergeLanBootstrapInfo(
+            WatchSettings(),
+            LanPluginCandidate("Classroom-PC", "192.168.50.8", 9123),
+            ConnectionBootstrapInfo("Classroom-PC", "http://localhost:8080"),
+        )
+
+        assertEquals("192.168.50.8", updated.lanHost)
+        assertEquals(9123, updated.lanPort)
+        assertEquals("http://192.168.50.8:8080", updated.cloudServerUrl)
+        assertEquals(
+            "http://192.168.50.8:8080",
+            mergeLanBootstrapInfo(
+                WatchSettings(),
+                LanPluginCandidate("Classroom-PC", "192.168.50.8", 9123),
+                ConnectionBootstrapInfo("Classroom-PC", "http://0.0.0.0:8080"),
+            ).cloudServerUrl,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            mergeLanBootstrapInfo(
+                WatchSettings(),
+                LanPluginCandidate("Classroom-PC", "192.168.50.8", 9123),
+                ConnectionBootstrapInfo("Classroom-PC", "file:///tmp/not-a-server"),
+            )
+        }
+    }
+
+    @Test
+    fun `lan discovery candidate uses packet source and rejects incompatible response`() {
+        val response = LanDiscoveryResponse(Protocol.VERSION, "Classroom-PC", 9123)
+
+        assertEquals(
+            LanPluginCandidate("Classroom-PC", "192.168.50.8", 9123),
+            lanPluginCandidate(response, "192.168.50.8"),
+        )
+        assertNull(lanPluginCandidate(response.copy(protocolVersion = 99), "192.168.50.8"))
+        assertNull(lanPluginCandidate(response.copy(port = 0), "192.168.50.8"))
+    }
+
+    @Test
+    fun `plugin network info updates candidates while preserving a working preferred host`() {
+        val current = WatchSettings(lanHost = "10.0.0.8", lanPort = 8765)
+        val advertised = PluginNetworkInfo(
+            lanServerEnabled = true,
+            addresses = listOf("192.168.50.8", "10.0.0.8"),
+            port = 9876,
+        )
+
+        val updated = mergePluginNetworkInfo(current, advertised)
+
+        assertEquals("10.0.0.8", updated.lanHost)
+        assertEquals(9876, updated.lanPort)
+        assertEquals(listOf("10.0.0.8", "192.168.50.8"), lanEndpointHosts(updated))
+    }
+
+    @Test
+    fun `lan url supports editable ports and ipv6 literals`() {
+        assertEquals("ws://192.168.1.20:9123/ws", lanWebSocketUrl("192.168.1.20", 9123))
+        assertEquals("ws://[fd00::10]:9123/ws", lanWebSocketUrl("fd00::10", 9123))
+    }
+
     @Test
     fun `password login bootstraps cloud even when developer disabled cloud connection`() {
         val settings = WatchSettings(cloudConnectionEnabled = false)
@@ -15,6 +78,17 @@ class AuthorizationAndNotificationTest {
 
         assertTrue(plan.bootstrapCloudAuthentication)
         assertFalse(plan.allowCloudFallback)
+    }
+
+    @Test
+    fun `password login prefers selected lan plugin after cloud authentication`() {
+        val plan = planConnection(
+            WatchSettings(lanConnectionEnabled = true, lanHost = "192.168.50.8", lanPort = 9123),
+            password = "valid-password",
+        )
+
+        assertTrue(plan.bootstrapCloudAuthentication)
+        assertTrue(plan.preferLanAfterCloudAuthentication)
     }
 
     @Test

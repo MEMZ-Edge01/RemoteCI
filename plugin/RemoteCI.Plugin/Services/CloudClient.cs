@@ -115,6 +115,8 @@ public sealed class CloudClient : IDisposable
         };
         builder.Scheme = builder.Scheme == Uri.UriSchemeHttps ? "wss" : "ws";
         await _ws.ConnectAsync(builder.Uri, ct);
+        // 每次重连都重新发现网卡，避免 DHCP 或 Wi-Fi 切换后把过期地址留给手表。
+        await SendAsync(Envelope.PluginNetworkInfo(PluginNetworkInfoProvider.Create(_settings)), ct);
         _logger.LogInformation("已连接 RemoteCI 云端：{Host}", builder.Uri.Host);
     }
 

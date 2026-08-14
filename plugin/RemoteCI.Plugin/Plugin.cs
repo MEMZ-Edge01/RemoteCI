@@ -49,6 +49,7 @@ public class Plugin : PluginBase
         services.AddSingleton<IRemoteCiExtensionRegistry, RemoteCiExtensionRegistry>();
         services.AddNotificationProvider<RemoteNotificationProvider>();
         services.AddSettingsPage<RemoteCiSettingsPage>();
+        services.AddSettingsPage<RemoteCiDeveloperSettingsPage>();
 
         var app = AppBase.Current;
         app.AppStarted += (_, _) =>

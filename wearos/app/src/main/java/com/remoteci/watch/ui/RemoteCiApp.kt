@@ -89,6 +89,9 @@ fun RemoteCiApp(context: Context) {
     val liveExtensions by ConnectionManager.extensions.collectAsState()
     val serverSettings by ConnectionManager.settings.collectAsState()
     val commandResult by ConnectionManager.lastCommandResult.collectAsState()
+    val lanPlugins by ConnectionManager.lanPlugins.collectAsState()
+    val lanDiscoveryStatus by ConnectionManager.lanDiscoveryStatus.collectAsState()
+    val lanDiscoveryScanning by ConnectionManager.lanDiscoveryScanning.collectAsState()
     val displayedSnapshot = liveSnapshot ?: cachedSnapshot
     val displayedSchedule = liveSchedule ?: cachedSchedule
     val currentSettings by rememberUpdatedState(settings)
@@ -100,6 +103,12 @@ fun RemoteCiApp(context: Context) {
         if (ConnectionManager.hasSavedSession()) ConnectionManager.connect(settings)
         ConnectionManager.events.collect { event ->
             NotificationHelper.handle(context, event, currentSettings, eventHistory)
+        }
+    }
+    LaunchedEffect(Unit) {
+        ConnectionManager.discoveredSettings.collect { updated ->
+            settings = updated
+            settingsStore.save(updated)
         }
     }
     LaunchedEffect(liveSnapshot) {
@@ -172,6 +181,17 @@ fun RemoteCiApp(context: Context) {
                 state = connectionState,
                 onSettingsChange = { settings = it },
                 onPasswordChange = { password = it },
+                lanPlugins = lanPlugins,
+                lanDiscoveryStatus = lanDiscoveryStatus,
+                lanDiscoveryScanning = lanDiscoveryScanning,
+                onScanLanPlugins = ConnectionManager::scanLanPlugins,
+                onSelectLanPlugin = { candidate ->
+                    scope.launch {
+                        val updated = ConnectionManager.loadLanBootstrap(settings, candidate) ?: return@launch
+                        settings = updated
+                        settingsStore.save(updated)
+                    }
+                },
                 onLogin = {
                     settingsStore.save(settings)
                     ConnectionManager.connect(settings, password)
@@ -422,8 +442,13 @@ fun RemoteCiApp(context: Context) {
 
         Screen.DeveloperSettings -> DeveloperSettingsScreen(
             cloudConnectionEnabled = settings.cloudConnectionEnabled,
+            lanConnectionEnabled = settings.lanConnectionEnabled,
             onCloudConnectionEnabledChange = { enabled ->
                 settings = settings.copy(cloudConnectionEnabled = enabled)
+                settingsStore.save(settings)
+            },
+            onLanConnectionEnabledChange = { enabled ->
+                settings = settings.copy(lanConnectionEnabled = enabled)
                 settingsStore.save(settings)
             },
             onReconnect = { ConnectionManager.connect(settings) },

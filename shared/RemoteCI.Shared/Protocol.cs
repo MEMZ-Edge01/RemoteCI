@@ -17,6 +17,11 @@ public static class Protocol
     public const string MessageTypeAccountSync = "account_sync";
     public const string MessageTypeExtensionsSync = "extensions_sync";
     public const string MessageTypeSettingsSync = "settings_sync";
+    public const string MessageTypePluginNetworkInfo = "plugin_network_info";
+    public const string MessageTypeConnectionBootstrap = "connection_bootstrap";
+
+    public const int LanDiscoveryPort = 48765;
+    public const string LanDiscoveryRequest = "REMOTECI_DISCOVER_V2";
 
     public const string QueryToken = "token";
     public const string HeaderAuthorization = "Authorization";

@@ -14,6 +14,7 @@ public sealed class RemoteCiDeveloperSettingsPage : SettingsPageBase
 {
     private readonly PluginSettings _settings;
     private readonly CheckBox _cloudCheck;
+    private readonly CheckBox _lanCheck;
     private readonly TextBlock _hint;
 
     public RemoteCiDeveloperSettingsPage(PluginSettings settings)
@@ -23,6 +24,11 @@ public sealed class RemoteCiDeveloperSettingsPage : SettingsPageBase
         {
             Content = "启用云端中转",
             IsChecked = settings.EnableCloud,
+        };
+        _lanCheck = new CheckBox
+        {
+            Content = "启用局域网直连服务",
+            IsChecked = settings.EnableLanServer,
         };
         _hint = new TextBlock { TextWrapping = Avalonia.Media.TextWrapping.Wrap };
         var saveButton = new Button { Content = "保存开发者设置" };
@@ -45,10 +51,11 @@ public sealed class RemoteCiDeveloperSettingsPage : SettingsPageBase
                     },
                     new TextBlock
                     {
-                        Text = "关闭云端中转会使插件无法向 WebUI 同步状态、账号与课表。仅在调试局域网直连时使用。",
+                        Text = "这些开关会改变 RemoteCI 的连接能力。关闭云端后无法向 WebUI 同步，关闭局域网后手表无法直连插件；仅在诊断网络时使用。",
                         TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                     },
                     _cloudCheck,
+                    _lanCheck,
                     saveButton,
                     _hint,
                 },
@@ -59,6 +66,7 @@ public sealed class RemoteCiDeveloperSettingsPage : SettingsPageBase
     private void OnSaveClick(object? sender, RoutedEventArgs e)
     {
         _settings.EnableCloud = _cloudCheck.IsChecked == true;
+        _settings.EnableLanServer = _lanCheck.IsChecked == true;
         SettingsPagePersistence.Save(_settings);
         _hint.Text = "已保存。重启 ClassIsland 后生效。";
     }

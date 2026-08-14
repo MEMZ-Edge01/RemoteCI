@@ -17,6 +17,10 @@ object Protocol {
     const val TYPE_AUTH_PROOF = "auth_proof"
     const val TYPE_AUTH_STATE = "auth_state"
     const val TYPE_SETTINGS_SYNC = "settings_sync"
+    const val TYPE_PLUGIN_NETWORK_INFO = "plugin_network_info"
+    const val TYPE_CONNECTION_BOOTSTRAP = "connection_bootstrap"
+    const val LAN_DISCOVERY_PORT = 48765
+    const val LAN_DISCOVERY_REQUEST = "REMOTECI_DISCOVER_V2"
 
     const val STATE_NONE = 0
     const val STATE_CLASS = 1
@@ -161,6 +165,32 @@ data class NotificationRequest(
 data class SettingsSync(
     @SerialName("forceSenderInTitle") val forceSenderInTitle: Boolean = true,
     @SerialName("updatedAt") val updatedAt: String? = null,
+)
+
+@Serializable
+data class PluginNetworkInfo(
+    @SerialName("lanServerEnabled") val lanServerEnabled: Boolean = false,
+    val addresses: List<String> = emptyList(),
+    val port: Int = 8765,
+)
+
+@Serializable
+data class LanDiscoveryResponse(
+    @SerialName("protocolVersion") val protocolVersion: Int = Protocol.VERSION,
+    @SerialName("instanceName") val instanceName: String,
+    val port: Int,
+)
+
+data class LanPluginCandidate(
+    val instanceName: String,
+    val host: String,
+    val port: Int,
+)
+
+@Serializable
+data class ConnectionBootstrapInfo(
+    @SerialName("instanceName") val instanceName: String,
+    @SerialName("cloudServerUrl") val cloudServerUrl: String,
 )
 
 @Serializable

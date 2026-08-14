@@ -73,6 +73,12 @@ public sealed class Envelope
     public static Envelope SettingsSync(object payload) =>
         New(Protocol.MessageTypeSettingsSync, payload);
 
+    public static Envelope PluginNetworkInfo(object payload) =>
+        New(Protocol.MessageTypePluginNetworkInfo, payload);
+
+    public static Envelope ConnectionBootstrap(object payload) =>
+        New(Protocol.MessageTypeConnectionBootstrap, payload);
+
     private static Envelope New(string type, object payload) => new()
     {
         Type = type,
