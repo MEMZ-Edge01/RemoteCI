@@ -108,5 +108,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.okhttp)
     testImplementation(kotlin("test"))
+    testImplementation(libs.mockwebserver3)
     debugImplementation(libs.compose.ui.tooling)
 }

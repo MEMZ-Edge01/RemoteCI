@@ -53,7 +53,7 @@ object ConnectionManager {
         .pingInterval(20, TimeUnit.SECONDS)
         .build()
     private val lanDiscoveryClient = LanDiscoveryClient(okHttp, json)
-    private lateinit var sessions: SecureSessionStore
+    private lateinit var sessions: SessionStorage
     private var webSocket: WebSocket? = null
     private var activeJob: Job? = null
     private var refreshJob: Job? = null
@@ -87,6 +87,11 @@ object ConnectionManager {
 
     fun initialize(context: Context) {
         if (!::sessions.isInitialized) sessions = SecureSessionStore(context.applicationContext)
+    }
+
+    /** 仅供 JVM 单元测试注入内存会话存储，绕开 Android Keystore。 */
+    internal fun installSessionStorageForTest(storage: SessionStorage) {
+        sessions = storage
     }
 
     fun hasSavedSession(): Boolean = ::sessions.isInitialized && sessions.load() != null
@@ -206,12 +211,19 @@ object ConnectionManager {
                 val auth = refreshCloud(settings, saved)
                 persist(auth)
                 connectCloud(settings, auth, attempt)
+            } catch (_: AuthenticationException) {
+                state.value = State.Error("用户名或密码错误")
+                serverVersion.value = null
+                currentUser.value = null
             } catch (_: MissingSessionException) {
                 state.value = State.Error("请先使用账号密码登录")
                 serverVersion.value = null
                 currentUser.value = null
             } catch (error: Exception) {
-                state.value = State.Error(error.message ?: "连接失败")
+                // 连接过程中已写入的更具体错误（协议版本不兼容、登录已失效等）不被通用消息覆盖。
+                if (state.value !is State.Error) {
+                    state.value = State.Error(error.message ?: "连接失败")
+                }
                 serverVersion.value = null
                 // 登录虽成功但连接已失败，残留的用户信息会让界面误判为“在线”。
                 currentUser.value = null

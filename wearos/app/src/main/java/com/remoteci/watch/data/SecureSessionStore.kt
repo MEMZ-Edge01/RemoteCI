@@ -12,13 +12,20 @@ import javax.crypto.spec.GCMParameterSpec
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
+/** 设备会话持久化的最小接口：生产实现为 Android Keystore 加密的 [SecureSessionStore]，测试注入内存假实现。 */
+interface SessionStorage {
+    fun save(session: PersistedDeviceSession)
+    fun load(): PersistedDeviceSession?
+    fun clear()
+}
+
 /** 使用 Android Keystore AES-GCM 保护设备会话密钥，设置中永不出现明文密码。 */
-class SecureSessionStore(context: Context) {
+class SecureSessionStore(context: Context) : SessionStorage {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val json = Json { ignoreUnknownKeys = true }
 
     @Synchronized
-    fun save(session: PersistedDeviceSession) {
+    override fun save(session: PersistedDeviceSession) {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
         cipher.updateAAD(AAD)
@@ -31,7 +38,7 @@ class SecureSessionStore(context: Context) {
     }
 
     @Synchronized
-    fun load(): PersistedDeviceSession? {
+    override fun load(): PersistedDeviceSession? {
         val parts = prefs.getString(KEY_SESSION, null)?.split('.') ?: return null
         if (parts.size != 2) return null
         return runCatching {
@@ -51,7 +58,7 @@ class SecureSessionStore(context: Context) {
         }
     }
 
-    fun clear() {
+    override fun clear() {
         prefs.edit().remove(KEY_SESSION).apply()
     }
 
