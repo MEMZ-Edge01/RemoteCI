@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using RemoteCI.Server.Services;
 using Xunit;
@@ -248,6 +249,121 @@ public sealed class UpdateServiceTests
                 await File.ReadAllTextAsync(Path.Combine(destination, "appsettings.json")));
             Assert.Equal("{\"user\":true}", await File.ReadAllTextAsync(Path.Combine(destination, "appsettings.Production.json")));
             Assert.Equal("<user-web-config/>", await File.ReadAllTextAsync(Path.Combine(destination, "web.config")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyFilesAsync_FailureRestoresOverwrittenFilesAndRemovesNewFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source");
+        var destination = Path.Combine(root, "destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        try
+        {
+            // a.dll 是本次新建；b.dll 覆盖旧版本但被旧进程只读锁住，复制必然失败。
+            await File.WriteAllTextAsync(Path.Combine(source, "a.dll"), "new-a");
+            await File.WriteAllTextAsync(Path.Combine(source, "b.dll"), "new-b");
+            await File.WriteAllTextAsync(Path.Combine(destination, "b.dll"), "old-b");
+
+            using (new FileStream(
+                       Path.Combine(destination, "b.dll"), FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                await Assert.ThrowsAsync<IOException>(() => UpdateInstaller.ApplyFilesWithRollbackAsync(
+                    source, destination, CancellationToken.None, maxCopyRetries: 0));
+            }
+
+            // 回滚：新建的 a.dll 被删除，b.dll 保持旧内容。
+            Assert.False(File.Exists(Path.Combine(destination, "a.dll")));
+            Assert.Equal("old-b", await File.ReadAllTextAsync(Path.Combine(destination, "b.dll")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ApplyFilesAsync_SuccessRemovesStaleRuntimeFilesAndKeepsConfigAndData()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source");
+        var destination = Path.Combine(root, "destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(source, "a.dll"), "new-a");
+            await File.WriteAllTextAsync(Path.Combine(destination, "a.dll"), "old-a");
+            await File.WriteAllTextAsync(Path.Combine(destination, "stale.dll"), "stale");
+            await File.WriteAllTextAsync(Path.Combine(destination, "appsettings.json"), "{\"user\":true}");
+            await File.WriteAllTextAsync(Path.Combine(destination, "web.config"), "<user/>");
+            var dataDir = Path.Combine(destination, "data");
+            Directory.CreateDirectory(dataDir);
+            await File.WriteAllTextAsync(Path.Combine(dataDir, "keep.db"), "keep");
+
+            await UpdateInstaller.ApplyFilesAsync(source, destination, CancellationToken.None);
+
+            Assert.Equal("new-a", await File.ReadAllTextAsync(Path.Combine(destination, "a.dll")));
+            Assert.False(File.Exists(Path.Combine(destination, "stale.dll")), "陈旧平面运行时文件应被清理");
+            Assert.Equal("{\"user\":true}", await File.ReadAllTextAsync(Path.Combine(destination, "appsettings.json")));
+            Assert.Equal("<user/>", await File.ReadAllTextAsync(Path.Combine(destination, "web.config")));
+            Assert.Equal("keep", await File.ReadAllTextAsync(Path.Combine(dataDir, "keep.db"))); // 子目录内容不受清理影响
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WaitForStartupMarkerAsync_SucceedsWhenMarkerAppearsAndCleansUp()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var marker = Path.Combine(root, "started.marker");
+        try
+        {
+            using var process = Process.GetCurrentProcess(); // 运行中的进程不会提前退出。
+            var writer = Task.Run(async () =>
+            {
+                await Task.Delay(300);
+                await File.WriteAllTextAsync(marker, "ok");
+            });
+
+            var result = await UpdateInstaller.WaitForStartupMarkerAsync(marker, process, CancellationToken.None);
+            await writer;
+
+            Assert.True(result);
+            Assert.False(File.Exists(marker), "标记文件应在健康检查通过后清理");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WaitForStartupMarkerAsync_FailsWhenProcessExitsWithoutMarker()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var marker = Path.Combine(root, "absent.marker");
+        try
+        {
+            var startInfo = OperatingSystem.IsWindows()
+                ? new ProcessStartInfo("cmd.exe", "/c exit")
+                : new ProcessStartInfo("sh", "-c exit 0");
+            using var process = Process.Start(startInfo)!;
+
+            var result = await UpdateInstaller.WaitForStartupMarkerAsync(marker, process, CancellationToken.None);
+
+            Assert.False(result);
         }
         finally
         {

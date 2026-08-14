@@ -85,6 +85,20 @@ builder.Services.AddHostedService<SchedulePullWorker>();
 builder.Services.AddSingleton(new UpdateService(args));
 
 var app = builder.Build();
+// 更新安装器启动本进程时会通过环境变量指定启动成功标记路径：
+// 主机完成启动后写入标记，安装器据此健康检查，失败则回滚到旧版本。
+var startupMarker = Environment.GetEnvironmentVariable(UpdateInstaller.StartupMarkerEnvVar);
+if (!string.IsNullOrWhiteSpace(startupMarker))
+{
+    app.Lifetime.ApplicationStarted.Register(() =>
+    {
+        try { File.WriteAllText(startupMarker, DateTimeOffset.Now.ToString("O")); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 写不出标记即视为启动失败，安装器会回滚。
+        }
+    });
+}
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,

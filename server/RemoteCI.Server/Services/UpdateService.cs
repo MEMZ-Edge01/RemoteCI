@@ -343,6 +343,8 @@ public sealed class UpdateService
             throw new InvalidDataException("更新包缺少 RemoteCI.Server.dll，无法启动外部安装器。");
 
         var planPath = Path.Combine(update.StagingDirectory, "install-plan.json");
+        var markerPath = Path.Combine(update.StagingDirectory, "started.marker");
+        try { if (File.Exists(markerPath)) File.Delete(markerPath); } catch (IOException) { }
         var plan = new UpdateInstallPlan
         {
             SourceDirectory = update.ExtractedDirectory,
@@ -352,6 +354,7 @@ public sealed class UpdateService
             ServerArguments = _serverArguments,
             ServerProcessId = Environment.ProcessId,
             LogPath = Path.Combine(update.StagingDirectory, "update.log"),
+            StartupMarkerPath = markerPath,
         };
         File.WriteAllText(planPath, JsonSerializer.Serialize(plan));
 
