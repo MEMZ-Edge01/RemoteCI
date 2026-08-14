@@ -2,7 +2,6 @@ package com.remoteci.watch.data
 
 import android.content.Context
 import android.os.Build
-import android.util.Base64
 import java.io.IOException
 import java.security.MessageDigest
 import java.time.Duration
@@ -43,9 +42,6 @@ object ConnectionManager {
         data object CloudConnected : State
         data class Error(val message: String) : State
     }
-
-    private const val InitialReconnectDelayMs = 5_000L
-    private const val MaxReconnectDelayMs = 60_000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -478,7 +474,7 @@ object ConnectionManager {
                     val challenge = envelope.payload?.let {
                         json.decodeFromJsonElement(AuthChallenge.serializer(), it)
                     } ?: return
-                    val proof = createProof(challenge, session)
+                    val proof = createAuthProof(challenge, session)
                     webSocket.send(
                         json.encodeToString(
                             Envelope.serializer(),
@@ -597,19 +593,6 @@ object ConnectionManager {
         }
     }
 
-    private fun createProof(challenge: AuthChallenge, session: PersistedDeviceSession): AuthProof {
-        val clientNonce = Base64.encodeToString(java.security.SecureRandom().generateSeed(24), Base64.NO_WRAP)
-        val verifier = MessageDigest.getInstance("SHA-256").digest(session.deviceSecret.encodeToByteArray())
-        val canonical = "${Protocol.VERSION}|${challenge.challengeId}|${challenge.nonce}|$clientNonce|${session.deviceSessionId.replace("-", "").lowercase()}"
-        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(verifier, "HmacSHA256")) }
-        return AuthProof(
-            challengeId = challenge.challengeId,
-            deviceSessionId = session.deviceSessionId,
-            clientNonce = clientNonce,
-            proof = Base64.encodeToString(mac.doFinal(canonical.encodeToByteArray()), Base64.NO_WRAP),
-        )
-    }
-
     private fun scheduleAccessRefresh(settings: WatchSettings, expiresAt: String, attempt: Int) {
         refreshJob?.cancel()
         val delayMillis = runCatching {
@@ -626,7 +609,7 @@ object ConnectionManager {
         val settings = desiredSettings ?: return
         state.value = State.Connecting
         val delayMs = reconnectDelayMs
-        reconnectDelayMs = (reconnectDelayMs * 2).coerceAtMost(MaxReconnectDelayMs)
+        reconnectDelayMs = nextReconnectDelay(reconnectDelayMs)
         scope.launch {
             delay(delayMs)
             if (attempt == generation.get()) connect(settings)
@@ -648,6 +631,35 @@ internal data class ConnectionPlan(
     val preferLanAfterCloudAuthentication: Boolean,
     val allowCloudFallback: Boolean,
 )
+
+internal const val InitialReconnectDelayMs = 5_000L
+internal const val MaxReconnectDelayMs = 60_000L
+
+/** 断线重连的指数退避：每次翻倍并封顶 [MaxReconnectDelayMs]；连接成功后调用方复位为 [InitialReconnectDelayMs]。 */
+internal fun nextReconnectDelay(currentMs: Long): Long = (currentMs * 2).coerceAtMost(MaxReconnectDelayMs)
+
+/**
+ * 依据 protocol.md 构造局域网 HMAC 挑战证明：
+ * 密钥 = SHA-256(deviceSecret)，消息 = `版本|challengeId|nonce|clientNonce|无横线小写 sessionId`。
+ * [clientNonceBytes] 默认取 24 字节安全随机数，测试可注入固定值复现向量。
+ */
+internal fun createAuthProof(
+    challenge: AuthChallenge,
+    session: PersistedDeviceSession,
+    clientNonceBytes: ByteArray = java.security.SecureRandom().generateSeed(24),
+): AuthProof {
+    val clientNonce = java.util.Base64.getEncoder().encodeToString(clientNonceBytes)
+    val verifier = MessageDigest.getInstance("SHA-256").digest(session.deviceSecret.encodeToByteArray())
+    val canonical = "${Protocol.VERSION}|${challenge.challengeId}|${challenge.nonce}|$clientNonce|" +
+        session.deviceSessionId.replace("-", "").lowercase()
+    val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(verifier, "HmacSHA256")) }
+    return AuthProof(
+        challengeId = challenge.challengeId,
+        deviceSessionId = session.deviceSessionId,
+        clientNonce = clientNonce,
+        proof = java.util.Base64.getEncoder().encodeToString(mac.doFinal(canonical.encodeToByteArray())),
+    )
+}
 
 /** 云端 WebSocket 地址；访问令牌必须做 URL 编码，服务端 Base64 令牌中的 + 在查询串里会被解码成空格。 */
 internal fun cloudWebSocketUrl(cloudServerUrl: String, accessToken: String): String {
