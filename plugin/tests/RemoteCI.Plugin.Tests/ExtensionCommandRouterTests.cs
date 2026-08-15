@@ -179,6 +179,73 @@ public sealed class ExtensionCommandRouterTests
         Assert.Equal(CommandResultCodes.Timeout, result.Code);
     }
 
+    [Fact]
+    public async Task RunExtension_DuplicateWhileInFlightReturnsBusy()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _registry.Register(new ExtensionRegistryTests.FakeExtension(
+            "demo.busy",
+            "在途扩展",
+            executeWithToken: (_, _, _) =>
+            {
+                started.TrySetResult();
+                return gate.Task;
+            }));
+
+        var first = _router.RunAsync(RunCommand("demo.busy"));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 上一次执行尚未结束时重复触发必须返回 BUSY，避免同一命令被重复执行。
+        var duplicate = await _router.RunAsync(RunCommand("demo.busy"));
+        Assert.False(duplicate.Success);
+        Assert.Equal(CommandResultCodes.Busy, duplicate.Code);
+
+        gate.SetResult(new CommandResult { Success = true, Code = CommandResultCodes.Ok });
+        var completed = await first;
+        Assert.True(completed.Success);
+
+        // 执行完成后单飞位释放，新请求可以再次执行。
+        var again = await _router.RunAsync(RunCommand("demo.busy"));
+        Assert.True(again.Success);
+    }
+
+    [Fact]
+    public async Task RunExtension_HungExecutionKeepsBusyUntilBackgroundCompletes()
+    {
+        var router = new ExtensionCommandRouter(_registry, NullLoggerFactory.Instance, TimeSpan.FromMilliseconds(50));
+        var gate = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _registry.Register(new ExtensionRegistryTests.FakeExtension(
+            "demo.hangbusy",
+            "挂死扩展",
+            executeWithToken: (_, _, _) => gate.Task));
+
+        var timedOut = await router.RunAsync(RunCommand("demo.hangbusy"));
+        Assert.Equal(CommandResultCodes.Timeout, timedOut.Code);
+
+        // 超时只放弃等待，后台任务仍在运行：新请求必须 BUSY 而不是重复触发挂死的扩展。
+        var duplicate = await router.RunAsync(RunCommand("demo.hangbusy"));
+        Assert.Equal(CommandResultCodes.Busy, duplicate.Code);
+
+        gate.SetResult(new CommandResult { Success = true, Code = CommandResultCodes.Ok });
+        // 后台任务结束后单飞位异步释放，短暂轮询等待回收。
+        CommandResult retried;
+        var attempts = 0;
+        do
+        {
+            await Task.Delay(20);
+            retried = await router.RunAsync(RunCommand("demo.hangbusy"));
+        } while (retried.Code == CommandResultCodes.Busy && ++attempts < 100);
+        Assert.NotEqual(CommandResultCodes.Busy, retried.Code);
+    }
+
+    private static CommandMessage RunCommand(string extensionId) => new()
+    {
+        Command = CommandKind.RunExtension,
+        ExtensionId = extensionId,
+        RequestedBy = Admin(),
+    };
+
     private static UserProfile Admin() => User(userPermissions: UserPermissions.All);
 
     private static UserProfile User(UserPermissions userPermissions) => new()

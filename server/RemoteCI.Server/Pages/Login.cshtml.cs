@@ -3,11 +3,15 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using RemoteCI.Server.Data;
+using RemoteCI.Server.Services;
 using RemoteCI.Shared;
 
 namespace RemoteCI.Server.Pages;
 
-public sealed class LoginModel(UserManager<AppUser> users, SignInManager<AppUser> signIn) : PageModel
+public sealed class LoginModel(
+    UserManager<AppUser> users,
+    SignInManager<AppUser> signIn,
+    IdentityCoordinator identities) : PageModel
 {
     [BindProperty]
     public LoginInput Input { get; set; } = new();
@@ -28,6 +32,8 @@ public sealed class LoginModel(UserManager<AppUser> users, SignInManager<AppUser
         var user = await users.FindByNameAsync(Input.Username.Trim());
         if (user is null || !user.Enabled)
         {
+            // 恒定时间：与 REST 登录端点同一逻辑，避免响应时间泄露用户名是否存在。
+            await identities.EqualizeLoginTimingAsync(Input.Password);
             ModelState.AddModelError(string.Empty, "ID 或密码错误");
             return Page();
         }

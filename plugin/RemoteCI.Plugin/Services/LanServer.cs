@@ -62,7 +62,8 @@ public sealed class LanServer : IDisposable
             {
                 socket.OnOpen = () => OnOpened(socket);
                 socket.OnMessage = message => _ = OnMessageAsync(socket, message);
-                socket.OnClose = () => _clients.TryRemove(socket.ConnectionInfo.Id, out _);
+                // 连接关闭时必须回收客户端（含 Gate 信号量），否则长期运行会持续泄漏信号量句柄。
+                socket.OnClose = () => OnClosed(socket);
             });
         }
         catch (SocketException ex)
@@ -128,11 +129,24 @@ public sealed class LanServer : IDisposable
         Send(socket, Envelope.AuthChallenge(challenge));
     }
 
+    internal void OnClosed(IWebSocketConnection socket)
+    {
+        if (_clients.TryRemove(socket.ConnectionInfo.Id, out var client))
+            client.Dispose();
+    }
+
     internal async Task OnMessageAsync(IWebSocketConnection socket, string message)
     {
         if (!_clients.TryGetValue(socket.ConnectionInfo.Id, out var client)) return;
         // 同一条连接的消息串行处理，避免命令并发执行与回执乱序。
-        await client.Gate.WaitAsync();
+        try
+        {
+            await client.Gate.WaitAsync(client.CloseToken);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
+        {
+            return; // 连接已关闭、客户端已回收，排队中的消息直接丢弃。
+        }
         try
         {
             await HandleMessageCoreAsync(client, message);
@@ -143,7 +157,8 @@ public sealed class LanServer : IDisposable
         }
         finally
         {
-            client.Gate.Release();
+            try { client.Gate.Release(); }
+            catch (ObjectDisposedException) { /* 连接关闭与释放竞态，Gate 已回收 */ }
         }
     }
 
@@ -158,7 +173,7 @@ public sealed class LanServer : IDisposable
             Send(client.Socket, Envelope.AuthState(new AuthState
             {
                 Authenticated = false,
-                ErrorCode = "PROTOCOL_VERSION_UNSUPPORTED",
+                ErrorCode = ApiErrorCodes.ProtocolVersionUnsupported,
                 Error = $"需要协议 v{Protocol.Version}",
             }));
             client.Socket.Close();
@@ -212,7 +227,10 @@ public sealed class LanServer : IDisposable
             if (pair.Value.User is null && pair.Value.Challenge is { } challenge && challenge.ExpiresAt <= now)
             {
                 if (_clients.TryRemove(pair.Key, out var removed))
+                {
                     removed.Socket.Close();
+                    removed.Dispose();
+                }
             }
         }
     }
@@ -304,15 +322,29 @@ public sealed class LanServer : IDisposable
         _discovery = null;
         _server?.Dispose();
         _server = null;
+        foreach (var client in _clients.Values)
+            client.Dispose();
         _clients.Clear();
     }
 
-    private sealed class LanClient(IWebSocketConnection socket)
+    private sealed class LanClient(IWebSocketConnection socket) : IDisposable
     {
+        private readonly CancellationTokenSource _closeCancellation = new();
+
         public IWebSocketConnection Socket { get; } = socket;
         public SemaphoreSlim Gate { get; } = new(1, 1);
+        /// <summary>连接关闭时取消仍在排队等待 Gate 的消息处理。</summary>
+        public CancellationToken CloseToken => _closeCancellation.Token;
         public AuthChallenge? Challenge { get; set; }
         public UserProfile? User { get; set; }
         public Guid SessionId { get; set; }
+
+        public void Dispose()
+        {
+            // Cancel 即可唤醒排队等待 Gate 的消息；Cancel 后不能紧跟 Dispose 该 CTS 或 Gate：
+            // 已实证两者都会丢失排队等待者的取消/唤醒通知，导致排队处理永久挂起。
+            // SemaphoreSlim/CTS 均无原生资源，客户端已从注册表移除后由 GC 回收。
+            _closeCancellation.Cancel();
+        }
     }
 }

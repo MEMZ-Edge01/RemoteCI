@@ -67,7 +67,7 @@ public sealed class RemoteCiDeveloperSettingsPage : SettingsPageBase
     {
         _settings.EnableCloud = _cloudCheck.IsChecked == true;
         _settings.EnableLanServer = _lanCheck.IsChecked == true;
-        SettingsPagePersistence.Save(_settings);
+        // 属性变更已由 Plugin.cs 的 PropertyChanged 订阅自动落盘，无需重复写 Settings.json。
         _hint.Text = "已保存。重启 ClassIsland 后生效。";
     }
 }

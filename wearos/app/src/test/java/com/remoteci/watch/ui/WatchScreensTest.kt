@@ -209,6 +209,24 @@ class WatchScreensTest {
     }
 
     @Test
+    fun `pluginToday follows plugin timezone across date boundary`() {
+        // UTC 18:00 在 UTC+8 已是次日凌晨，日期必须取插件侧的 8 月 13 日而非 UTC 的 8 月 12 日。
+        assertEquals(
+            LocalDate.of(2026, 8, 13),
+            pluginToday("2026-08-12T18:00:00+00:00", 480, 0L, 0L),
+        )
+
+        // 快照跨午夜后断网，按本机流逝时间外推仍能翻日。
+        assertEquals(
+            LocalDate.of(2026, 8, 13),
+            pluginToday("2026-08-12T15:50:00+00:00", 480, 0L, 3_600_000L),
+        )
+
+        // 缺时区信息退回表端日期，不抛异常。
+        assertEquals(LocalDate.now(), pluginToday(null, null, 0L, 0L))
+    }
+
+    @Test
     fun `progress ring only appears for bounded course phases`() {
         val timed = "13:00-14:00"
 

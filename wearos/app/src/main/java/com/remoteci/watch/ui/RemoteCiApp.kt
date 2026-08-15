@@ -1,6 +1,7 @@
 package com.remoteci.watch.ui
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -12,6 +13,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.res.stringResource
+import com.remoteci.watch.R
+import com.remoteci.watch.data.ClassStateSnapshot
 import com.remoteci.watch.data.ConnectionManager
 import com.remoteci.watch.data.EventHistory
 import com.remoteci.watch.data.ExtensionDefinition
@@ -20,7 +24,6 @@ import com.remoteci.watch.data.ScheduleChangeRequest
 import com.remoteci.watch.data.SettingsStore
 import com.remoteci.watch.data.SnapshotStore
 import com.remoteci.watch.notif.NotificationHelper
-import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -100,6 +103,14 @@ fun RemoteCiApp(context: Context) {
     val displayedSchedule = liveSchedule ?: cachedSchedule
     val currentSettings by rememberUpdatedState(settings)
     val afterSchool = displayedSnapshot?.currentState == Protocol.STATE_AFTER_SCHOOL
+    // 日期判断以插件时区推算“今天”，避免手表与插件时区不一致时选错课表日。
+    val snapshotElapsedBase = remember(displayedSnapshot?.generatedAt) { SystemClock.elapsedRealtime() }
+    val today = pluginToday(
+        displayedSnapshot?.generatedAt,
+        displayedSnapshot?.timeZoneOffsetMinutes,
+        snapshotElapsedBase,
+        SystemClock.elapsedRealtime(),
+    )
     val selectedDay = displayedSchedule?.days?.firstOrNull { it.date == selectedDate }
     val lessons = remember(selectedDay) { buildLessonChoices(selectedDay) }
 
@@ -115,9 +126,16 @@ fun RemoteCiApp(context: Context) {
             withContext(Dispatchers.IO) { settingsStore.save(updated) }
         }
     }
+    // 快照推送每秒到达：倒计时字段每秒变化，仅状态字段变化时才落盘，避免持续写 SharedPreferences。
+    var persistedSnapshotKey by remember { mutableStateOf(snapshotPersistKey(cachedSnapshot)) }
     LaunchedEffect(liveSnapshot) {
-        // 高频状态推送每秒到达：落盘移到 IO 线程，避免持续阻塞主线程。
-        liveSnapshot?.let { withContext(Dispatchers.IO) { snapshotStore.save(it) }; cachedSnapshot = it }
+        val snapshot = liveSnapshot ?: return@LaunchedEffect
+        cachedSnapshot = snapshot
+        val key = snapshotPersistKey(snapshot)
+        if (key != persistedSnapshotKey) {
+            persistedSnapshotKey = key
+            withContext(Dispatchers.IO) { snapshotStore.save(snapshot) }
+        }
     }
     LaunchedEffect(liveSchedule) {
         liveSchedule?.let { withContext(Dispatchers.IO) { snapshotStore.saveSchedule(it) }; cachedSchedule = it }
@@ -215,17 +233,17 @@ fun RemoteCiApp(context: Context) {
                 snapshot = displayedSnapshot,
                 user = currentUser,
                 onOpenScheduleOverview = {
-                    selectedDate = initialScheduleDate(displayedSchedule, afterSchool)
+                    selectedDate = initialScheduleDate(displayedSchedule, afterSchool, today)
                     screen = Screen.ScheduleOverview
                 },
                 onOpenScheduleChange = {
-                    selectedDate = initialScheduleDate(displayedSchedule, afterSchool)
+                    selectedDate = initialScheduleDate(displayedSchedule, afterSchool, today)
                     screen = Screen.DayPicker
                 },
                 // 主界面课程按钮：有换课权限时直达换课页，并预选按钮当前显示的课程为源课。
                 onQuickSwapCourse = if (currentUser?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) {
                     {
-                        val todayDate = displayedSnapshot?.scheduleDate ?: LocalDate.now().toString()
+                        val todayDate = displayedSnapshot?.scheduleDate ?: today.toString()
                         val todayDay = displayedSchedule?.days?.firstOrNull { it.date == todayDate }
                         val index = homeQuickSwapLessonIndex(todayDay, displayedSnapshot)
                         if (todayDay != null && index != null) {
@@ -247,6 +265,7 @@ fun RemoteCiApp(context: Context) {
 
             Screen.ScheduleOverview -> ScheduleOverviewScreen(
                 day = selectedDay,
+                today = today,
                 connectionReady = connectionState is ConnectionManager.State.LanConnected ||
                     connectionState is ConnectionManager.State.CloudConnected,
                 onRequestSchedule = ConnectionManager::requestSchedulePull,
@@ -257,6 +276,7 @@ fun RemoteCiApp(context: Context) {
             Screen.ScheduleDatePicker -> ScheduleDatePickerScreen(
                 bundle = displayedSchedule,
                 afterSchool = afterSchool,
+                today = today,
                 onSelect = { day -> selectedDate = day.date; screen = Screen.ScheduleOverview },
                 onBack = { screen = Screen.ScheduleOverview },
             )
@@ -264,6 +284,7 @@ fun RemoteCiApp(context: Context) {
             Screen.DayPicker -> DayPickerScreen(
                 bundle = displayedSchedule,
                 afterSchool = afterSchool,
+                today = today,
                 onSelect = { day -> selectedDate = day.date; screen = Screen.Swap },
                 onBack = { screen = Screen.Home },
             )
@@ -276,7 +297,9 @@ fun RemoteCiApp(context: Context) {
                 replacementSubject = displayedSchedule?.subjects?.firstOrNull { it.id == replacementSubjectId }?.name,
                 connectionReady = connectionState is ConnectionManager.State.LanConnected ||
                     connectionState is ConnectionManager.State.CloudConnected,
-                resultText = commandResult?.let { if (it.success) "已完成：${it.message}" else "失败：${it.message}" },
+                resultText = commandResult?.let {
+                    context.getString(if (it.success) R.string.result_success else R.string.result_failure, it.message)
+                },
                 onModeChange = { swapMode = it },
                 onPickSource = { pickerTarget = LessonTarget.Source; screen = Screen.LessonPicker },
                 onPickTarget = {
@@ -302,7 +325,7 @@ fun RemoteCiApp(context: Context) {
             )
 
             Screen.LessonPicker -> LessonPickerScreen(
-                title = if (pickerTarget == LessonTarget.Source) "选择原课" else "选择目标课",
+                title = stringResource(if (pickerTarget == LessonTarget.Source) R.string.pick_source_lesson else R.string.pick_target_lesson),
                 lessons = lessons,
                 selectedIndex = if (pickerTarget == LessonTarget.Source) sourceIndex else targetIndex,
                 excludedIndex = if (pickerTarget == LessonTarget.Source) targetIndex else sourceIndex,
@@ -322,7 +345,9 @@ fun RemoteCiApp(context: Context) {
                 snapshot = displayedSnapshot,
                 user = currentUser,
                 extensions = liveExtensions,
-                resultText = commandResult?.let { if (it.success) "已完成：${it.message}" else "失败：${it.message}" },
+                resultText = commandResult?.let {
+                    context.getString(if (it.success) R.string.result_success else R.string.result_failure, it.message)
+                },
                 onTeacherComing = {
                     // “老师来了”快捷提醒：标题展示“老师来了”，仅开启强调特效，不带音效和语音；
                     // 1 秒后自动清除。ClassIsland 先播标题（遮罩）再播正文，因此正文不会在 1 秒内显示，
@@ -482,13 +507,18 @@ fun RemoteCiApp(context: Context) {
     }
 }
 
+@Composable
 private fun describeConnection(state: ConnectionManager.State): String = when (state) {
-    ConnectionManager.State.Idle -> "未连接"
-    ConnectionManager.State.Connecting -> "连接中…"
-    ConnectionManager.State.LanConnected -> "局域网直连"
-    ConnectionManager.State.CloudConnected -> "云端中转"
-    is ConnectionManager.State.Error -> "错误：${state.message}"
+    ConnectionManager.State.Idle -> stringResource(R.string.connection_state_idle)
+    ConnectionManager.State.Connecting -> stringResource(R.string.connection_state_connecting)
+    ConnectionManager.State.LanConnected -> stringResource(R.string.connection_state_lan)
+    ConnectionManager.State.CloudConnected -> stringResource(R.string.connection_state_cloud)
+    is ConnectionManager.State.Error -> stringResource(R.string.connection_state_error, state.message)
 }
+
+/** 排除每秒变化的倒计时/时间戳字段，仅比较状态字段，用于快照落盘节流。 */
+private fun snapshotPersistKey(snapshot: ClassStateSnapshot?): String =
+    snapshot?.copy(onClassLeftTime = null, onBreakingLeftTime = null, generatedAt = null).toString()
 
 internal fun describeClassState(snapshot: com.remoteci.watch.data.ClassStateSnapshot?): String = when (snapshot?.currentState) {
     Protocol.STATE_CLASS -> "上课"

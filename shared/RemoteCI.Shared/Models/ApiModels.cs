@@ -64,4 +64,10 @@ public static class ApiErrorCodes
     public const string NotFound = "NOT_FOUND";
     public const string PairCodeInvalid = "PAIR_CODE_INVALID";
     public const string InternalError = "INTERNAL_ERROR";
+    /// <summary>用户名已存在（409）。</summary>
+    public const string UsernameExists = "USERNAME_EXISTS";
+    /// <summary>不能移除最后一个管理员（409）。</summary>
+    public const string LastAdmin = "LAST_ADMIN";
+    /// <summary>WS 协议版本不受支持，连接被拒绝。</summary>
+    public const string ProtocolVersionUnsupported = "PROTOCOL_VERSION_UNSUPPORTED";
 }

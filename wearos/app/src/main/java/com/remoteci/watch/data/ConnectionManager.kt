@@ -16,15 +16,19 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -54,18 +58,19 @@ object ConnectionManager {
         .build()
     private val lanDiscoveryClient = LanDiscoveryClient(okHttp, json)
     private lateinit var sessions: SessionStorage
-    private var webSocket: WebSocket? = null
+    // 以下字段会被 OkHttp 回调线程、IO 协程与主线程并发读写，必须保证跨线程可见性。
+    @Volatile private var webSocket: WebSocket? = null
     private var activeJob: Job? = null
     private var refreshJob: Job? = null
     private var volumeJob: Job? = null
     private var discoveryJob: Job? = null
-    private var desiredSettings: WatchSettings? = null
-    private var accessToken: String? = null
-    private var lastLanAdvertisement: PluginNetworkInfo? = null
+    @Volatile private var desiredSettings: WatchSettings? = null
+    @Volatile private var accessToken: String? = null
+    @Volatile private var lastLanAdvertisement: PluginNetworkInfo? = null
     // OkHttp 回调线程、主线程与协程会并发读写 generation，必须用原子操作保证 attempt 校验可靠。
     private val generation = java.util.concurrent.atomic.AtomicInteger(0)
     // 断线自动重连的指数退避（连接成功后复位）；避免服务端抖动时 5 秒固定间隔造成重连风暴。
-    private var reconnectDelayMs = InitialReconnectDelayMs
+    @Volatile private var reconnectDelayMs = InitialReconnectDelayMs
 
     val state = MutableStateFlow<State>(State.Idle)
     /** 当前认证连接所属的 WebUI 版本；未知时禁止手表自行升级。 */
@@ -128,14 +133,16 @@ object ConnectionManager {
             val updated = mergeLanBootstrapInfo(settings, candidate, bootstrap)
             lanPlugins.value = emptyList()
             // 局域网发现与 bootstrap 均无认证：明文 HTTP 提示窃听风险；
-            // 与上次实际使用的地址不同时强制二次确认（TOFU），防止伪造引导诱导输入密码。
+            // 首次引导或与上次实际使用的地址不同时都强制二次确认（TOFU），防止伪造引导诱导输入密码。
             val insecure = updated.cloudServerUrl.startsWith("http://")
             val changed = bootstrapUrlChanged(settings.cloudServerUrl, updated.cloudServerUrl)
             if (changed) {
                 lanBootstrapPending.value = candidate to updated
-                lanDiscoveryStatus.value =
-                    "云服务器与上次使用的不同：${updated.cloudServerUrl}。请再次点击确认，否则不要登录" +
-                        (if (insecure) "（且为明文 HTTP）" else "")
+                val httpWarning = if (insecure) "（且为明文 HTTP）" else ""
+                lanDiscoveryStatus.value = if (settings.cloudServerUrl.isBlank())
+                    "已发现云服务器：${updated.cloudServerUrl}。请点击确认后再登录" + httpWarning
+                else
+                    "云服务器与上次使用的不同：${updated.cloudServerUrl}。请再次点击确认，否则不要登录" + httpWarning
                 return null
             }
             lanBootstrapPending.value = null
@@ -219,6 +226,10 @@ object ConnectionManager {
                 state.value = State.Error("请先使用账号密码登录")
                 serverVersion.value = null
                 currentUser.value = null
+            } catch (error: CancellationException) {
+                // 旧连接任务被新连接取消：直接透出，不得用旧任务的取消异常
+                // 覆盖新任务刚写入的 Connecting 状态或清空用户信息。
+                throw error
             } catch (error: Exception) {
                 // 连接过程中已写入的更具体错误（协议版本不兼容、登录已失效等）不被通用消息覆盖。
                 if (state.value !is State.Error) {
@@ -376,7 +387,8 @@ object ConnectionManager {
         session: PersistedDeviceSession,
         attempt: Int,
     ): Boolean {
-        for (host in lanEndpointHosts(settings)) {
+        // 明文 ws:// 直连只允许私网/环回主机，公网候选一律跳过。
+        for (host in lanEndpointHosts(settings).filter(::isCleartextSafeHost)) {
             if (!connectWebSocket(
                     url = lanWebSocketUrl(host, settings.lanPort),
                     successState = State.LanConnected,
@@ -397,6 +409,7 @@ object ConnectionManager {
     }
 
     private suspend fun connectCloud(settings: WatchSettings, auth: AuthResponse, attempt: Int) {
+        requireCleartextPrivateUrl(settings.cloudServerUrl)
         accessToken = auth.accessToken
         // 服务端令牌是标准 Base64，含 +/；不编码时 + 会被服务端解码成空格导致 401。
         if (!connectWebSocket(
@@ -432,6 +445,7 @@ object ConnectionManager {
 
     private suspend fun postAuth(settings: WatchSettings, path: String, bodyJson: String): AuthResponse =
         withContext(Dispatchers.IO) {
+            requireCleartextPrivateUrl(settings.cloudServerUrl)
             val request = Request.Builder()
                 .url("${settings.cloudServerUrl.trimEnd('/')}$path")
                 .post(bodyJson.toRequestBody("application/json".toMediaType()))
@@ -460,13 +474,30 @@ object ConnectionManager {
         successState: State,
         session: PersistedDeviceSession?,
         attempt: Int,
+    ): Boolean = try {
+        // 认证阶段限时：故障或恶意对端完成握手后从不回 auth_state 时（readTimeout=0 + ping 保活
+        // 会让死连接永久存活），超时后按连接失败走外层回退，而不是永久停在“连接中”。
+        withTimeout(AuthHandshakeTimeoutMs) {
+            awaitAuthenticatedSocket(url, successState, session, attempt)
+        }
+    } catch (_: TimeoutCancellationException) {
+        false
+    }
+
+    private suspend fun awaitAuthenticatedSocket(
+        url: String,
+        successState: State,
+        session: PersistedDeviceSession?,
+        attempt: Int,
     ): Boolean = suspendCancellableCoroutine { continuation ->
         // 只有“认证成功进入工作状态”的连接在断开后才允许自动重连；
         // 连接失败或认证被拒的 socket 由外层流程决定回退，否则每次失败都会调度一次全量重连形成风暴。
         var authenticated = false
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                if (attempt != generation.get()) webSocket.close(1000, "superseded") else ConnectionManager.webSocket = webSocket
+                // 超时或已切换到新尝试：不得让过期 socket 占据活跃连接字段。
+                if (attempt != generation.get() || !continuation.isActive) webSocket.close(1000, "superseded")
+                else ConnectionManager.webSocket = webSocket
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -483,9 +514,10 @@ object ConnectionManager {
                     return
                 }
                 if (envelope.type == Protocol.TYPE_AUTH_CHALLENGE && session != null) {
-                    val challenge = envelope.payload?.let {
-                        json.decodeFromJsonElement(AuthChallenge.serializer(), it)
-                    } ?: return
+                    // 解码失败忽略该条消息；异常从 OkHttp 回调线程逃逸会直接击断连接。
+                    val challenge = runCatching {
+                        envelope.payload?.let { json.decodeFromJsonElement(AuthChallenge.serializer(), it) }
+                    }.getOrNull() ?: return
                     val proof = createAuthProof(challenge, session)
                     webSocket.send(
                         json.encodeToString(
@@ -517,9 +549,11 @@ object ConnectionManager {
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 if (continuation.isActive) continuation.resume(false)
                 clearActiveConnection(webSocket)
-                // 已建立的连接异常断开：先呈现错误，onClosed 随后调度自动重连。
+                // OkHttp 中 onFailure 与 onClosed 互斥：异常断开（Wi-Fi 掉线、NAT 失效等）
+                // 只会触发 onFailure，必须在此调度自动重连，否则断线后永远无法恢复。
                 if (authenticated && attempt == generation.get()) {
                     state.value = State.Error("连接已断开：${t.message ?: "网络不可用"}")
+                    scheduleReconnect(attempt)
                 }
             }
 
@@ -544,50 +578,46 @@ object ConnectionManager {
     }
 
     private fun handleEnvelope(envelope: Envelope): AuthState? = when (envelope.type) {
-        Protocol.TYPE_AUTH_STATE -> envelope.payload?.let {
-            json.decodeFromJsonElement(AuthState.serializer(), it).also { auth ->
-                currentUser.value = if (auth.authenticated) auth.user else null
-                serverVersion.value = if (auth.authenticated) auth.serverVersion else null
-                if (!auth.authenticated) state.value = State.Error(auth.error ?: "登录已失效")
-            }
+        Protocol.TYPE_AUTH_STATE -> decodePayload(envelope.payload, AuthState.serializer())?.also { auth ->
+            currentUser.value = if (auth.authenticated) auth.user else null
+            serverVersion.value = if (auth.authenticated) auth.serverVersion else null
+            if (!auth.authenticated) state.value = State.Error(auth.error ?: "登录已失效")
         }
         Protocol.TYPE_STATE_PUSH -> {
-            envelope.payload?.let { snapshot.value = json.decodeFromJsonElement(ClassStateSnapshot.serializer(), it) }
+            decodePayload(envelope.payload, ClassStateSnapshot.serializer())?.let { snapshot.value = it }
             null
         }
         Protocol.TYPE_SCHEDULE_SYNC -> {
-            envelope.payload?.let { schedule.value = json.decodeFromJsonElement(ScheduleBundle.serializer(), it) }
+            decodePayload(envelope.payload, ScheduleBundle.serializer())?.let { schedule.value = it }
             null
         }
         Protocol.TYPE_EXTENSIONS_SYNC -> {
-            envelope.payload?.let {
-                extensions.value = json.decodeFromJsonElement(
-                    ListSerializer(ExtensionDefinition.serializer()),
-                    it,
-                )
-            }
+            decodePayload(envelope.payload, ListSerializer(ExtensionDefinition.serializer()))
+                ?.let { extensions.value = it }
             null
         }
         Protocol.TYPE_SETTINGS_SYNC -> {
-            envelope.payload?.let { settings.value = json.decodeFromJsonElement(SettingsSync.serializer(), it) }
+            decodePayload(envelope.payload, SettingsSync.serializer())?.let { settings.value = it }
             null
         }
         Protocol.TYPE_PLUGIN_NETWORK_INFO -> {
-            envelope.payload?.let {
-                handlePluginNetworkInfo(json.decodeFromJsonElement(PluginNetworkInfo.serializer(), it))
-            }
+            decodePayload(envelope.payload, PluginNetworkInfo.serializer())?.let { handlePluginNetworkInfo(it) }
             null
         }
         Protocol.TYPE_EVENT_NOTIFY -> {
-            envelope.payload?.let { events.tryEmit(json.decodeFromJsonElement(ClassEvent.serializer(), it)) }
+            decodePayload(envelope.payload, ClassEvent.serializer())?.let { events.tryEmit(it) }
             null
         }
         Protocol.TYPE_COMMAND_RESULT -> {
-            envelope.payload?.let { lastCommandResult.value = json.decodeFromJsonElement(CommandResult.serializer(), it) }
+            decodePayload(envelope.payload, CommandResult.serializer())?.let { lastCommandResult.value = it }
             null
         }
         else -> null
     }
+
+    /** 反序列化失败的载荷忽略不处理：版本不兼容或脏数据不得从 OkHttp 回调线程逃逸击断连接。 */
+    private fun <T> decodePayload(payload: JsonElement?, serializer: KSerializer<T>): T? =
+        payload?.let { runCatching { json.decodeFromJsonElement(serializer, it) }.getOrNull() }
 
     private fun handlePluginNetworkInfo(info: PluginNetworkInfo) {
         val current = desiredSettings ?: return
@@ -619,9 +649,9 @@ object ConnectionManager {
 
     private fun scheduleReconnect(attempt: Int) {
         val settings = desiredSettings ?: return
-        state.value = State.Connecting
         val delayMs = reconnectDelayMs
         reconnectDelayMs = nextReconnectDelay(reconnectDelayMs)
+        // 退避期间保留断线原因展示，connect() 真正发起时才切换到 Connecting。
         scope.launch {
             delay(delayMs)
             if (attempt == generation.get()) connect(settings)
@@ -647,6 +677,9 @@ internal data class ConnectionPlan(
 internal const val InitialReconnectDelayMs = 5_000L
 internal const val MaxReconnectDelayMs = 60_000L
 
+/** 认证握手限时：对端只完成 WebSocket 握手但从不回 auth_state 时不得永久挂起。 */
+internal const val AuthHandshakeTimeoutMs = 15_000L
+
 /** 断线重连的指数退避：每次翻倍并封顶 [MaxReconnectDelayMs]；连接成功后调用方复位为 [InitialReconnectDelayMs]。 */
 internal fun nextReconnectDelay(currentMs: Long): Long = (currentMs * 2).coerceAtMost(MaxReconnectDelayMs)
 
@@ -658,7 +691,8 @@ internal fun nextReconnectDelay(currentMs: Long): Long = (currentMs * 2).coerceA
 internal fun createAuthProof(
     challenge: AuthChallenge,
     session: PersistedDeviceSession,
-    clientNonceBytes: ByteArray = java.security.SecureRandom().generateSeed(24),
+    // generateSeed 走熵采集路径，个别设备会长时间阻塞；nextBytes 非阻塞且足够安全。
+    clientNonceBytes: ByteArray = ByteArray(24).also { java.security.SecureRandom().nextBytes(it) },
 ): AuthProof {
     val clientNonce = java.util.Base64.getEncoder().encodeToString(clientNonceBytes)
     val verifier = MessageDigest.getInstance("SHA-256").digest(session.deviceSecret.encodeToByteArray())
@@ -685,9 +719,55 @@ internal fun cloudWebSocketUrl(cloudServerUrl: String, accessToken: String): Str
 internal fun bootstrapUrlChanged(previous: String, current: String): Boolean {
     val old = previous.trim().trimEnd('/')
     val fresh = current.trim().trimEnd('/')
-    return old.isNotBlank() &&
-        !old.startsWith("http://10.0.2.2") &&
-        !old.equals(fresh, ignoreCase = true)
+    if (fresh.isBlank()) return false
+    // 开发用模拟器宿主机地址不参与变更比较。
+    if (old.startsWith("http://10.0.2.2")) return false
+    // 首次引导（无历史记录）同样要求用户显式确认，防止伪造的 UDP 发现诱导登录。
+    return old.isBlank() || !old.equals(fresh, ignoreCase = true)
+}
+
+/**
+ * 明文连接允许的目标主机：RFC1918 私网 IPv4 字面量，或本机环回
+ * （localhost/127.x，无窃听面，模拟器与本地调试必需）；
+ * 其余主机与所有域名一律拒绝，避免 DNS 解析把明文流量带出私网。
+ */
+internal fun isCleartextSafeHost(hostname: String): Boolean =
+    hostname.equals("localhost", ignoreCase = true) ||
+        isRfc1918Host(hostname) ||
+        isLoopbackHost(hostname)
+
+/** 仅当 hostname 是 RFC1918 私有网段（10/8、172.16/12、192.168/16）的 IPv4 字面量时返回 true。 */
+internal fun isRfc1918Host(hostname: String): Boolean {
+    val octets = hostname.split('.')
+    if (octets.size != 4) return false
+    val values = IntArray(4)
+    for (i in 0..3) {
+        val octet = octets[i]
+        if (octet.isEmpty() || !octet.all(Char::isDigit)) return false
+        val value = octet.toIntOrNull() ?: return false
+        if (value > 255) return false
+        values[i] = value
+    }
+    return values[0] == 10 ||
+        (values[0] == 172 && values[1] in 16..31) ||
+        (values[0] == 192 && values[1] == 168)
+}
+
+/** 环回地址段 127.0.0.0/8 的 IPv4 字面量。 */
+internal fun isLoopbackHost(hostname: String): Boolean {
+    val octets = hostname.split('.')
+    if (octets.size != 4 || octets[0] != "127") return false
+    return octets.drop(1).all { it.isNotEmpty() && it.all(Char::isDigit) && (it.toIntOrNull() ?: -1) in 0..255 }
+}
+
+/**
+ * 明文（http/ws）连接只允许指向私网/环回主机，其余立即拒绝；
+ * 与 networkSecurityConfig 配合，确保凭据类明文流量永远不出私网。
+ */
+internal fun requireCleartextPrivateUrl(url: String) {
+    if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("ws://", ignoreCase = true)) return
+    val host = url.substringAfter("://").substringBefore('/').substringBefore(':').substringBefore('?')
+    if (!isCleartextSafeHost(host)) throw IOException("明文连接拒绝：$host 不是 RFC1918 私网地址")
 }
 
 /** 密码只能由云端验证，因此密码登录始终允许一次云端引导；开发者开关只控制后续连接回退。 */

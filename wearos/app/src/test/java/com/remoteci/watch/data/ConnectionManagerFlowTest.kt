@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -325,6 +326,43 @@ class ConnectionManagerFlowTest {
             requestLines.any { it.startsWith("POST /api/auth/refresh ") },
             "expected refresh request, got $requestLines",
         )
+        assertEquals("teacher", ConnectionManager.currentUser.value?.username)
+    }
+
+    @Test
+    fun `superseded connect cancellation does not corrupt the new attempt state`() = runBlocking {
+        ConnectionManager.installSessionStorageForTest(FakeSessionStorage())
+        // 第一次连接：登录成功但升级后对端从不回 auth_state，协程挂起在认证等待中。
+        server.enqueue(
+            MockResponse.Builder().code(200)
+                .body(json.encodeToString(AuthResponse.serializer(), authResponse())).build(),
+        )
+        server.enqueue(
+            MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(code, reason)
+                }
+            }).build(),
+        )
+        // 第二次连接：正常登录并下发 auth_state。
+        server.enqueue(
+            MockResponse.Builder().code(200)
+                .body(json.encodeToString(AuthResponse.serializer(), authResponse())).build(),
+        )
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(authStateListener()).build())
+
+        ConnectionManager.connect(mockServerSettings(), "correct-password")
+        // 等待旧尝试已发出登录与升级请求、挂起等待 auth_state。
+        server.takeRequest()
+        server.takeRequest()
+
+        ConnectionManager.connect(mockServerSettings(), "correct-password")
+        awaitState({ it is ConnectionManager.State.CloudConnected })
+
+        // 旧任务被取消后必须直接透出 CancellationException：
+        // 不得把新连接的已连接状态覆盖为 Error，也不得清空用户信息。
+        delay(500)
+        assertTrue(ConnectionManager.state.value is ConnectionManager.State.CloudConnected)
         assertEquals("teacher", ConnectionManager.currentUser.value?.username)
     }
 }

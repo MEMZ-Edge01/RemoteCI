@@ -1,13 +1,14 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Server.Services;
 
 /// <summary>连接注册表，同时负责命令的定向回执与权限变更后的在线连接刷新。</summary>
-public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
+public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<PeerRegistry> logger)
 {
     private static readonly TimeSpan WatchCommandTimeout = TimeSpan.FromSeconds(15);
     private readonly ConcurrentDictionary<Guid, WsPeer> _pluginPeers = new();
@@ -36,7 +37,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         foreach (var pending in _pendingCommands.Where(x => x.Value.WatchConnectionId == connectionId).ToList())
         {
             if (_pendingCommands.TryRemove(pending.Key, out var removed))
-                removed.Completion?.TrySetResult(Failure(CommandResultCodes.Unauthorized, "连接已断开"));
+                removed.Completion?.TrySetResult(CommandResult.Failure(CommandResultCodes.Unauthorized, "连接已断开"));
         }
 
         try
@@ -126,12 +127,13 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
     }
 
     /// <summary>
-    /// 命令与只读请求只投递给一个插件：多插件在线时选择最早接入（最小连接 Id）的健康插件，
+    /// 命令与只读请求只投递给一个插件：多插件在线时选择最早接入的健康插件，
     /// 避免同一命令被多个 ClassIsland 实例重复执行（换课/关机/通知各执行一次以上）。
     /// </summary>
     public async Task<bool> SendToPluginAsync(Envelope envelope, CancellationToken ct = default)
     {
-        foreach (var peer in _pluginPeers.Values.OrderBy(x => x.Id))
+        // 按注册时间排序才是真正的“最早接入优先”；Guid 顺序与接入时间无关。
+        foreach (var peer in _pluginPeers.Values.OrderBy(x => x.RegisteredAt))
         {
             if (await RefreshAsync(peer, ct) is not null && await TrySendAsync(peer, envelope, ct))
                 return true;
@@ -143,9 +145,19 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
     public Task<bool> SendAccountSyncToPluginsAsync(AccountSync sync, CancellationToken ct = default) =>
         BroadcastToPluginsAsync(Envelope.AccountSync(sync), ct);
 
-    /// <summary>请求所有在线插件立即重新生成课表；返回是否至少成功发送给一个插件。</summary>
+    /// <summary>请求最早接入的在线插件立即重新生成课表；返回是否成功发送。</summary>
     public Task<bool> RequestSchedulePullAsync(CancellationToken ct = default) =>
         SendToPluginAsync(Envelope.SchedulePull(), ct);
+
+    /// <summary>
+    /// 向指定插件连接发送课表拉取请求：新插件接入时的补齐拉取必须定向发给它自己，
+    /// 否则多插件在线时拉取会被投递给最早的插件，新插件的启动竞态窗口无法消除。
+    /// </summary>
+    public async Task RequestSchedulePullFromAsync(Guid connectionId, CancellationToken ct = default)
+    {
+        if (_pluginPeers.TryGetValue(connectionId, out var peer) && await RefreshAsync(peer, ct) is not null)
+            await TrySendAsync(peer, Envelope.SchedulePull(), ct);
+    }
 
     public async Task SendToWatchAsync(Guid connectionId, Envelope envelope, CancellationToken ct = default)
     {
@@ -169,21 +181,21 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         {
             Type = Protocol.MessageTypeCommandResult,
             ReplyToMessageId = messageId,
-            Payload = Failure(CommandResultCodes.Timeout, "等待插件回执超时，操作结果未知"),
+            Payload = CommandResult.Failure(CommandResultCodes.Timeout, "等待插件回执超时，操作结果未知"),
         });
     }
 
     public async Task<CommandResult> SendCommandAndWaitAsync(
         CommandMessage command, TimeSpan timeout, CancellationToken ct = default)
     {
-        if (!HasPlugin) return Failure(CommandResultCodes.PluginOffline, "插件未在线，操作未执行");
+        if (!HasPlugin) return CommandResult.Failure(CommandResultCodes.PluginOffline, "插件未在线，操作未执行");
         var envelope = Envelope.Command(command);
         var completion = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingCommands[envelope.MessageId] = new PendingCommand(null, completion);
         if (!await SendToPluginAsync(envelope, ct))
         {
             _pendingCommands.TryRemove(envelope.MessageId, out _);
-            return Failure(CommandResultCodes.PluginOffline, "插件未在线，操作未执行");
+            return CommandResult.Failure(CommandResultCodes.PluginOffline, "插件未在线，操作未执行");
         }
 
         try
@@ -193,7 +205,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         catch (TimeoutException)
         {
             _pendingCommands.TryRemove(envelope.MessageId, out _);
-            return Failure(CommandResultCodes.Timeout, "等待插件回执超时，操作结果未知");
+            return CommandResult.Failure(CommandResultCodes.Timeout, "等待插件回执超时，操作结果未知");
         }
     }
 
@@ -239,11 +251,21 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
 
     private async Task<AuthPrincipal?> RefreshAsync(WsPeer peer, CancellationToken ct)
     {
-        using var scope = scopeFactory.CreateScope();
-        var identities = scope.ServiceProvider.GetRequiredService<IdentityCoordinator>();
-        var principal = await identities.ValidateAnyTokenAsync(peer.Token, ct);
-        if (principal is not null) peer.Principal = principal;
-        return principal;
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            var identities = scope.ServiceProvider.GetRequiredService<IdentityCoordinator>();
+            var principal = await identities.ValidateAnyTokenAsync(peer.Token, ct);
+            if (principal is not null) peer.Principal = principal;
+            return principal;
+        }
+        catch (SqliteException ex) when (!ct.IsCancellationRequested)
+        {
+            // SQLite 瞬时锁/IO 错误不应击穿健康的 WS 连接：沿用上次验证通过的身份，
+            // 权限若真有变更，后续 RefreshWatchAuthorizationsAsync 会补上踢下线。
+            logger.LogWarning("令牌校验瞬时失败，沿用上次身份 ({Id}): {Message}", peer.Id, ex.Message);
+            return peer.Principal;
+        }
     }
 
     private ConcurrentDictionary<Guid, WsPeer> TableFor(PeerRole role) =>
@@ -284,13 +306,6 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         }
     }
 
-    private static CommandResult Failure(string code, string message) => new()
-    {
-        Success = false,
-        Code = code,
-        Message = message,
-    };
-
     private sealed record PendingCommand(Guid? WatchConnectionId, TaskCompletionSource<CommandResult>? Completion);
 
     private sealed class WsPeer(Guid id, string token, AuthPrincipal principal, WebSocket socket)
@@ -300,5 +315,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory)
         public AuthPrincipal Principal { get; set; } = principal;
         public WebSocket Socket { get; } = socket;
         public SemaphoreSlim SendLock { get; } = new(1, 1);
+        /// <summary>接入时刻（UtcNow Ticks），用于“最早接入优先”的投递排序。</summary>
+        public long RegisteredAt { get; } = DateTime.UtcNow.Ticks;
     }
 }

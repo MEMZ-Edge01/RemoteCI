@@ -17,9 +17,10 @@ public sealed class ScheduleCatalog(IScheduleBackend backend)
             GeneratedAt = DateTimeOffset.UtcNow,
             Days = Enumerable.Range(0, 7).Select(offset => BuildDay(from.AddDays(offset))).ToList(),
             Subjects = backend.Subjects
-                .Where(x => !string.IsNullOrWhiteSpace(x.Value.Name) && x.Value.Name != "???")
+                .Where(x => !string.IsNullOrWhiteSpace(x.Value.Name) && x.Value.Name != StateCollector.UnsetSubjectPlaceholder)
                 .Select(x => new SubjectEntry { Id = x.Key, Name = x.Value.Name })
-                .OrderBy(x => x.Name, StringComparer.CurrentCulture)
+                // Ordinal 排序不受运行环境区域设置影响，保证同一课表各端看到的顺序一致。
+                .OrderBy(x => x.Name, StringComparer.Ordinal)
                 .ToList(),
         };
     }
@@ -48,7 +49,7 @@ public sealed class ScheduleCatalog(IScheduleBackend backend)
             Index = index,
             Label = $"第 {index + 1} 节",
             SubjectId = course.SubjectId,
-            Subject = subject?.Name is not null and not "???" ? subject.Name : "未设置",
+            Subject = subject?.Name is not null and not StateCollector.UnsetSubjectPlaceholder ? subject.Name : "未设置",
             StartTime = item == TimeLayoutItem.Empty ? null : item.StartTime.ToString("hh\\:mm"),
             EndTime = item == TimeLayoutItem.Empty ? null : item.EndTime.ToString("hh\\:mm"),
             Enabled = course.IsEnabled,

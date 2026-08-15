@@ -87,6 +87,7 @@ public static class UpdateInstaller
             {
                 AppendLog(plan.LogPath, "新版本启动健康检查通过。");
                 TryDeleteBackup(backupRoot);
+                TryDeleteStaging(plan);
             }
             else
             {
@@ -104,6 +105,22 @@ public static class UpdateInstaller
         else
         {
             TryDeleteBackup(backupRoot);
+            TryDeleteStaging(plan);
+        }
+    }
+
+    /// <summary>
+    /// 更新成功后尽力清理暂存目录（更新源目录的父目录，内含计划文件、更新包与日志）。
+    /// 文件锁等原因失败时保留现场，不影响已完成的更新；此后日志写入会静默失败，属预期行为。
+    /// </summary>
+    private static void TryDeleteStaging(UpdateInstallPlan plan)
+    {
+        var staging = Path.GetDirectoryName(Path.GetFullPath(plan.SourceDirectory));
+        if (staging is null || Path.GetPathRoot(staging) == staging) return;
+        try { Directory.Delete(staging, recursive: true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 清理失败不影响已完成的更新。
         }
     }
 
@@ -220,7 +237,7 @@ public static class UpdateInstaller
                 }
             }
 
-            CleanStaleRuntimeFiles(source, destination);
+            CleanStaleRuntimeFiles(source, destination, backupRoot, journal);
             return (backupRoot, journal);
         }
         catch
@@ -262,14 +279,19 @@ public static class UpdateInstaller
 
     /// <summary>发布输出中属于运行时产物的平面文件扩展名（用于陈旧文件清理白名单）。</summary>
     private static readonly string[] RuntimeFileExtensions =
-        [".dll", ".pdb", ".exe", ".deps.json", ".runtimeconfig.json", ".staticwebassets.endpoints.json", ".xml", ".txt"];
+        [".dll", ".pdb", ".exe", ".deps.json", ".runtimeconfig.json", ".staticwebassets.endpoints.json"];
 
     /// <summary>
     /// 保守清理：删除目标目录根部的平面文件（扩展名在运行时产物白名单内且源中已不存在），
     /// 以及 runtimes/ 子目录中源里已不存在的文件（纯 NuGet 运行时载荷，旧原生库可能带漏洞）。
     /// 其余子目录（data/、keys/、updates/、wwwroot/ 等）一律不动，配置文件永远保留。
+    /// 被删除的文件先备份并记入回滚日志，保证健康检查失败回滚后旧版本仍可启动。
     /// </summary>
-    internal static void CleanStaleRuntimeFiles(string source, string destination)
+    internal static void CleanStaleRuntimeFiles(
+        string source,
+        string destination,
+        string backupRoot,
+        List<(string Relative, bool Existed)> journal)
     {
         try
         {
@@ -282,10 +304,10 @@ public static class UpdateInstaller
                 if (NeverOverwriteFiles.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
                 if (!RuntimeFileExtensions.Any(extension =>
                         name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))) continue;
-                File.Delete(target);
+                BackupThenDelete(target, name, backupRoot, journal);
             }
 
-            CleanStaleRuntimesPayload(source, destination);
+            CleanStaleRuntimesPayload(source, destination, backupRoot, journal);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -293,7 +315,25 @@ public static class UpdateInstaller
         }
     }
 
-    private static void CleanStaleRuntimesPayload(string source, string destination)
+    /// <summary>删除前先备份到回滚目录并记入日志；回滚时 RestoreBackups 会把备份复制回原位。</summary>
+    private static void BackupThenDelete(
+        string target,
+        string relative,
+        string backupRoot,
+        List<(string Relative, bool Existed)> journal)
+    {
+        var backup = Path.Combine(backupRoot, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+        File.Copy(target, backup, overwrite: true);
+        File.Delete(target);
+        journal.Add((relative, true));
+    }
+
+    private static void CleanStaleRuntimesPayload(
+        string source,
+        string destination,
+        string backupRoot,
+        List<(string Relative, bool Existed)> journal)
     {
         var sourceRuntimes = Path.Combine(source, "runtimes");
         var targetRuntimes = Path.Combine(destination, "runtimes");
@@ -306,7 +346,7 @@ public static class UpdateInstaller
         {
             var relative = Path.GetRelativePath(targetRuntimes, target);
             if (sourceRuntimeFiles.Contains(relative)) continue;
-            File.Delete(target);
+            BackupThenDelete(target, Path.Combine("runtimes", relative), backupRoot, journal);
         }
     }
 

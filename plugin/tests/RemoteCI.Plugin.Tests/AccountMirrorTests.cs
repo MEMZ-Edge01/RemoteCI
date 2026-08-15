@@ -76,6 +76,63 @@ public sealed class AccountMirrorTests
         Assert.Equal("0.3.1", reloaded.ServerVersion);
     }
 
+    [Fact]
+    public void VersionRollbackFromNewServerInstanceForceOverwritesMirror()
+    {
+        var path = TempMirrorPath();
+        var mirror = new AccountMirror(path);
+        var oldInstanceId = Guid.NewGuid();
+        var first = CreateSync(Guid.NewGuid(), Guid.NewGuid(), "00", DateTimeOffset.UtcNow);
+        first.Version = 5;
+        first.ServerInstanceId = oldInstanceId;
+        mirror.Apply(first);
+
+        // 数据库重建后版本号回退，但实例标识变化，应强制覆盖。
+        var rebuilt = CreateSync(Guid.NewGuid(), Guid.NewGuid(), "00", DateTimeOffset.UtcNow);
+        rebuilt.Version = 1;
+        rebuilt.ServerInstanceId = Guid.NewGuid();
+        mirror.Apply(rebuilt);
+
+        Assert.Equal(1, mirror.Version);
+    }
+
+    [Fact]
+    public void VersionRollbackFromSameServerInstanceIsRejected()
+    {
+        var mirror = new AccountMirror(TempMirrorPath());
+        var instanceId = Guid.NewGuid();
+        var first = CreateSync(Guid.NewGuid(), Guid.NewGuid(), "00", DateTimeOffset.UtcNow);
+        first.Version = 5;
+        first.ServerInstanceId = instanceId;
+        mirror.Apply(first);
+
+        var stale = CreateSync(Guid.NewGuid(), Guid.NewGuid(), "00", DateTimeOffset.UtcNow);
+        stale.Version = 3;
+        stale.ServerInstanceId = instanceId;
+        mirror.Apply(stale);
+
+        Assert.Equal(5, mirror.Version);
+    }
+
+    [Fact]
+    public void LegacySyncWithoutInstanceIdKeepsMonotonicBehavior()
+    {
+        var mirror = new AccountMirror(TempMirrorPath());
+        var first = CreateSync(Guid.NewGuid(), Guid.NewGuid(), "00", DateTimeOffset.UtcNow);
+        first.Version = 5;
+        mirror.Apply(first);
+
+        // 旧版服务端不携带实例标识，版本回退仍按原逻辑拒绝。
+        var stale = CreateSync(Guid.NewGuid(), Guid.NewGuid(), "00", DateTimeOffset.UtcNow);
+        stale.Version = 1;
+        mirror.Apply(stale);
+
+        Assert.Equal(5, mirror.Version);
+    }
+
+    private static string TempMirrorPath() =>
+        Path.Combine(Path.GetTempPath(), "RemoteCI.Plugin.Tests", Guid.NewGuid().ToString("N"), "accounts.json");
+
     private static AccountSync CreateSync(
         Guid userId,
         Guid sessionId,

@@ -159,7 +159,7 @@ object UpdateManager {
         okHttp.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw IOException("下载失败（HTTP ${response.code}）")
             val expected = asset.size
-            val announced = response.body?.contentLength() ?: -1L
+            val announced = response.body.contentLength()
             if (expected > 0 && announced >= 0 && announced != expected)
                 throw IOException("下载长度不匹配：发布清单 $expected 字节，实际 $announced 字节")
             val body = response.body
@@ -176,7 +176,7 @@ object UpdateManager {
     }
 
     /** 通过系统 PackageInstaller 安装，结果由 UpdateReceiver 接收并提示；失败时回收会话。 */
-    fun installApk(context: Context, apk: File) {
+    suspend fun installApk(context: Context, apk: File): Unit = withContext(Dispatchers.IO) {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
         params.setAppPackageName(context.packageName)
@@ -184,6 +184,7 @@ object UpdateManager {
         try {
             val session = installer.openSession(sessionId)
             try {
+                // openWrite + copyTo 会同步写入几十 MB，绝不能在主线程执行（ANR 风险）。
                 session.openWrite(apk.name, 0, apk.length()).use { output ->
                     apk.inputStream().use { input -> input.copyTo(output) }
                     session.fsync(output)

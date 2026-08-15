@@ -322,6 +322,40 @@ public sealed class UpdateServiceTests
     }
 
     [Fact]
+    public async Task ApplyFilesWithRollback_CleanedStaleFilesAreBackedUpAndRestored()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));
+        var source = Path.Combine(root, "source");
+        var destination = Path.Combine(root, "destination");
+        Directory.CreateDirectory(source);
+        Directory.CreateDirectory(destination);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(source, "a.dll"), "new-a");
+            await File.WriteAllTextAsync(Path.Combine(destination, "a.dll"), "old-a");
+            // 旧版本独有的依赖；清理后若健康检查失败，回滚必须恢复它，否则旧版本无法启动。
+            await File.WriteAllTextAsync(Path.Combine(destination, "stale.dll"), "stale");
+            // 白名单收窄后，部署目录自定义的文本文件不得被清理。
+            await File.WriteAllTextAsync(Path.Combine(destination, "deploy-notes.txt"), "custom");
+
+            var (backupRoot, journal) = await UpdateInstaller.ApplyFilesWithRollbackAsync(
+                source, destination, CancellationToken.None, maxCopyRetries: 0);
+
+            Assert.False(File.Exists(Path.Combine(destination, "stale.dll")));
+            Assert.Equal("custom", await File.ReadAllTextAsync(Path.Combine(destination, "deploy-notes.txt")));
+
+            // 模拟新版本启动健康检查失败后的回滚。
+            UpdateInstaller.RestoreBackups(backupRoot, destination, journal);
+
+            Assert.Equal("stale", await File.ReadAllTextAsync(Path.Combine(destination, "stale.dll")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ApplyFilesAsync_SuccessCleansStaleRuntimesPayload()
     {
         var root = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"));

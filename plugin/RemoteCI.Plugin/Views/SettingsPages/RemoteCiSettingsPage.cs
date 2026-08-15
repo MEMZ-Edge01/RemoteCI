@@ -19,6 +19,7 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
     private readonly TextBox _portBox;
     private readonly TextBox _cloudUrlBox;
     private readonly TextBox _pairCodeBox;
+    private readonly TextBlock _httpWarning;
     private readonly TextBlock _hint;
 
     public RemoteCiSettingsPage(PluginSettings settings)
@@ -26,8 +27,19 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         _settings = settings;
 
         _portBox = new TextBox { Text = settings.LanServerPort.ToString(), Watermark = "端口（默认 8765）" };
-        _cloudUrlBox = new TextBox { Text = settings.CloudServerUrl, Watermark = "云端地址，如 http://nas:8080" };
+        _cloudUrlBox = new TextBox { Text = settings.CloudServerUrl, Watermark = "云端地址，如 https://nas:8080" };
         _pairCodeBox = new TextBox { Text = settings.PluginPairCode, Watermark = "WebUI 生成的一次性插件配对码" };
+
+        // 明文 HTTP 会把配对码、密码与课表数据暴露给同网段任何设备，必须醒目提示。
+        _httpWarning = new TextBlock
+        {
+            Text = "⚠ 当前为明文 HTTP 地址：配对码、密码与课表数据在网络中明文传输，可被同网段设备窃听。生产环境请改用 HTTPS。",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Foreground = Avalonia.Media.Brushes.OrangeRed,
+            FontWeight = Avalonia.Media.FontWeight.SemiBold,
+            IsVisible = IsHttpUrl(settings.CloudServerUrl),
+        };
+        _cloudUrlBox.TextChanged += (_, _) => _httpWarning.IsVisible = IsHttpUrl(_cloudUrlBox.Text);
 
         var saveButton = new Button { Content = "保存设置" };
         saveButton.Click += OnSaveClick;
@@ -49,7 +61,7 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
                 new StackPanel
                 {
                     Spacing = 6,
-                    Children = { new TextBlock { Text = "云端服务端地址" }, _cloudUrlBox },
+                    Children = { new TextBlock { Text = "云端服务端地址" }, _cloudUrlBox, _httpWarning },
                 },
                 new StackPanel
                 {
@@ -80,6 +92,14 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         return (portValid, urlValid);
     }
 
+    /// <summary>地址是否为明文 HTTP；非法或留空地址不触发警告（由保存校验拦截）。</summary>
+    internal static bool IsHttpUrl(string? urlText)
+    {
+        var url = urlText?.Trim();
+        if (string.IsNullOrWhiteSpace(url)) return false;
+        return Uri.TryCreate(url, UriKind.Absolute, out var parsed) && parsed.Scheme == "http";
+    }
+
     private void OnSaveClick(object? sender, RoutedEventArgs e)
     {
         var (portValid, urlValid) = ValidateInput(_portBox.Text, _cloudUrlBox.Text);
@@ -97,8 +117,7 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
             ? "http://localhost:8080"
             : urlText;
         _settings.PluginPairCode = _pairCodeBox.Text?.Trim() ?? string.Empty;
-
-        SettingsPagePersistence.Save(_settings);
+        // 属性变更已由 Plugin.cs 的 PropertyChanged 订阅自动落盘，无需重复写 Settings.json。
 
         _hint.Text = "已保存。连接与端口设置在重启 ClassIsland 后生效，云端配对码即时生效。";
     }

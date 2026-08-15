@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using RemoteCI.Plugin.Extensions;
 using RemoteCI.Shared;
@@ -14,6 +15,9 @@ internal sealed class ExtensionCommandRouter
     private readonly IRemoteCiExtensionRegistry _registry;
     private readonly ILogger<ExtensionCommandRouter> _logger;
     private readonly TimeSpan _timeout;
+    // 每个扩展 Id 同一时刻只允许一次在途执行：重复触发返回 BUSY，
+    // 避免同一命令被重复执行（如重复广播/重复外部调用）。
+    private readonly ConcurrentDictionary<string, byte> _inFlight = new(StringComparer.Ordinal);
 
     public ExtensionCommandRouter(
         IRemoteCiExtensionRegistry registry,
@@ -28,18 +32,18 @@ internal sealed class ExtensionCommandRouter
     public async Task<CommandResult> RunAsync(CommandMessage command)
     {
         if (command.RequestedBy is null)
-            return Failure(CommandResultCodes.Forbidden, "权限不足");
+            return CommandResult.Failure(CommandResultCodes.Forbidden, "权限不足");
 
         var id = command.ExtensionId;
         if (string.IsNullOrWhiteSpace(id))
-            return Failure(CommandResultCodes.InvalidRequest, "缺少扩展 Id");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, "缺少扩展 Id");
 
         var extension = _registry.GetExtensions()
             .FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
         if (extension is null)
-            return Failure(CommandResultCodes.InvalidRequest, $"扩展功能不存在：{id}");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, $"扩展功能不存在：{id}");
         if (!command.RequestedBy.Permissions.HasFlag(extension.RequiredPermission))
-            return Failure(CommandResultCodes.Forbidden, "权限不足");
+            return CommandResult.Failure(CommandResultCodes.Forbidden, "权限不足");
 
         var args = command.ExtensionArgs ?? new Dictionary<string, string?>();
         var missing = extension.Parameters
@@ -47,10 +51,13 @@ internal sealed class ExtensionCommandRouter
             .Select(p => p.Label)
             .ToList();
         if (missing.Count > 0)
-            return Failure(CommandResultCodes.InvalidRequest, $"缺少参数：{string.Join("、", missing)}");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, $"缺少参数：{string.Join("、", missing)}");
         // 参数值统一限长，避免超大载荷击穿消息缓冲或塞满扩展日志。
         if (args.Any(pair => pair.Value is { Length: > 4096 }))
-            return Failure(CommandResultCodes.InvalidRequest, "扩展参数过长（单个参数不能超过 4096 个字符）");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, "扩展参数过长（单个参数不能超过 4096 个字符）");
+
+        if (!_inFlight.TryAdd(id, 0))
+            return CommandResult.Failure(CommandResultCodes.Busy, "该扩展上一次执行尚未结束，请稍后重试");
 
         try
         {
@@ -63,24 +70,29 @@ internal sealed class ExtensionCommandRouter
                 timeout.Token);
             var completed = await Task.WhenAny(execution, Task.Delay(Timeout.InfiniteTimeSpan, timeout.Token));
             if (completed != execution)
-                return Failure(CommandResultCodes.Timeout, $"扩展执行超过 {_timeout.TotalSeconds:0} 秒已取消");
-            return await execution ?? Failure(CommandResultCodes.InternalError, "扩展未返回执行结果");
+            {
+                // 扩展挂死：强制放弃等待后不能立即释放单飞标记，否则下一次触发会在
+                // 上一次仍在后台运行时重复执行；等后台任务真正结束后再释放。
+                _ = execution.ContinueWith(
+                    finished => _inFlight.TryRemove(id, out _),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                return CommandResult.Failure(CommandResultCodes.Timeout, $"扩展执行超过 {_timeout.TotalSeconds:0} 秒已取消");
+            }
+            _inFlight.TryRemove(id, out _);
+            return await execution ?? CommandResult.Failure(CommandResultCodes.InternalError, "扩展未返回执行结果");
         }
         catch (OperationCanceledException)
         {
-            return Failure(CommandResultCodes.Timeout, $"扩展执行超过 {_timeout.TotalSeconds:0} 秒已取消");
+            _inFlight.TryRemove(id, out _);
+            return CommandResult.Failure(CommandResultCodes.Timeout, $"扩展执行超过 {_timeout.TotalSeconds:0} 秒已取消");
         }
         catch (Exception ex)
         {
+            _inFlight.TryRemove(id, out _);
             _logger.LogError(ex, "RemoteCI 扩展执行失败：{ExtensionId}", id);
-            return Failure(CommandResultCodes.InternalError, "扩展执行异常，请查看 ClassIsland 日志");
+            return CommandResult.Failure(CommandResultCodes.InternalError, "扩展执行异常，请查看 ClassIsland 日志");
         }
     }
-
-    private static CommandResult Failure(string code, string message) => new()
-    {
-        Success = false,
-        Code = code,
-        Message = message,
-    };
 }

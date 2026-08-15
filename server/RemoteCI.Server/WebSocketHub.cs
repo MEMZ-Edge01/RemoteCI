@@ -32,6 +32,8 @@ public static class WebSocketHub
             return;
         }
 
+        // ping/pong 保活参数在 Program.cs 的 UseWebSockets 全局配置：对端无响应超过
+        // KeepAliveTimeout 时由底层中止，避免 NAT/代理静默丢弃后僵尸连接永不释放。
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
         var connectionId = registry.Register(socket, token, principal);
         logger.LogInformation("WebSocket connected: {Role}/{User} ({Id})",
@@ -44,7 +46,8 @@ public static class WebSocketHub
                 logger.LogWarning("检测到 {Count} 个插件同时在线，命令将只投递给最早接入的插件，请确认是否为预期部署", registry.PluginCount);
             await registry.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(context.RequestAborted), context.RequestAborted);
             // 插件自身的启动推送可能早于云端连接完成；认证后主动拉取可消除这段竞态窗口。
-            await registry.RequestSchedulePullAsync(context.RequestAborted);
+            // 补齐拉取必须定向发给新接入的插件自己，不能走“最早接入优先”的单插件投递。
+            await registry.RequestSchedulePullFromAsync(connectionId, context.RequestAborted);
         }
         else
         {
@@ -77,6 +80,7 @@ public static class WebSocketHub
 
         try
         {
+            var commandRate = new CommandRateLimiter();
             while (socket.State == WebSocketState.Open)
             {
                 var json = await ReceiveTextAsync(socket, context.RequestAborted);
@@ -97,7 +101,7 @@ public static class WebSocketHub
                     var versionError = Envelope.AuthState(new AuthState
                     {
                         Authenticated = false,
-                        ErrorCode = "PROTOCOL_VERSION_UNSUPPORTED",
+                        ErrorCode = ApiErrorCodes.ProtocolVersionUnsupported,
                         Error = $"需要协议 v{Protocol.Version}，当前为 v{envelope.ProtocolVersion}",
                     });
                     if (principal.PeerRole == PeerRole.Plugin)
@@ -117,7 +121,7 @@ public static class WebSocketHub
                 if (principal is null) break;
                 envelope.Sender = principal.PeerRole;
                 await DispatchAsync(
-                    envelope, principal, connectionId, registry, store, identities, logger, context.RequestAborted);
+                    envelope, principal, connectionId, registry, store, identities, logger, commandRate, context.RequestAborted);
             }
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -143,6 +147,7 @@ public static class WebSocketHub
         IStateStore store,
         IdentityCoordinator identities,
         ILogger logger,
+        CommandRateLimiter commandRate,
         CancellationToken ct)
     {
         switch (envelope.Type)
@@ -192,7 +197,7 @@ public static class WebSocketHub
                 return;
 
             case Protocol.MessageTypeCommand when principal.User is not null:
-                await ForwardUserCommandAsync(envelope, principal.User, connectionId, registry, identities, ct);
+                await ForwardUserCommandAsync(envelope, principal.User, connectionId, registry, identities, store, commandRate, logger, ct);
                 return;
 
             case Protocol.MessageTypeSchedulePull when principal.User is not null:
@@ -211,8 +216,23 @@ public static class WebSocketHub
         Guid connectionId,
         PeerRegistry registry,
         IdentityCoordinator identities,
+        IStateStore store,
+        CommandRateLimiter commandRate,
+        ILogger logger,
         CancellationToken ct)
     {
+        // 回执依赖 ReplyToMessageId 定位挂起项：缺 Id 的命令无法回执，直接丢弃并记日志。
+        if (string.IsNullOrWhiteSpace(envelope.MessageId))
+        {
+            logger.LogWarning("忽略缺少 messageId 的命令 ({ConnectionId})", connectionId);
+            return;
+        }
+        if (!commandRate.TryAcquire())
+        {
+            await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.TooManyRequests, "命令发送过于频繁", ct);
+            return;
+        }
+
         var command = ConvertPayload<CommandMessage>(envelope.Payload);
         if (command is null)
         {
@@ -224,8 +244,23 @@ public static class WebSocketHub
         if (command.Notification is not null)
             command.Notification.ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(ct);
 
-        // RunExtension 的所需权限由插件端按注册项动态校验，服务端只要求已认证用户。
-        if (command.Command != CommandKind.RunExtension)
+        if (command.Command == CommandKind.RunExtension)
+        {
+            // 服务端用扩展注册表预检 RequiredPermission，防止客户端绕过手表 UI 直连云端越权；
+            // 注册表尚未同步（插件未推送过）时放行，由插件执行端复核。
+            if (string.IsNullOrEmpty(command.ExtensionId))
+            {
+                await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "缺少扩展 Id", ct);
+                return;
+            }
+            var definition = store.GetLatestExtensions()?.FirstOrDefault(x => x.Id == command.ExtensionId);
+            if (definition is not null && !user.Permissions.HasFlag(definition.RequiredPermission))
+            {
+                await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.Forbidden, "权限不足", ct);
+                return;
+            }
+        }
+        else
         {
             var required = CommandPermissions.Required(command.Command);
             if (required == UserPermissions.None)
@@ -303,5 +338,26 @@ public static class WebSocketHub
             if (stream.Length > ReceiveBufferSize) throw new WebSocketException("消息过大");
         } while (!result.EndOfMessage);
         return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// 单连接命令滑动窗口限速：防止单个手表连接洪泛命令把插件打爆。
+    /// 限速器由每个连接的接收循环独享，无需跨连接共享状态。
+    /// </summary>
+    private sealed class CommandRateLimiter
+    {
+        private const int MaxCommandsPerWindow = 20;
+        private static readonly TimeSpan Window = TimeSpan.FromSeconds(10);
+        private readonly Queue<long> _timestamps = new();
+
+        public bool TryAcquire()
+        {
+            var now = Environment.TickCount64;
+            while (_timestamps.Count > 0 && now - _timestamps.Peek() > Window.TotalMilliseconds)
+                _timestamps.Dequeue();
+            if (_timestamps.Count >= MaxCommandsPerWindow) return false;
+            _timestamps.Enqueue(now);
+            return true;
+        }
     }
 }

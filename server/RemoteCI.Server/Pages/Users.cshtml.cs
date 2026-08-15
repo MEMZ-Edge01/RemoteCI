@@ -54,7 +54,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         }
         catch (IdentityOperationException ex)
         {
-            var invalidFields = ex.Code == "USERNAME_EXISTS"
+            var invalidFields = ex.Code == ApiErrorCodes.UsernameExists
                 ? new[] { $"{nameof(Create)}.{nameof(UserInput.Username)}" }
                 : Array.Empty<string>();
             return await CreateFailureAsync(ex.Message, invalidFields, ct);
@@ -64,10 +64,10 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
     public async Task<IActionResult> OnPostUpdateAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
-        // 不能把账号升级为管理员；管理员账号本身也只有管理员能编辑。
+        // 不能把账号升级为管理员；管理员账号本身也只有管理员能编辑（含禁用状态的管理员）。
         if (CurrentUser.Role != UserRole.Admin &&
             (Edit.Role == UserRole.Admin ||
-             await identities.GetProfileAsync(Edit.Id, ct) is { Role: UserRole.Admin }))
+             await identities.GetRoleAsync(Edit.Id, ct) == UserRole.Admin))
         {
             TempData["Error"] = "仅管理员可管理管理员账号。";
             return RedirectToPage();
@@ -91,9 +91,9 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
     public async Task<IActionResult> OnPostResetPasswordAsync(Guid id, string password, CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
-        // 重置管理员密码等于接管管理员账号，仅管理员可执行。
+        // 重置管理员密码等于接管管理员账号，仅管理员可执行（含禁用状态的管理员）。
         if (CurrentUser.Role != UserRole.Admin &&
-            await identities.GetProfileAsync(id, ct) is { Role: UserRole.Admin })
+            await identities.GetRoleAsync(id, ct) == UserRole.Admin)
         {
             TempData["Error"] = "仅管理员可重置管理员密码。";
             return RedirectToPage();
@@ -111,9 +111,9 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
     public async Task<IActionResult> OnPostDeleteAsync(Guid id, CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
-        // 删除管理员账号仅管理员可执行（最后管理员另有 GuardLastAdmin 保护）。
+        // 删除管理员账号仅管理员可执行（含禁用状态；最后管理员另有 GuardLastAdmin 保护）。
         if (CurrentUser.Role != UserRole.Admin &&
-            await identities.GetProfileAsync(id, ct) is { Role: UserRole.Admin })
+            await identities.GetRoleAsync(id, ct) == UserRole.Admin)
         {
             TempData["Error"] = "仅管理员可删除管理员账号。";
             return RedirectToPage();

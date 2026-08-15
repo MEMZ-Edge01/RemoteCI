@@ -105,6 +105,7 @@ public sealed class CloudClient : IDisposable
             }
             catch (Exception ex)
             {
+                if (!_running || ct.IsCancellationRequested) break;
                 if (IsAuthenticationFailure(ex))
                 {
                     Token = null;
@@ -122,7 +123,15 @@ public sealed class CloudClient : IDisposable
                     : _reconnectDelay;
                 // 指数退避至上限（生产 5s→10s→…→60s；测试注入毫秒级初始值以便快速验证）。
                 _reconnectDelay = TimeSpan.FromTicks(Math.Min(_reconnectDelay.Ticks * 2, MaxReconnectDelay.Ticks));
-                await Task.Delay(delay, ct);
+                try
+                {
+                    await Task.Delay(delay, ct);
+                }
+                catch (Exception waitEx) when (waitEx is OperationCanceledException or ObjectDisposedException)
+                {
+                    // 退避等待被取消（插件停止）时静默退出，不能把取消异常留给未观察任务。
+                    break;
+                }
             }
         }
     }
@@ -261,12 +270,14 @@ public sealed class CloudClient : IDisposable
 
     public void Dispose()
     {
-        // 只停止与取消，不销毁仍在被 RunLoop/在途发送引用的对象：
-        // 在 Avalonia UI 线程上同步等待循环退出会因同步上下文死锁，
-        // 销毁 _sendLock/_cts 则会让并发发送与退避等待抛 ObjectDisposedException。
-        // 句柄由 GC 终结器回收；插件停止频率极低，无实际资源累积。
+        // 先置位 _running 再取消：RunLoop 各异常分支会检查这两个信号并静默退出，
+        // 因此退避等待与发送路径已能容忍 CTS 释放，不再泄漏取消源句柄。
+        // _sendLock 仍可能被在途发送持有，留待 GC 终结器回收。
         _running = false;
-        _cts?.Cancel();
+        var cts = _cts;
+        _cts = null;
+        cts?.Cancel();
+        cts?.Dispose();
         DisposeSocket();
         _http.Dispose();
     }

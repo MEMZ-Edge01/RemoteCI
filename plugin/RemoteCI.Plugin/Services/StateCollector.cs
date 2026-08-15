@@ -10,6 +10,9 @@ namespace RemoteCI.Plugin.Services;
 /// <summary>高频当前状态与低频七日课表分流收集器。</summary>
 public sealed class StateCollector
 {
+    /// <summary>ClassIsland 对未设置科目的占位名称（宿主直接写入字面量）。</summary>
+    internal const string UnsetSubjectPlaceholder = "???";
+
     private readonly IStateSource _stateSource;
     private readonly ScheduleCatalog _schedules;
     private readonly ClassIslandHostControlService _hostControl;
@@ -184,7 +187,7 @@ public sealed class StateCollector
 
     internal static string? SubjectName(Subject? subject) => subject?.Name switch
     {
-        null or "" or "???" => null,
+        null or "" or UnsetSubjectPlaceholder => null,
         var name => name,
     };
 

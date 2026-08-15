@@ -65,6 +65,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -81,6 +82,7 @@ import androidx.wear.compose.material.Switch
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.ToggleChip
 import androidx.wear.compose.material.ToggleChipDefaults
+import com.remoteci.watch.R
 import com.remoteci.watch.data.ClassStateSnapshot
 import com.remoteci.watch.data.ConnectionManager
 import com.remoteci.watch.data.CourseEntry
@@ -98,6 +100,7 @@ import com.remoteci.watch.data.UpdateChannel
 import com.remoteci.watch.data.WatchSettings
 import java.time.Duration
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
@@ -168,16 +171,16 @@ internal fun LoginScreen(
     onSelectLanPlugin: (LanPluginCandidate) -> Unit,
     onConfirmLanBootstrap: () -> Unit,
     onLogin: () -> Unit,
-) = WatchList(title = "登录 RemoteCI") {
-    item { Input(settings.username, { onSettingsChange(settings.copy(username = it)) }, "ID") }
-    item { Input(password, onPasswordChange, "密码", password = true) }
-    item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, "云端地址") }
+) = WatchList(title = stringResource(R.string.login_title)) {
+    item { Input(settings.username, { onSettingsChange(settings.copy(username = it)) }, stringResource(R.string.input_label_username)) }
+    item { Input(password, onPasswordChange, stringResource(R.string.input_label_password), password = true) }
+    item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, stringResource(R.string.input_label_cloud_url)) }
     if (settings.cloudServerUrl.trim().startsWith("http://")) {
-        item { Hint("云端地址使用明文 HTTP，账号密码可能被同一局域网窃听，建议改用 HTTPS") }
+        item { Hint(stringResource(R.string.cloud_http_warning)) }
     }
     item {
         ActionButton(
-            if (lanDiscoveryScanning) "正在扫描…" else "扫描局域网设备",
+            stringResource(if (lanDiscoveryScanning) R.string.lan_scanning else R.string.lan_scan_button),
             Icons.Rounded.Wifi,
             !lanDiscoveryScanning,
             onScanLanPlugins,
@@ -188,7 +191,7 @@ internal fun LoginScreen(
     if (lanBootstrapPending != null) {
         item {
             ActionButton(
-                "确认使用 ${lanBootstrapPending.instanceName} 提供的云服务器",
+                stringResource(R.string.lan_bootstrap_confirm, lanBootstrapPending.instanceName),
                 Icons.Rounded.Check,
                 true,
                 onConfirmLanBootstrap,
@@ -205,7 +208,7 @@ internal fun LoginScreen(
             )
         }
     }
-    item { ActionButton("安全登录", Icons.Rounded.Wifi, settings.username.isNotBlank() && password.length >= 8, onLogin) }
+    item { ActionButton(stringResource(R.string.login_button), Icons.Rounded.Wifi, settings.username.isNotBlank() && password.length >= 8, onLogin) }
     item { Hint(describeConnectionForScreen(state)) }
 }
 
@@ -345,7 +348,7 @@ private fun HomeStatusPage(
         if (canViewExtendedSchedule(user) && shouldShowNextLessonSummary(snapshot?.currentState)) {
             Spacer(Modifier.height(diameter * .035f))
             Text(
-                "下一节课是：${snapshot?.nextClassSubject ?: "无"}",
+                stringResource(R.string.home_next_lesson, snapshot?.nextClassSubject ?: stringResource(R.string.home_next_lesson_none)),
                 color = Color.Black,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
@@ -373,7 +376,7 @@ private fun HomeMenuPage(
         }
     }
     // 首页菜单不显示“菜单”标题，让选项直接占满一屏，避免旋转翻页后还要滚动。
-    WatchList(title = "菜单", showTitle = false) {
+    WatchList(title = stringResource(R.string.home_menu_title), showTitle = false) {
         actions.forEach { action ->
             item { ActionButton(action.label, action.icon, true, action.onClick) }
         }
@@ -400,19 +403,20 @@ private fun HomePageIndicator(currentPage: Int, diameter: Dp, modifier: Modifier
 @Composable
 internal fun ScheduleOverviewScreen(
     day: ScheduleDay?,
+    today: LocalDate,
     connectionReady: Boolean,
     onRequestSchedule: () -> Unit,
     onPickDate: () -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "课表") {
+) = WatchList(title = stringResource(R.string.schedule_title)) {
     if (day == null) {
-        item { Hint("尚未同步课表") }
+        item { Hint(stringResource(R.string.schedule_not_synced)) }
         if (shouldOfferSchedulePull(day, connectionReady))
-            item { ActionButton("向插件拉取", Icons.Rounded.Refresh, true, onRequestSchedule) }
+            item { ActionButton(stringResource(R.string.schedule_pull_button), Icons.Rounded.Refresh, true, onRequestSchedule) }
     } else {
         // 日期标题同时承担切换入口，单页始终只渲染一天，避免七日内容在圆屏上过长。
-        item { ActionButton(scheduleDateTitle(day.date), null, true, onPickDate) }
-        if (day.courses.isEmpty()) item { Hint("当天没有课程") }
+        item { ActionButton(scheduleDateTitle(day.date, today), null, true, onPickDate) }
+        if (day.courses.isEmpty()) item { Hint(stringResource(R.string.schedule_empty_day)) }
         day.courses.forEach { course ->
             item { LessonSummary(course) }
         }
@@ -427,13 +431,14 @@ internal fun shouldOfferSchedulePull(day: ScheduleDay?, connectionReady: Boolean
 internal fun ScheduleDatePickerScreen(
     bundle: ScheduleBundle?,
     afterSchool: Boolean,
+    today: LocalDate,
     onSelect: (ScheduleDay) -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "选择日期") {
-    val days = availableScheduleDays(bundle, afterSchool)
-    if (days.isEmpty()) item { Hint("没有可查看的课表") }
+) = WatchList(title = stringResource(R.string.pick_date_title)) {
+    val days = availableScheduleDays(bundle, afterSchool, today)
+    if (days.isEmpty()) item { Hint(stringResource(R.string.no_viewable_schedule)) }
     days.forEach { day ->
-        item { ActionButton(scheduleDateTitle(day.date), null, true, onClick = { onSelect(day) }) }
+        item { ActionButton(scheduleDateTitle(day.date, today), null, true, onClick = { onSelect(day) }) }
     }
     item { BackButton(onBack) }
 }
@@ -442,14 +447,15 @@ internal fun ScheduleDatePickerScreen(
 internal fun DayPickerScreen(
     bundle: ScheduleBundle?,
     afterSchool: Boolean,
+    today: LocalDate,
     onSelect: (ScheduleDay) -> Unit,
     onBack: () -> Unit,
 ) =
-    WatchList(title = "选择日期") {
-        val days = availableScheduleDays(bundle, afterSchool)
-        if (days.isEmpty()) item { Hint("没有可换课的日期") }
+    WatchList(title = stringResource(R.string.pick_date_title)) {
+        val days = availableScheduleDays(bundle, afterSchool, today)
+        if (days.isEmpty()) item { Hint(stringResource(R.string.no_swappable_day)) }
         days.forEach { day ->
-            item { ActionButton(scheduleDateTitle(day.date), null, day.enabled, onClick = { onSelect(day) }) }
+            item { ActionButton(scheduleDateTitle(day.date, today), null, day.enabled, onClick = { onSelect(day) }) }
         }
         item { BackButton(onBack) }
     }
@@ -467,12 +473,12 @@ internal fun SwapScreen(
     onPickSource: () -> Unit,
     onPickTarget: () -> Unit,
     onSubmit: () -> Unit,
-) = WatchList(title = day?.date ?: "换课") {
+) = WatchList(title = day?.date ?: stringResource(R.string.swap_title)) {
     item { ModeSelector(mode, onModeChange) }
-    item { LessonButton("原课", sourceLesson?.subject ?: "选择", onPickSource) }
-    item { LessonButton("目标", if (mode == SwapMode.Exchange) targetLesson?.subject ?: "选择" else replacementSubject ?: "选择科目", onPickTarget) }
+    item { LessonButton(stringResource(R.string.swap_source_label), sourceLesson?.subject ?: stringResource(R.string.pick_placeholder), onPickSource) }
+    item { LessonButton(stringResource(R.string.swap_target_label), if (mode == SwapMode.Exchange) targetLesson?.subject ?: stringResource(R.string.pick_placeholder) else replacementSubject ?: stringResource(R.string.pick_subject_placeholder), onPickTarget) }
     val validTarget = if (mode == SwapMode.Exchange) targetLesson != null && targetLesson.index != sourceLesson?.index else replacementSubject != null
-    item { ActionButton(if (mode == SwapMode.Exchange) "确认交换" else "确认替换", Icons.Rounded.Check, connectionReady && sourceLesson != null && validTarget, onSubmit) }
+    item { ActionButton(stringResource(if (mode == SwapMode.Exchange) R.string.confirm_exchange else R.string.confirm_replace), Icons.Rounded.Check, connectionReady && sourceLesson != null && validTarget, onSubmit) }
     if (!resultText.isNullOrBlank()) item { Hint(resultText) }
 }
 
@@ -499,7 +505,7 @@ internal fun SubjectPickerScreen(
     subjects: List<SubjectEntry>,
     selectedSubjectId: String?,
     onSelect: (SubjectEntry) -> Unit,
-) = WatchList(title = "选择科目") {
+) = WatchList(title = stringResource(R.string.pick_subject_title)) {
     subjects.forEach { subject -> item {
         ActionButton("${if (subject.id == selectedSubjectId) "✓ " else ""}${subject.name}", null, true, onClick = { onSelect(subject) })
     } }
@@ -519,13 +525,13 @@ internal fun ControlScreen(
     onOpenPower: () -> Unit,
     onRunExtension: (ExtensionDefinition) -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "控制") {
+) = WatchList(title = stringResource(R.string.control_title)) {
     val canNotify = user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true
     val canControlSystem = user?.has(Protocol.PERMISSION_SYSTEM_CONTROL) == true
-    item { ActionButton("老师来了", Icons.Rounded.School, canNotify, onTeacherComing) }
-    item { ActionButton("发送通知", Icons.Rounded.EditNotifications, canNotify, onOpenNotification) }
+    item { ActionButton(stringResource(R.string.teacher_coming), Icons.Rounded.School, canNotify, onTeacherComing) }
+    item { ActionButton(stringResource(R.string.send_notification), Icons.Rounded.EditNotifications, canNotify, onOpenNotification) }
     if (shouldShowClearNotifications(snapshot)) item {
-        ActionButton("清除通知", Icons.Rounded.NotificationsOff, canNotify, onClearNotifications)
+        ActionButton(stringResource(R.string.clear_notifications), Icons.Rounded.NotificationsOff, canNotify, onClearNotifications)
     }
     item {
         ActionButton(
@@ -537,13 +543,13 @@ internal fun ControlScreen(
     }
     item {
         ActionButton(
-            "音量",
+            stringResource(R.string.volume_title),
             if (snapshot?.isMuted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
             canControlSystem && snapshot?.isVolumeControlAvailable == true,
             onOpenVolume,
         )
     }
-    item { ActionButton("电源", Icons.Rounded.PowerSettingsNew, canControlSystem, onOpenPower) }
+    item { ActionButton(stringResource(R.string.power_title), Icons.Rounded.PowerSettingsNew, canControlSystem, onOpenPower) }
     // 其他插件通过 RemoteCI 注册的扩展功能：按当前用户权限过滤后动态显示在控制菜单底部。
     visibleExtensionsFor(user, extensions).forEach { extension ->
         item {
@@ -635,7 +641,7 @@ internal fun ExtensionFormScreen(
                 )
             }
         } }
-        item { ActionButton("执行", Icons.Rounded.Check, connectionReady, onClick = { onSubmit(values) }) }
+        item { ActionButton(stringResource(R.string.run_extension), Icons.Rounded.Check, connectionReady, onClick = { onSubmit(values) }) }
         if (!resultText.isNullOrBlank()) item { Hint(resultText) }
         item { BackButton(onBack) }
     }
@@ -654,8 +660,8 @@ internal fun VolumeScreen(
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 
-    WatchList(title = "音量") {
-        item { Hint(if (muted) "当前已静音 · 音量 $localVolume%" else "当前音量 $localVolume%") }
+    WatchList(title = stringResource(R.string.volume_title)) {
+        item { Hint(stringResource(if (muted) R.string.volume_muted_hint else R.string.volume_hint, localVolume)) }
         item {
             Slider(
                 value = localVolume.toFloat(),
@@ -676,10 +682,10 @@ internal fun VolumeScreen(
                     .focusable(),
             )
         }
-        item { Hint("可触摸拖动，也可旋转表冠调节") }
+        item { Hint(stringResource(R.string.volume_rotary_hint)) }
         item {
             ActionButton(
-                if (muted) "取消静音" else "静音",
+                stringResource(if (muted) R.string.unmute else R.string.mute),
                 if (muted) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeOff,
                 available,
                 onClick = { onMutedChange(!muted) },
@@ -704,12 +710,12 @@ internal fun PowerScreen(
     hibernateAvailable: Boolean,
     onPowerAction: (Int) -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "电源") {
-    item { ActionButton("关机", Icons.Rounded.PowerSettingsNew, true, onClick = { onPowerAction(Protocol.POWER_SHUTDOWN) }) }
-    item { ActionButton("重启", Icons.Rounded.RestartAlt, true, onClick = { onPowerAction(Protocol.POWER_RESTART) }) }
-    item { ActionButton("睡眠", Icons.Rounded.PowerSettingsNew, sleepAvailable, onClick = { onPowerAction(Protocol.POWER_SLEEP) }) }
+) = WatchList(title = stringResource(R.string.power_title)) {
+    item { ActionButton(stringResource(R.string.power_shutdown), Icons.Rounded.PowerSettingsNew, true, onClick = { onPowerAction(Protocol.POWER_SHUTDOWN) }) }
+    item { ActionButton(stringResource(R.string.power_restart), Icons.Rounded.RestartAlt, true, onClick = { onPowerAction(Protocol.POWER_RESTART) }) }
+    item { ActionButton(stringResource(R.string.power_sleep), Icons.Rounded.PowerSettingsNew, sleepAvailable, onClick = { onPowerAction(Protocol.POWER_SLEEP) }) }
     if (hibernateAvailable) item {
-        ActionButton("休眠", Icons.Rounded.PowerSettingsNew, true, onClick = { onPowerAction(Protocol.POWER_HIBERNATE) })
+        ActionButton(stringResource(R.string.power_hibernate), Icons.Rounded.PowerSettingsNew, true, onClick = { onPowerAction(Protocol.POWER_HIBERNATE) })
     }
     item { BackButton(onBack) }
 }
@@ -730,15 +736,15 @@ internal fun NotificationScreen(
     onSpeechEnabledChange: (Boolean) -> Unit,
     onSend: () -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "发送消息") {
-    item { Input(title, onTitleChange, "标题") }
-    if (forceSenderInTitle) item { Hint("将显示发送人") }
-    item { Input(message, onMessageChange, "正文") }
-    item { Toggle("启用提醒强调特效", effectEnabled, onEffectEnabledChange) }
-    item { Toggle("启用提醒音效", soundEnabled, onSoundEnabledChange) }
-    item { Toggle("启用提醒语言", speechEnabled, onSpeechEnabledChange) }
+) = WatchList(title = stringResource(R.string.notice_screen_title)) {
+    item { Input(title, onTitleChange, stringResource(R.string.notice_title_label)) }
+    if (forceSenderInTitle) item { Hint(stringResource(R.string.notice_sender_hint)) }
+    item { Input(message, onMessageChange, stringResource(R.string.notice_message_label)) }
+    item { Toggle(stringResource(R.string.notice_effect_toggle), effectEnabled, onEffectEnabledChange) }
+    item { Toggle(stringResource(R.string.notice_sound_toggle), soundEnabled, onSoundEnabledChange) }
+    item { Toggle(stringResource(R.string.notice_speech_toggle), speechEnabled, onSpeechEnabledChange) }
     // 标题与正文均可留空，插件会为留空项兜底为默认标题/原标题。
-    item { ActionButton("发送并等待回执", Icons.Rounded.EditNotifications, true, onSend) }
+    item { ActionButton(stringResource(R.string.notice_send_button), Icons.Rounded.EditNotifications, true, onSend) }
     if (!resultText.isNullOrBlank()) item { Hint(resultText) }
     item { BackButton(onBack) }
 }
@@ -751,12 +757,12 @@ internal fun SettingsScreen(
     onOpenUpdate: () -> Unit,
     onOpenDeveloper: () -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "设置") {
-    item { ActionButton("连接", Icons.Rounded.Wifi, true, onOpenConnection) }
-    item { ActionButton("通知", Icons.Rounded.EditNotifications, true, onOpenNotifications) }
-    item { ActionButton("外观", Icons.Rounded.Palette, true, onOpenAppearance) }
-    item { ActionButton("更新", Icons.Rounded.SystemUpdate, true, onOpenUpdate) }
-    item { ActionButton("开发者", Icons.Rounded.Code, true, onOpenDeveloper) }
+) = WatchList(title = stringResource(R.string.settings_title)) {
+    item { ActionButton(stringResource(R.string.settings_connection), Icons.Rounded.Wifi, true, onOpenConnection) }
+    item { ActionButton(stringResource(R.string.settings_notifications), Icons.Rounded.EditNotifications, true, onOpenNotifications) }
+    item { ActionButton(stringResource(R.string.settings_appearance), Icons.Rounded.Palette, true, onOpenAppearance) }
+    item { ActionButton(stringResource(R.string.settings_update), Icons.Rounded.SystemUpdate, true, onOpenUpdate) }
+    item { ActionButton(stringResource(R.string.settings_developer), Icons.Rounded.Code, true, onOpenDeveloper) }
     item { BackButton(onBack) }
 }
 
@@ -765,8 +771,8 @@ internal fun AppearanceSettingsScreen(
     currentThemeId: String,
     onThemeChange: (String) -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "外观") {
-    item { Hint("选择配色方案") }
+) = WatchList(title = stringResource(R.string.settings_appearance)) {
+    item { Hint(stringResource(R.string.appearance_pick_palette)) }
     WatchPalette.All.forEach { option ->
         item {
             ThemeOptionButton(
@@ -842,7 +848,7 @@ internal fun UpdateScreen(
     fun checkUpdate(): Unit {
         val allowedVersion = serverVersion
         if (allowedVersion.isNullOrBlank()) {
-            state = UpdateUiState.Error("请先连接 WebUI，再检查手表更新")
+            state = UpdateUiState.Error(context.getString(R.string.update_need_webui))
             return
         }
         state = UpdateUiState.Checking
@@ -862,18 +868,18 @@ internal fun UpdateScreen(
                         selected.asset,
                     )
                 } else {
-                    UpdateUiState.UpToDate("已是 WebUI v$allowedVersion 允许的最新版本")
+                    UpdateUiState.UpToDate(context.getString(R.string.update_up_to_date, allowedVersion))
                 }
             } catch (error: Exception) {
-                UpdateUiState.Error(error.message ?: "检查更新失败")
+                UpdateUiState.Error(error.message ?: context.getString(R.string.update_check_failed))
             }
         }
     }
 
-    WatchList(title = "更新") {
-        item { Hint("当前版本 v$currentVersion") }
-        item { Hint("已连接 WebUI v${serverVersion ?: "未知"}") }
-        item { Hint("更新渠道") }
+    WatchList(title = stringResource(R.string.settings_update)) {
+        item { Hint(stringResource(R.string.update_current_version, currentVersion)) }
+        item { Hint(stringResource(R.string.update_connected_webui, serverVersion ?: stringResource(R.string.update_webui_unknown))) }
+        item { Hint(stringResource(R.string.update_channel_label)) }
         item {
             UpdateChannelSelector(updateChannel) { channel ->
                 state = UpdateUiState.Idle
@@ -881,12 +887,12 @@ internal fun UpdateScreen(
             }
         }
         item {
-            Toggle("强制更新", forceUpdate) { enabled ->
+            Toggle(stringResource(R.string.update_force_toggle), forceUpdate) { enabled ->
                 state = UpdateUiState.Idle
                 onUpdateOptionsChange(updateChannel, enabled)
             }
         }
-        if (forceUpdate) item { Hint("允许同版本重新下载并覆盖安装，不允许降级") }
+        if (forceUpdate) item { Hint(stringResource(R.string.update_force_hint)) }
         when (val current = state) {
             UpdateUiState.Idle, UpdateUiState.Checking -> {
                 if (current == UpdateUiState.Checking) {
@@ -894,7 +900,7 @@ internal fun UpdateScreen(
                 }
                 item {
                     ActionButton(
-                        "检查更新",
+                        stringResource(R.string.update_check_button),
                         Icons.Rounded.SystemUpdate,
                         enabled = current != UpdateUiState.Checking,
                         onClick = ::checkUpdate,
@@ -905,16 +911,16 @@ internal fun UpdateScreen(
             is UpdateUiState.UpToDate -> {
                 item { Hint(current.message) }
                 item {
-                    ActionButton("重新检查", Icons.Rounded.SystemUpdate, true, onClick = ::checkUpdate)
+                    ActionButton(stringResource(R.string.update_recheck_button), Icons.Rounded.SystemUpdate, true, onClick = ::checkUpdate)
                 }
             }
 
             is UpdateUiState.Available -> {
                 val reinstalling = UpdateManager.compareVersions(current.latestVersion, currentVersion) == 0
-                item { Hint(if (reinstalling) "可强制覆盖安装 v${current.latestVersion}" else "发现新版本 v${current.latestVersion}") }
+                item { Hint(stringResource(if (reinstalling) R.string.update_reinstall_available else R.string.update_new_version, current.latestVersion)) }
                 item { Hint(releaseNotesPreview(current.release.body)) }
                 item {
-                    ActionButton(if (reinstalling) "重新下载并覆盖" else "下载并安装", Icons.Rounded.Download, true, onClick = {
+                    ActionButton(stringResource(if (reinstalling) R.string.update_reinstall_button else R.string.update_install_button), Icons.Rounded.Download, true, onClick = {
                         state = UpdateUiState.Downloading
                         scope.launch {
                             state = try {
@@ -933,7 +939,7 @@ internal fun UpdateScreen(
                                 UpdateManager.installApk(context, apk)
                                 UpdateUiState.Installing
                             } catch (error: Exception) {
-                                UpdateUiState.Error(error.message ?: "更新失败")
+                                UpdateUiState.Error(error.message ?: context.getString(R.string.update_failed))
                             }
                         }
                     })
@@ -941,19 +947,19 @@ internal fun UpdateScreen(
             }
 
             UpdateUiState.Downloading -> {
-                item { Hint("正在下载更新包…") }
+                item { Hint(stringResource(R.string.update_downloading)) }
                 item { CircularProgressIndicator(modifier = Modifier.size(34.dp)) }
             }
 
             UpdateUiState.Installing -> {
-                item { Hint("正在安装，请按系统提示确认…") }
+                item { Hint(stringResource(R.string.update_installing)) }
                 item { CircularProgressIndicator(modifier = Modifier.size(34.dp)) }
             }
 
             is UpdateUiState.Error -> {
                 item { Hint(current.message) }
                 item {
-                    ActionButton("重新检查", Icons.Rounded.SystemUpdate, true, onClick = ::checkUpdate)
+                    ActionButton(stringResource(R.string.update_recheck_button), Icons.Rounded.SystemUpdate, true, onClick = ::checkUpdate)
                 }
             }
         }
@@ -964,7 +970,7 @@ internal fun UpdateScreen(
 @Composable
 private fun UpdateChannelSelector(channel: UpdateChannel, onChange: (UpdateChannel) -> Unit) {
     Row(Modifier.width(150.dp).height(30.dp).clip(RoundedCornerShape(15.dp)).background(palette.disabledContainer)) {
-        listOf(UpdateChannel.STABLE to "正式版", UpdateChannel.BETA to "Beta版").forEach { (value, label) ->
+        listOf(UpdateChannel.STABLE to stringResource(R.string.update_channel_stable), UpdateChannel.BETA to stringResource(R.string.update_channel_beta)).forEach { (value, label) ->
             Box(
                 Modifier.weight(1f).fillMaxSize()
                     .background(if (channel == value) palette.buttonContainer else Color.Transparent)
@@ -994,18 +1000,18 @@ internal fun ConnectionSettingsScreen(
     onBack: () -> Unit,
 ) {
     var portText by remember(settings.lanPort) { mutableStateOf(settings.lanPort.toString()) }
-    WatchList(title = "连接") {
+    WatchList(title = stringResource(R.string.settings_connection)) {
         item { Hint(stateText) }
-        item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, "云端地址") }
-        item { Input(settings.lanHost, { onSettingsChange(settings.copy(lanHost = it)) }, "电脑 IP") }
+        item { Input(settings.cloudServerUrl, { onSettingsChange(settings.copy(cloudServerUrl = it)) }, stringResource(R.string.input_label_cloud_url)) }
+        item { Input(settings.lanHost, { onSettingsChange(settings.copy(lanHost = it)) }, stringResource(R.string.lan_host_label)) }
         item {
             Input(portText, { value ->
                 portText = value
                 parseLanPort(value)?.let { onSettingsChange(settings.copy(lanPort = it)) }
-            }, "局域网端口")
+            }, stringResource(R.string.lan_port_label))
         }
-        item { ActionButton("保存并重连", Icons.Rounded.Wifi, true, onReconnect) }
-        item { ActionButton("退出账号", null, true, onLogout, subtle = true) }
+        item { ActionButton(stringResource(R.string.save_and_reconnect), Icons.Rounded.Wifi, true, onReconnect) }
+        item { ActionButton(stringResource(R.string.logout), null, true, onLogout, subtle = true) }
         item { BackButton(onBack) }
     }
 }
@@ -1018,15 +1024,15 @@ internal fun DeveloperSettingsScreen(
     onLanConnectionEnabledChange: (Boolean) -> Unit,
     onReconnect: () -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "开发者") {
-    item { Hint("关闭云端后只能依赖局域网直连；关闭局域网后只使用云端。密码登录仍会临时使用云端完成认证。") }
+) = WatchList(title = stringResource(R.string.settings_developer)) {
+    item { Hint(stringResource(R.string.developer_hint)) }
     if (shouldShowCloudConnectionToggle(developerSettings = true)) {
-        item { Toggle("云服务器", cloudConnectionEnabled, onCloudConnectionEnabledChange) }
+        item { Toggle(stringResource(R.string.cloud_server_toggle), cloudConnectionEnabled, onCloudConnectionEnabledChange) }
     }
     if (shouldShowLanConnectionToggle(developerSettings = true)) {
-        item { Toggle("局域网直连", lanConnectionEnabled, onLanConnectionEnabledChange) }
+        item { Toggle(stringResource(R.string.lan_direct_toggle), lanConnectionEnabled, onLanConnectionEnabledChange) }
     }
-    item { ActionButton("应用并重连", Icons.Rounded.Wifi, true, onReconnect) }
+    item { ActionButton(stringResource(R.string.apply_and_reconnect), Icons.Rounded.Wifi, true, onReconnect) }
     item { BackButton(onBack) }
 }
 
@@ -1039,14 +1045,14 @@ internal fun NotificationSettingsScreen(
     settings: WatchSettings,
     onSettingsChange: (WatchSettings) -> Unit,
     onBack: () -> Unit,
-) = WatchList(title = "通知") {
-    item { Toggle("上课", settings.receiveOnClass) { onSettingsChange(settings.copy(receiveOnClass = it)) } }
-    item { Toggle("下课", settings.receiveOnBreaking) { onSettingsChange(settings.copy(receiveOnBreaking = it)) } }
-    item { Toggle("放学", settings.receiveAfterSchool) { onSettingsChange(settings.copy(receiveAfterSchool = it)) } }
-    item { Toggle("课表变更", settings.receiveScheduleChanged) { onSettingsChange(settings.copy(receiveScheduleChanged = it)) } }
-    item { Toggle("自定义消息", settings.receiveCustom) { onSettingsChange(settings.copy(receiveCustom = it)) } }
-    item { Toggle("ClassIsland 自动化", settings.receiveAutomationNotifications) { onSettingsChange(settings.copy(receiveAutomationNotifications = it)) } }
-    item { Toggle("其他插件通知", settings.receivePluginNotifications) { onSettingsChange(settings.copy(receivePluginNotifications = it)) } }
+) = WatchList(title = stringResource(R.string.settings_notifications)) {
+    item { Toggle(stringResource(R.string.notif_on_class), settings.receiveOnClass) { onSettingsChange(settings.copy(receiveOnClass = it)) } }
+    item { Toggle(stringResource(R.string.notif_on_breaking), settings.receiveOnBreaking) { onSettingsChange(settings.copy(receiveOnBreaking = it)) } }
+    item { Toggle(stringResource(R.string.notif_after_school), settings.receiveAfterSchool) { onSettingsChange(settings.copy(receiveAfterSchool = it)) } }
+    item { Toggle(stringResource(R.string.notif_schedule_changed), settings.receiveScheduleChanged) { onSettingsChange(settings.copy(receiveScheduleChanged = it)) } }
+    item { Toggle(stringResource(R.string.notif_custom), settings.receiveCustom) { onSettingsChange(settings.copy(receiveCustom = it)) } }
+    item { Toggle(stringResource(R.string.notif_automation), settings.receiveAutomationNotifications) { onSettingsChange(settings.copy(receiveAutomationNotifications = it)) } }
+    item { Toggle(stringResource(R.string.notif_plugin), settings.receivePluginNotifications) { onSettingsChange(settings.copy(receivePluginNotifications = it)) } }
     item { BackButton(onBack) }
 }
 
@@ -1105,7 +1111,7 @@ private fun ActionButton(
     }
 }
 
-@Composable private fun BackButton(onClick: () -> Unit) = ActionButton("返回", Icons.AutoMirrored.Rounded.ArrowBack, true, onClick, subtle = true)
+@Composable private fun BackButton(onClick: () -> Unit) = ActionButton(stringResource(R.string.back), Icons.AutoMirrored.Rounded.ArrowBack, true, onClick, subtle = true)
 
 private data class HomeAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
@@ -1181,7 +1187,7 @@ private fun LessonButton(label: String, subject: String, onClick: () -> Unit) {
 @Composable
 private fun ModeSelector(mode: SwapMode, onModeChange: (SwapMode) -> Unit) {
     Row(Modifier.width(120.dp).height(28.dp).clip(RoundedCornerShape(14.dp)).background(palette.disabledContainer)) {
-        listOf(SwapMode.Exchange to "交换", SwapMode.Replace to "替换").forEach { (value, label) ->
+        listOf(SwapMode.Exchange to stringResource(R.string.swap_mode_exchange), SwapMode.Replace to stringResource(R.string.swap_mode_replace)).forEach { (value, label) ->
             Box(
                 Modifier.weight(1f).fillMaxSize().background(if (mode == value) palette.buttonContainer else Color.Transparent).clickable { onModeChange(value) },
                 contentAlignment = Alignment.Center,
@@ -1226,23 +1232,14 @@ private fun Toggle(label: String, checked: Boolean, onChange: (Boolean) -> Unit)
     textAlign = TextAlign.Center,
     modifier = Modifier.fillMaxWidth(.76f).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
 )
-@Composable private fun SectionLabel(text: String) = Text(text, color = palette.buttonContainer, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-
-private fun describeConnectionForScreen(state: ConnectionManager.State): String = when (state) {
-    ConnectionManager.State.Idle -> "未连接"
-    ConnectionManager.State.Connecting -> "连接中…"
-    ConnectionManager.State.LanConnected -> "局域网直连"
-    ConnectionManager.State.CloudConnected -> "云端中转"
-    is ConnectionManager.State.Error -> state.message
-}
 
 @Composable
-private fun connectionIndicatorColor(state: ConnectionManager.State): Color = when (state) {
-    ConnectionManager.State.LanConnected -> Color(0xFF2E7D32)
-    ConnectionManager.State.CloudConnected -> palette.progressActive
-    ConnectionManager.State.Connecting -> Color(0xFFF9A825)
-    is ConnectionManager.State.Error -> Color(0xFFBA1A1A)
-    ConnectionManager.State.Idle -> Color(0xFFC8C4D0)
+private fun describeConnectionForScreen(state: ConnectionManager.State): String = when (state) {
+    ConnectionManager.State.Idle -> stringResource(R.string.connection_state_idle)
+    ConnectionManager.State.Connecting -> stringResource(R.string.connection_state_connecting)
+    ConnectionManager.State.LanConnected -> stringResource(R.string.connection_state_lan)
+    ConnectionManager.State.CloudConnected -> stringResource(R.string.connection_state_cloud)
+    is ConnectionManager.State.Error -> state.message
 }
 
 /** 放学后以明天作为浏览和换课下限，防止继续展示已经结束的当天课表。 */
@@ -1385,4 +1382,22 @@ internal fun pluginLocalNow(
         runCatching { OffsetDateTime.parse(raw).toInstant().atOffset(offset).toLocalTime() }.getOrNull()
     } ?: LocalTime.now(offset)
     return base.plusNanos((nowElapsedMs - baseElapsedMs) * 1_000_000L)
+}
+
+/**
+ * 推算插件侧“今天”的日期，与 [pluginLocalNow] 同源：以快照 UTC 生成时间加插件时区偏移为基准，
+ * 再按本机流逝时间外推。手表与插件时区不一致时不会取错日期；缺时区信息退回表端日期。
+ */
+internal fun pluginToday(
+    generatedAt: String?,
+    offsetMinutes: Int?,
+    baseElapsedMs: Long,
+    nowElapsedMs: Long,
+): LocalDate {
+    val offset = offsetMinutes?.let { runCatching { ZoneOffset.ofTotalSeconds(it * 60) }.getOrNull() }
+    if (offset == null) return LocalDate.now()
+    val base = generatedAt?.let { raw ->
+        runCatching { OffsetDateTime.parse(raw).toInstant().atOffset(offset).toLocalDateTime() }.getOrNull()
+    } ?: LocalDateTime.now(offset)
+    return base.plusNanos((nowElapsedMs - baseElapsedMs) * 1_000_000L).toLocalDate()
 }

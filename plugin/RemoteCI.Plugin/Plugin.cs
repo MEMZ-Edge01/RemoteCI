@@ -38,8 +38,19 @@ public class Plugin : PluginBase
         Settings = ConfigureFileHelper.LoadConfig<PluginSettings>(settingsPath);
         // 长期凭据不随 Settings.json 明文落盘：从 DPAPI 存储加载，兼容迁移旧版明文字段。
         var tokenStore = new CloudTokenStore(Path.Combine(PluginConfigFolder, "CloudToken.bin"));
-        Settings.CloudToken = tokenStore.Load() ?? CloudTokenStore.TryMigrateLegacyPlaintext(settingsPath);
+        Settings.CloudToken = tokenStore.Load();
+        var migratedToken = Settings.CloudToken is null
+            ? CloudTokenStore.TryMigrateLegacyPlaintext(settingsPath)
+            : null;
+        Settings.CloudToken ??= migratedToken;
         if (Settings.CloudToken is not null) tokenStore.Save(Settings.CloudToken);
+        if (migratedToken is not null)
+        {
+            // 迁移成功后立即重写 Settings.json 清除旧版明文字段（CloudToken 已标记 JsonIgnore），
+            // 不能等用户下次修改设置才触发保存，否则明文凭据会无限期残留磁盘。
+            ConfigureFileHelper.SaveConfig(settingsPath, Settings);
+            FileProtection.RestrictToCurrentUser(settingsPath);
+        }
         Settings.PropertyChanged += (_, _) =>
         {
             ConfigureFileHelper.SaveConfig(settingsPath, Settings);

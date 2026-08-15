@@ -20,7 +20,7 @@ internal static class ScheduleChangeExecutor
     {
         var before = catalog.BuildDay(date);
         if (!before.Enabled)
-            return Failure(CommandResultCodes.ScheduleUnavailable, $"{date:yyyy-MM-dd} 没有可编辑课表");
+            return CommandResult.Failure(CommandResultCodes.ScheduleUnavailable, $"{date:yyyy-MM-dd} 没有可编辑课表");
         if (!string.Equals(before.Revision, request.ExpectedRevision, StringComparison.Ordinal))
             return new CommandResult
             {
@@ -35,17 +35,17 @@ internal static class ScheduleChangeExecutor
             request,
             subjectId => profile.Subjects.ContainsKey(subjectId));
         if (validationError is not null)
-            return Failure(CommandResultCodes.InvalidRequest, validationError);
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, validationError);
 
         var plan = GetWritablePlan(date, backend, profile);
         if (plan is null)
-            return Failure(CommandResultCodes.ScheduleUnavailable, $"{date:yyyy-MM-dd} 无法创建临时课表层");
+            return CommandResult.Failure(CommandResultCodes.ScheduleUnavailable, $"{date:yyyy-MM-dd} 无法创建临时课表层");
         validationError = ScheduleMutation.Validate(
             plan.Classes.Count,
             request,
             subjectId => profile.Subjects.ContainsKey(subjectId));
         if (validationError is not null)
-            return Failure(CommandResultCodes.InvalidRequest, validationError);
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, validationError);
 
         var mutation = ScheduleMutation.Create(plan.Classes, request);
         mutation.Apply();
@@ -58,7 +58,7 @@ internal static class ScheduleChangeExecutor
         {
             mutation.Rollback();
             onSaveFailure?.Invoke(ex);
-            return Failure(CommandResultCodes.SaveFailed, "ClassIsland 保存课表失败，操作未确认");
+            return CommandResult.Failure(CommandResultCodes.SaveFailed, "ClassIsland 保存课表失败，操作未确认");
         }
 
         var after = catalog.BuildDay(date);
@@ -84,11 +84,4 @@ internal static class ScheduleChangeExecutor
             ? refreshed
             : profile.ClassPlans.GetValueOrDefault(refreshedId ?? overlayId.Value);
     }
-
-    private static CommandResult Failure(string code, string message) => new()
-    {
-        Success = false,
-        Code = code,
-        Message = message,
-    };
 }

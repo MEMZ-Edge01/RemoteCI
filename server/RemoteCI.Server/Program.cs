@@ -120,7 +120,12 @@ app.UseRouting();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseWebSockets();
+// ping/pong 保活：30 秒一次，60 秒内无 pong 视为半开连接由底层中止，避免僵尸连接滞留注册表。
+app.UseWebSockets(new WebSocketOptions
+{
+    KeepAliveInterval = TimeSpan.FromSeconds(30),
+    KeepAliveTimeout = TimeSpan.FromSeconds(60),
+});
 
 using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<IdentityCoordinator>().BootstrapAsync();
@@ -138,6 +143,7 @@ app.Map("/ws", async context =>
 
 app.MapPost("/api/plugin/pair", async (PairRequest request, IdentityCoordinator identities, CancellationToken ct) =>
 {
+    if (MissingFields(request.PairCode, request.Role) is { } bad) return bad;
     if (!string.Equals(request.Role, "plugin", StringComparison.OrdinalIgnoreCase))
         return Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "此端点仅用于插件配对"));
     try { return Results.Ok(await identities.PairPluginAsync(request, ct)); }
@@ -147,6 +153,7 @@ app.MapPost("/api/plugin/pair", async (PairRequest request, IdentityCoordinator 
 app.MapPost("/api/auth/login", async (
     LoginRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
 {
+    if (MissingFields(request.Username, request.Password) is { } bad) return bad;
     try
     {
         var response = await identities.LoginAsync(request, ct);
@@ -159,6 +166,7 @@ app.MapPost("/api/auth/login", async (
 app.MapPost("/api/auth/refresh", async (
     RefreshSessionRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
 {
+    if (MissingFields(request.DeviceSecret) is { } bad) return bad;
     try
     {
         var response = await identities.RefreshAsync(request, ct);
@@ -188,6 +196,7 @@ app.MapPost("/api/me/password", async (
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
+    if (MissingFields(request.CurrentPassword, request.NewPassword) is { } bad) return bad;
     try
     {
         await identities.ChangePasswordAsync(principal.User.Id, request, ct);
@@ -236,12 +245,20 @@ app.MapGet("/api/schedule", async (HttpContext ctx, IdentityCoordinator identiti
 });
 
 app.MapPost("/api/commands", async (
-    HttpContext ctx, CommandMessage command, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    HttpContext ctx, CommandMessage command, IdentityCoordinator identities, PeerRegistry peers, IStateStore store, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
-    // RunExtension 与 WS 路径一致：所需权限由插件按注册项动态校验，服务端只要求已认证用户。
-    if (command.Command != CommandKind.RunExtension)
+    if (command.Command == CommandKind.RunExtension)
+    {
+        // 与 WS 路径一致：服务端用扩展注册表预检 RequiredPermission；注册表未同步时放行，由插件复核。
+        if (string.IsNullOrEmpty(command.ExtensionId))
+            return Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "缺少扩展 Id"));
+        var definition = store.GetLatestExtensions()?.FirstOrDefault(x => x.Id == command.ExtensionId);
+        if (definition is not null && !principal.User.Permissions.HasFlag(definition.RequiredPermission))
+            return Forbidden();
+    }
+    else
     {
         var required = CommandPermissions.Required(command.Command);
         if (required == UserPermissions.None) return Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "未知命令"));
@@ -256,6 +273,7 @@ var usersApi = app.MapGroup("/api/users");
 usersApi.MapGet("/", async (HttpContext ctx, IdentityCoordinator identities, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
     return HasPermission(principal, UserPermissions.ManageUsers)
         ? Results.Ok(await identities.ListUsersAsync(ct))
         : Forbidden();
@@ -264,9 +282,11 @@ usersApi.MapPost("/", async (
     HttpContext ctx, CreateUserRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
+    if (MissingFields(request.Username, request.Password) is { } bad) return bad;
     // 被授予 ManageUsers 的普通用户只能管理普通账号，不能创建管理员。
-    if (request.Role == UserRole.Admin && principal!.User!.Role != UserRole.Admin) return Forbidden();
+    if (request.Role == UserRole.Admin && principal.User.Role != UserRole.Admin) return Forbidden();
     try
     {
         var created = await identities.CreateUserAsync(request, ct);
@@ -279,11 +299,12 @@ usersApi.MapPut("/{id:guid}", async (
     Guid id, HttpContext ctx, UpdateUserRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
-    // 不能把账号升级为管理员；管理员账号本身也只有管理员能编辑。
-    if (principal!.User!.Role != UserRole.Admin &&
+    // 不能把账号升级为管理员；管理员账号本身也只有管理员能编辑（含禁用状态的管理员）。
+    if (principal.User.Role != UserRole.Admin &&
         (request.Role == UserRole.Admin ||
-         await identities.GetProfileAsync(id, ct) is { Role: UserRole.Admin }))
+         await identities.GetRoleAsync(id, ct) == UserRole.Admin))
         return Forbidden();
     try
     {
@@ -297,10 +318,12 @@ usersApi.MapPost("/{id:guid}/password", async (
     Guid id, HttpContext ctx, ResetPasswordRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
-    // 重置管理员密码等于接管管理员账号，仅管理员可执行。
-    if (principal!.User!.Role != UserRole.Admin &&
-        await identities.GetProfileAsync(id, ct) is { Role: UserRole.Admin })
+    if (MissingFields(request.Password) is { } bad) return bad;
+    // 重置管理员密码等于接管管理员账号，仅管理员可执行（含禁用状态的管理员）。
+    if (principal.User.Role != UserRole.Admin &&
+        await identities.GetRoleAsync(id, ct) == UserRole.Admin)
         return Forbidden();
     try
     {
@@ -314,10 +337,11 @@ usersApi.MapDelete("/{id:guid}", async (
     Guid id, HttpContext ctx, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
-    // 删除管理员账号仅管理员可执行（最后管理员另有 GuardLastAdmin 保护）。
-    if (principal!.User!.Role != UserRole.Admin &&
-        await identities.GetProfileAsync(id, ct) is { Role: UserRole.Admin })
+    // 删除管理员账号仅管理员可执行（含禁用状态；最后管理员另有 GuardLastAdmin 保护）。
+    if (principal.User.Role != UserRole.Admin &&
+        await identities.GetRoleAsync(id, ct) == UserRole.Admin)
         return Forbidden();
     try
     {
@@ -332,6 +356,7 @@ app.MapPost("/api/plugin/pairing-code", async (
     HttpContext ctx, IdentityCoordinator identities, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
     return HasPermission(principal, UserPermissions.ManageUsers)
         ? Results.Ok(new { pairCode = await identities.CreatePluginPairingCodeAsync(ct) })
         : Forbidden();
@@ -365,6 +390,7 @@ app.MapGet("/api/admin/status", async (
     HttpContext ctx, IdentityCoordinator identities, PeerRegistry peers, IStateStore store, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
+    if (principal?.User is null) return Unauthorized();
     if (!HasPermission(principal, UserPermissions.AccessWebUi)) return Forbidden();
     return Results.Ok(new
     {
@@ -391,6 +417,12 @@ static async Task<AuthPrincipal?> AuthorizeAsync(HttpContext ctx, IdentityCoordi
 
 static bool HasPermission(AuthPrincipal? principal, UserPermissions permission) =>
     principal?.User?.Permissions.HasFlag(permission) == true;
+
+/// <summary>认证端点的必填字段缺失（含 JSON 显式传 null）时返回 400 而不是内部 500。</summary>
+static IResult? MissingFields(params string?[] values) =>
+    values.Any(string.IsNullOrEmpty)
+        ? Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "缺少必填字段"))
+        : null;
 
 static async Task SyncAccountsAsync(IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct)
 {
@@ -419,8 +451,7 @@ static IResult OperationError(IdentityOperationException ex) => Results.Json(
         ApiErrorCodes.Forbidden => StatusCodes.Status403Forbidden,
         ApiErrorCodes.NotFound => StatusCodes.Status404NotFound,
         ApiErrorCodes.PairCodeInvalid => StatusCodes.Status409Conflict,
-        "USERNAME_EXISTS" => StatusCodes.Status409Conflict,
-        "LAST_ADMIN" => StatusCodes.Status409Conflict,
+        ApiErrorCodes.UsernameExists or ApiErrorCodes.LastAdmin => StatusCodes.Status409Conflict,
         _ => StatusCodes.Status400BadRequest,
     });
 static ApiError Error(string code, string message) => new() { Code = code, Message = message };

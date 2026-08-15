@@ -20,6 +20,9 @@ public sealed class ClassIslandHostControlService(
 {
     private static CancellationTokenSource? _pendingPowerAction;
 
+    // 状态采集每秒执行：每次新建 MMDeviceEnumerator 会持续分配 COM 对象，缓存复用。
+    private MMDeviceEnumerator? _deviceEnumerator;
+
     public bool IsNotificationPlaying => notificationHost?.IsNotificationsPlaying ?? false;
 
     public bool IsMainMenuVisible => TryGetMainMenuVisibility(out var visible) ? visible : true;
@@ -35,7 +38,7 @@ public sealed class ClassIslandHostControlService(
         if (!OperatingSystem.IsWindows()) return false;
         try
         {
-            using var enumerator = new MMDeviceEnumerator();
+            var enumerator = GetDeviceEnumerator();
             using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
             volumePercent = (int)Math.Round(device.AudioEndpointVolume.MasterVolumeLevelScalar * 100);
             muted = device.AudioEndpointVolume.Mute;
@@ -43,6 +46,8 @@ public sealed class ClassIslandHostControlService(
         }
         catch (Exception ex)
         {
+            // 设备枚举失败（拔插耳机/COM 状态异常）时丢弃缓存，下次调用重建。
+            _deviceEnumerator = null;
             logger.LogDebug(ex, "无法读取 Windows 默认播放设备音量");
             return false;
         }
@@ -57,11 +62,13 @@ public sealed class ClassIslandHostControlService(
         if (level is < 0 or > 100)
             throw new ArgumentOutOfRangeException(nameof(level), "音量必须在 0-100 之间");
 
-        using var enumerator = new MMDeviceEnumerator();
+        var enumerator = GetDeviceEnumerator();
         using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
         if (level is { } value) device.AudioEndpointVolume.MasterVolumeLevelScalar = value / 100f;
         if (muted is { } isMuted) device.AudioEndpointVolume.Mute = isMuted;
     }
+
+    private MMDeviceEnumerator GetDeviceEnumerator() => _deviceEnumerator ??= new MMDeviceEnumerator();
 
     public async Task ClearNotificationsAsync()
     {

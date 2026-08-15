@@ -60,7 +60,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // release 启用 R8 压缩；kotlinx.serialization 保留规则见 proguard-rules.pro。
+            isMinifyEnabled = true
             signingConfig = if (keystoreFile != null && keystoreFile.exists()) {
                 signingConfigs.getByName("release")
             } else {

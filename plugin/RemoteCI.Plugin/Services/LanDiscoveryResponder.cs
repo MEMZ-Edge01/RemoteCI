@@ -21,7 +21,7 @@ internal sealed class LanDiscoveryResponder(
         {
             _cts = new CancellationTokenSource();
             _udp = new UdpClient(new IPEndPoint(IPAddress.Any, Protocol.LanDiscoveryPort));
-            _ = ReceiveLoopAsync(_udp, _cts.Token);
+            _ = RunAsync(_cts.Token);
             logger.LogInformation("局域网设备扫描已启动：UDP {Port}", Protocol.LanDiscoveryPort);
         }
         catch (SocketException ex)
@@ -31,49 +31,64 @@ internal sealed class LanDiscoveryResponder(
         }
     }
 
-    private async Task ReceiveLoopAsync(UdpClient udp, CancellationToken ct)
+    /// <summary>接收回包与中断后重建都在同一个循环内，避免递归调用随故障次数无限嵌套。</summary>
+    private async Task RunAsync(CancellationToken ct)
     {
-        try
+        while (!ct.IsCancellationRequested)
         {
-            while (!ct.IsCancellationRequested)
+            var udp = _udp;
+            if (udp is null) return;
+            try
             {
-                var packet = await udp.ReceiveAsync(ct);
-                var response = LanDiscoveryProtocol.CreateResponse(packet.Buffer, settings, Environment.MachineName);
-                if (response is null) continue;
-                var payload = JsonSerializer.SerializeToUtf8Bytes(response, JsonDefaults.Options);
-                await udp.SendAsync(payload, packet.RemoteEndPoint, ct);
+                while (!ct.IsCancellationRequested)
+                {
+                    var packet = await udp.ReceiveAsync(ct);
+                    var response = LanDiscoveryProtocol.CreateResponse(packet.Buffer, settings, Environment.MachineName);
+                    if (response is null) continue;
+                    var payload = JsonSerializer.SerializeToUtf8Bytes(response, JsonDefaults.Options);
+                    await udp.SendAsync(payload, packet.RemoteEndPoint, ct);
+                }
+                return;
             }
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            // 正常停止。
-        }
-        catch (ObjectDisposedException) when (ct.IsCancellationRequested)
-        {
-            // 正常停止。
-        }
-        catch (SocketException ex)
-        {
-            // 网卡热插拔或瞬时故障会中断监听；退避后自动重启，而不是永久失效。
-            logger.LogWarning(ex, "局域网设备扫描监听已中断，10 秒后自动重启");
-            await RestartAsync(ct);
+            catch (Exception ex) when ((ex is OperationCanceledException or ObjectDisposedException) && ct.IsCancellationRequested)
+            {
+                return; // 正常停止。
+            }
+            catch (ObjectDisposedException)
+            {
+                return; // 套接字已被 Dispose（停止流程），不再重绑。
+            }
+            catch (SocketException ex)
+            {
+                // 网卡热插拔或瞬时故障会中断监听；退避后自动重启，而不是永久失效。
+                logger.LogWarning(ex, "局域网设备扫描监听已中断，10 秒后自动重启");
+                if (!await DelayAsync(TimeSpan.FromSeconds(10), ct)) return;
+                if (ReferenceEquals(_udp, udp)) _udp = null;
+                udp.Dispose();
+                try
+                {
+                    _udp = new UdpClient(new IPEndPoint(IPAddress.Any, Protocol.LanDiscoveryPort));
+                }
+                catch (SocketException rebindEx)
+                {
+                    logger.LogWarning(rebindEx, "局域网扫描端口重新绑定失败，10 秒后重试");
+                    if (!await DelayAsync(TimeSpan.FromSeconds(10), ct)) return;
+                }
+            }
         }
     }
 
-    private async Task RestartAsync(CancellationToken ct)
+    /// <summary>可取消的延迟；返回 false 表示等待期间被取消，调用方应退出循环。</summary>
+    private static async Task<bool> DelayAsync(TimeSpan delay, CancellationToken ct)
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(10), ct);
-            _udp?.Dispose();
-            if (ct.IsCancellationRequested) return;
-            _udp = new UdpClient(new IPEndPoint(IPAddress.Any, Protocol.LanDiscoveryPort));
-            await ReceiveLoopAsync(_udp, ct);
+            await Task.Delay(delay, ct);
+            return !ct.IsCancellationRequested;
         }
-        catch (Exception ex) when (ex is SocketException or ObjectDisposedException or OperationCanceledException)
+        catch (OperationCanceledException)
         {
-            if (!ct.IsCancellationRequested)
-                logger.LogWarning(ex, "局域网设备扫描重启失败，已停用");
+            return false;
         }
     }
 

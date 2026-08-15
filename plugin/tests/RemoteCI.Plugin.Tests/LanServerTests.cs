@@ -136,6 +136,70 @@ public sealed class LanServerTests
         Assert.Equal(0, handlerCalls);
     }
 
+    [Fact]
+    public async Task OnClosed_DropsQueuedMessagesWithoutWaitingOrThrowing()
+    {
+        var (mirror, sessionId, secret) = CreateFreshMirror();
+        var handlerEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlerGate = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = CreateServer(mirror, commandHandler: async _ =>
+        {
+            handlerEntered.TrySetResult();
+            return await handlerGate.Task;
+        });
+        var socket = new FakeSocket();
+        server.OnOpened(socket);
+        var challenge = ConvertPayload<AuthChallenge>(ParseEnvelope(socket.Sent[0]).Payload);
+        await server.OnMessageAsync(socket, SerializeEnvelope(new Envelope
+        {
+            Type = Protocol.MessageTypeAuthProof,
+            MessageId = Guid.NewGuid().ToString("N"),
+            Payload = BuildValidProof(challenge, sessionId, secret),
+        }));
+
+        // 第一条命令占住 Gate 执行中，第二条消息排队等待；此时断开连接：
+        // 排队消息必须被取消丢弃，不能等第一条执行完，更不能抛 Gate 已释放异常。
+        var firstCommand = server.OnMessageAsync(socket, SerializeCommand("cmd-1"));
+        await handlerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var queued = server.OnMessageAsync(socket, SerializeCommand("cmd-2"));
+
+        server.OnClosed(socket);
+        await queued.WaitAsync(TimeSpan.FromSeconds(5));
+
+        handlerGate.SetResult(new CommandResult { Success = true, Code = CommandResultCodes.Ok });
+        await firstCommand.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // 已关闭连接上的后续消息静默忽略，不产生任何回执。
+        var sentBefore = socket.Sent.Count;
+        await server.OnMessageAsync(socket, SerializeCommand("cmd-3"));
+        Assert.Equal(sentBefore, socket.Sent.Count);
+    }
+
+    [Fact]
+    public async Task SemaphoreGateWait_WokenUpByCancelAlone()
+    {
+        var gate = new SemaphoreSlim(1, 1);
+        await gate.WaitAsync();
+        var cts = new CancellationTokenSource();
+        var wait = gate.WaitAsync(cts.Token);
+        // 与 LanClient.Dispose 一致的唤醒方式：仅 Cancel。
+        // 已实证 Cancel 后紧跟 Dispose 该 CTS 或 Gate 都会丢失排队等待者的唤醒通知。
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => wait.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    private static string SerializeCommand(string messageId) => SerializeEnvelope(new Envelope
+    {
+        Type = Protocol.MessageTypeCommand,
+        MessageId = messageId,
+        Payload = new CommandMessage
+        {
+            Command = CommandKind.SendNotification,
+            Notification = new NotificationRequest { Title = "通知", Message = "正文" },
+        },
+    });
+
     private static LanServer CreateServer(
         AccountMirror? mirror = null,
         Func<ClassStateSnapshot?>? snapshotProvider = null,

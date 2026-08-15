@@ -45,6 +45,9 @@ public sealed class AccountMirror
         {
             profile = null;
             var now = DateTimeOffset.UtcNow;
+            // 复核挑战有效期：调用方已先检查，但验证器自身不能信任外部检查，
+            // 防止未来新调用方遗漏后过期挑战仍可签名通过。
+            if (challenge.ExpiresAt <= now) return false;
             var session = _sync.Sessions.FirstOrDefault(x => x.Id == sessionId && x.ExpiresAt > now);
             if (session is null) return false;
             var account = _sync.Accounts.FirstOrDefault(x => x.Id == session.UserId && x.Enabled);
@@ -105,11 +108,21 @@ public sealed class AccountMirror
     {
         lock (_gate)
         {
-            if (sync.Version <= _sync.Version) return;
+            if (!ShouldApplyLocked(sync)) return;
             _sync = sync;
             PersistLocked();
         }
         Changed?.Invoke();
+    }
+
+    private bool ShouldApplyLocked(AccountSync incoming)
+    {
+        if (incoming.Version > _sync.Version) return true;
+        // 版本回退或重复：仅当服务端实例变化（如数据库重建后版本号重新计数）时强制覆盖，
+        // 否则旧镜像会永久拒绝新同步，导致已禁用账号的旧会话持续可用。
+        // 旧版服务端不携带实例标识（空 Guid），保持原单调比较行为。
+        return incoming.ServerInstanceId != Guid.Empty
+            && incoming.ServerInstanceId != _sync.ServerInstanceId;
     }
 
     public event Action? Changed;

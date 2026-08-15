@@ -246,8 +246,9 @@ public sealed class UpdateService
             Directory.CreateDirectory(staging);
 
             // asset 名只取文件名部分，防御下载落盘路径穿越（GitHub API 正常不会返回带路径分隔符的名字）。
+            // 下载按资产声明大小设上限（留 1 MiB 余量），防止恶意/异常响应无限写盘。
             var archive = Path.Combine(staging, Path.GetFileName(asset.Name));
-            await DownloadAsync(asset.DownloadUrl, archive, ct);
+            await DownloadAsync(asset.DownloadUrl, archive, asset.Size + 1024 * 1024, ct);
             await VerifyChecksumAsync(release, asset, archive, ct);
 
             var extracted = Path.Combine(staging, "extracted");
@@ -278,6 +279,8 @@ public sealed class UpdateService
         if (mode == UpdateApplyMode.InProcessContainer)
         {
             await UpdateInstaller.ApplyFilesAsync(update.ExtractedDirectory, contentRoot, ct);
+            // 容器内就地覆盖成功后清理暂存目录，避免更新包长期占用数据卷空间。
+            TryDeleteStaging(update.StagingDirectory);
             return mode;
         }
 
@@ -292,7 +295,21 @@ public sealed class UpdateService
         return Path.Combine(dataDir is { Length: > 0 } ? dataDir : contentRoot, "updates");
     }
 
-    private async Task DownloadAsync(string url, string target, CancellationToken ct)
+    /// <summary>尽力删除更新暂存目录；文件锁等原因失败时保留现场，不影响更新结果。</summary>
+    internal static void TryDeleteStaging(string stagingDirectory)
+    {
+        try { Directory.Delete(stagingDirectory, recursive: true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 清理失败不影响已完成的更新。
+        }
+    }
+
+    /// <summary>
+    /// 下载文件并强制校验累计字节数不超过 <paramref name="maxBytes"/>（不信任 Content-Length，
+    /// 按实际读取量累计），超限即中断并删除部分文件。
+    /// </summary>
+    private static async Task DownloadAsync(string url, string target, long maxBytes, CancellationToken ct)
     {
         var partial = target + ".part";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -300,26 +317,48 @@ public sealed class UpdateService
         using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
         await using var input = await response.Content.ReadAsStreamAsync(ct);
-        await using (var output = File.Create(partial))
+        try
         {
-            await input.CopyToAsync(output, ct);
+            await using var output = File.Create(partial);
+            var buffer = new byte[81920];
+            long total = 0;
+            int read;
+            while ((read = await input.ReadAsync(buffer, ct)) > 0)
+            {
+                total += read;
+                if (total > maxBytes)
+                    throw new InvalidDataException($"下载内容超出大小上限 {maxBytes} 字节，已中断。");
+                await output.WriteAsync(buffer.AsMemory(0, read), ct);
+            }
+        }
+        catch
+        {
+            try { File.Delete(partial); } catch (IOException) { }
+            throw;
         }
         File.Move(partial, target, overwrite: true);
     }
 
     /// <summary>
-    /// 发布附带同名校验和文件（&lt;包名&gt;.zip.sha256，第一列为十六进制 SHA-256）时强制校验；
-    /// 旧发布没有校验和资产则跳过，保持向后兼容。
+    /// 发布附带同名校验和文件（&lt;包名&gt;.zip.sha256，第一列为十六进制 SHA-256）时强制校验。
+    /// 正式版（Stable 渠道）必须携带校验和资产，缺失即拒绝安装，避免发布流程漏传时
+    /// 静默跳过完整性校验；Beta 预发布版保持向后兼容允许缺失。
     /// </summary>
     private async Task VerifyChecksumAsync(
         ReleaseInfo release, ReleaseAsset asset, string archivePath, CancellationToken ct)
     {
         var checksumAsset = release.Assets.FirstOrDefault(candidate =>
             string.Equals(candidate.Name, asset.Name + ".sha256", StringComparison.OrdinalIgnoreCase));
-        if (checksumAsset is null) return;
+        if (checksumAsset is null)
+        {
+            if (!release.Prerelease)
+                throw new InvalidDataException($"正式版 {release.Tag} 缺少校验和资产 {asset.Name}.sha256，拒绝安装");
+            return;
+        }
 
         var checksumFile = Path.Combine(Path.GetDirectoryName(archivePath)!, Path.GetFileName(checksumAsset.Name));
-        await DownloadAsync(checksumAsset.DownloadUrl, checksumFile, ct);
+        // 校验和文件固定 64KB 上限（十六进制 SHA-256 文本远小于此）。
+        await DownloadAsync(checksumAsset.DownloadUrl, checksumFile, 64 * 1024, ct);
         var firstLine = (await File.ReadAllTextAsync(checksumFile, ct)).Trim();
         var expected = firstLine.Split(' ', 2)[0].Trim().ToLowerInvariant();
         await VerifyFileHashAsync(expected, archivePath, ct);

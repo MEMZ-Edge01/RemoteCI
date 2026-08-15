@@ -52,9 +52,9 @@ public sealed class CommandHandler
 
         var required = CommandPermissions.Required(command.Command);
         if (required == UserPermissions.None)
-            return Failure(CommandResultCodes.InvalidRequest, $"未知指令：{command.Command}");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, $"未知指令：{command.Command}");
         if (command.RequestedBy is null || !command.RequestedBy.Permissions.HasFlag(required))
-            return Failure(CommandResultCodes.Forbidden, "权限不足");
+            return CommandResult.Failure(CommandResultCodes.Forbidden, "权限不足");
 
         try
         {
@@ -68,20 +68,20 @@ public sealed class CommandHandler
                 CommandKind.SetMainMenuVisibility => await HandleMainMenuVisibilityAsync(command.MainMenuVisible),
                 CommandKind.Power => HandlePowerAction(command.PowerAction),
                 CommandKind.Volume => HandleVolume(command.Volume),
-                _ => Failure(CommandResultCodes.InvalidRequest, $"未知指令：{command.Command}"),
+                _ => CommandResult.Failure(CommandResultCodes.InvalidRequest, $"未知指令：{command.Command}"),
             };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "RemoteCI 指令执行失败：{Command}", command.Command);
-            return Failure(CommandResultCodes.InternalError, "指令执行异常，请查看 ClassIsland 日志");
+            return CommandResult.Failure(CommandResultCodes.InternalError, "指令执行异常，请查看 ClassIsland 日志");
         }
     }
 
     private async Task<CommandResult> HandleScheduleChangeAsync(ScheduleChangeRequest? request)
     {
         if (ValidateScheduleChangeRequest(request, DateTime.Today, out var date) is { } validationError)
-            return Failure(CommandResultCodes.InvalidRequest, validationError);
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, validationError);
 
         var result = await Dispatcher.UIThread.InvokeAsync(() => ApplyScheduleChange(date, request!));
         if (result.Success) ScheduleChanged?.Invoke();
@@ -110,10 +110,10 @@ public sealed class CommandHandler
     private async Task<CommandResult> HandleNotificationAsync(NotificationRequest? request, string senderName)
     {
         if (request is null)
-            return Failure(CommandResultCodes.InvalidRequest, "缺少通知内容");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, "缺少通知内容");
         var message = request.Message.Trim();
         if (message.Length > 500)
-            return Failure(CommandResultCodes.InvalidRequest, "通知正文不能超过 500 个字符");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, "通知正文不能超过 500 个字符");
         // 服务端会按全局设置注入 ForceSenderInTitle；null 按旧行为视为开启。
         var title = BuildNotificationTitle(senderName, request.Title, request.ForceSenderInTitle != false);
         // 标题与正文均可留空；正文留空时以原标题兜底，避免 ClassIsland 显示空白正文。
@@ -144,7 +144,7 @@ public sealed class CommandHandler
 
     private async Task<CommandResult> HandleMainMenuVisibilityAsync(bool? visible)
     {
-        if (visible is null) return Failure(CommandResultCodes.InvalidRequest, "缺少主界面显隐状态");
+        if (visible is null) return CommandResult.Failure(CommandResultCodes.InvalidRequest, "缺少主界面显隐状态");
         await _hostControl.SetMainMenuVisibilityAsync(visible.Value);
         HostStateChanged?.Invoke();
         return Success(visible.Value ? "已显示 ClassIsland 主界面" : "已隐藏 ClassIsland 主界面");
@@ -153,7 +153,7 @@ public sealed class CommandHandler
     private CommandResult HandlePowerAction(PowerActionKind? action)
     {
         if (action is null || !Enum.IsDefined(action.Value))
-            return Failure(CommandResultCodes.InvalidRequest, "电源操作无效");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, "电源操作无效");
         _hostControl.SchedulePowerAction(action.Value);
         return Success(action.Value switch
         {
@@ -168,9 +168,9 @@ public sealed class CommandHandler
     private CommandResult HandleVolume(VolumeControlRequest? request)
     {
         if (request is null || request is { Level: null, Muted: null })
-            return Failure(CommandResultCodes.InvalidRequest, "缺少音量控制参数");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, "缺少音量控制参数");
         if (request.Level is < 0 or > 100)
-            return Failure(CommandResultCodes.InvalidRequest, "音量必须在 0-100 之间");
+            return CommandResult.Failure(CommandResultCodes.InvalidRequest, "音量必须在 0-100 之间");
 
         _hostControl.SetVolume(request.Level, request.Muted);
         HostStateChanged?.Invoke();
@@ -205,13 +205,6 @@ public sealed class CommandHandler
     {
         Success = true,
         Code = CommandResultCodes.Ok,
-        Message = message,
-    };
-
-    private static CommandResult Failure(string code, string message) => new()
-    {
-        Success = false,
-        Code = code,
         Message = message,
     };
 }

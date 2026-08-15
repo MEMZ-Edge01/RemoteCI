@@ -129,6 +129,13 @@ public sealed class AccountSync
     [JsonPropertyName("version")]
     public long Version { get; set; }
 
+    /// <summary>
+    /// 生成该镜像的服务端实例标识。服务端数据库重建后版本号可能回退，
+    /// 插件据此识别实例变化并强制覆盖镜像；旧版服务端不携带该字段（空 Guid）。
+    /// </summary>
+    [JsonPropertyName("serverInstanceId")]
+    public Guid ServerInstanceId { get; set; }
+
     /// <summary>生成授权镜像的 WebUI/服务端版本，供局域网连接转发给手表。</summary>
     [JsonPropertyName("serverVersion")]
     public string ServerVersion { get; set; } = string.Empty;

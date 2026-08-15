@@ -50,7 +50,15 @@ public sealed class RemoteCiService : IDisposable
 
     public void Start()
     {
+        if (_cts is not null)
+        {
+            // 重入保护：重复调用（如插件重载竞态）不能重复订阅事件与重复监听端口。
+            _logger.LogWarning("RemoteCI 服务已在运行，忽略重复的启动调用");
+            return;
+        }
         _cts = new CancellationTokenSource();
+        // ACL 收紧失败从此处记 Warning（静态防护类无法自行获取日志管道）。
+        FileProtection.Logger = _loggerFactory.CreateLogger("RemoteCI.FileProtection");
 
         _collector.SnapshotPushed += OnSnapshotPushed;
         _collector.SchedulePushed += OnSchedulePushed;
@@ -109,6 +117,9 @@ public sealed class RemoteCiService : IDisposable
         _cloudClient = null;
         _lanServer?.Dispose();
         _lanServer = null;
+        // 置空释放重入标记，允许 Stop 后重新 Start；CTS 不紧跟 Dispose（令牌仍被
+        // 后台任务引用），无原生资源交由 GC 回收。
+        _cts = null;
     }
 
     private void OnSnapshotPushed(ClassStateSnapshot snapshot)

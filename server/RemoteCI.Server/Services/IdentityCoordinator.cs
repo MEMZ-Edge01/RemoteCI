@@ -21,6 +21,15 @@ public sealed partial class IdentityCoordinator(
 {
     private readonly ServerOptions _options = options.Value;
 
+    /// <summary>插件配对码有效期：遗忘在聊天记录/页面上的配对码不能永久可用。</summary>
+    private static readonly TimeSpan PairCodeLifetime = TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// 当前服务端进程实例标识，随授权镜像下发。服务端重启或数据库重建后变化，
+    /// 供插件在镜像版本号回退时识别实例变化并强制覆盖，避免旧镜像永久滞留。
+    /// </summary>
+    public static Guid InstanceId { get; } = Guid.NewGuid();
+
     /// <summary>管理员角色的变更串行化：保证“最后管理员”检查与提交之间没有其他管理员变更插入。</summary>
     private static readonly SemaphoreSlim AdminMutationGate = new(1, 1);
 
@@ -86,7 +95,8 @@ public sealed partial class IdentityCoordinator(
                 _options.BootstrapPluginPairCode);
             var generatedCode = configuredCode is null;
             var code = configuredCode ?? CreateReadableSecret(12);
-            await AddPairingCodeAsync(code, ct);
+            // 环境变量注入的引导配对码是部署凭据，保持长期有效；自动生成的限时 30 分钟。
+            await AddPairingCodeAsync(code, ct, timeLimited: generatedCode);
             if (generatedCode && _options.LogBootstrapSecrets)
                 logger.LogWarning("首次启动插件一次性配对码：{PairCode}。该码使用后立即失效。", code);
             else if (generatedCode)
@@ -200,13 +210,17 @@ public sealed partial class IdentityCoordinator(
     {
         var hash = Hash(request.PairCode);
         var now = DateTimeOffset.UtcNow;
+        // SQLite 不支持 DateTimeOffset 比较的 SQL 翻译，先按哈希取候选再在内存过滤过期。
+        var candidates = await db.PluginPairingCodes.Where(x => x.CodeHash == hash).ToListAsync(ct);
+        var candidate = candidates.FirstOrDefault(x => x.UsedAt is null && x.ExpiresAt > now)
+            ?? throw new IdentityOperationException(ApiErrorCodes.PairCodeInvalid, "插件配对码无效、已使用或已过期");
         // 原子消费配对码：并发请求中只有一个能把 UsedAt 从未置位更新为当前时间，
         // 防止两个请求同时读到“未使用”的配对码并各自签发插件凭证。
         var consumed = await db.PluginPairingCodes
-            .Where(x => x.CodeHash == hash && x.UsedAt == null)
+            .Where(x => x.Id == candidate.Id && x.UsedAt == null)
             .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.UsedAt, now), ct);
         if (consumed == 0)
-            throw new IdentityOperationException(ApiErrorCodes.PairCodeInvalid, "插件配对码无效或已使用");
+            throw new IdentityOperationException(ApiErrorCodes.PairCodeInvalid, "插件配对码无效、已使用或已过期");
 
         var token = CreateSecret(32);
         db.PluginCredentials.Add(new PluginCredential
@@ -233,6 +247,16 @@ public sealed partial class IdentityCoordinator(
     {
         var user = await users.FindByIdAsync(id.ToString());
         return user is null || !user.Enabled ? null : ToProfile(user);
+    }
+
+    /// <summary>
+    /// 读取目标账号角色（不区分启用状态）。管理守卫必须用它而非 GetProfileAsync：
+    /// 后者对禁用账号返回 null，会让普通用户绕过“仅管理员可管理管理员”检查接管被禁用的管理员。
+    /// </summary>
+    public async Task<UserRole?> GetRoleAsync(Guid id, CancellationToken ct = default)
+    {
+        var user = await users.FindByIdAsync(id.ToString());
+        return user?.Role;
     }
 
     public async Task<IReadOnlyList<UserListItem>> ListUsersAsync(CancellationToken ct = default) =>
@@ -392,6 +416,7 @@ public sealed partial class IdentityCoordinator(
         return new AccountSync
         {
             Version = accountVersion,
+            ServerInstanceId = InstanceId,
             ServerVersion = AppVersion.Version,
             GeneratedAt = now,
             Accounts = accounts,
@@ -446,7 +471,7 @@ public sealed partial class IdentityCoordinator(
         };
     }
 
-    private async Task AddPairingCodeAsync(string code, CancellationToken ct)
+    private async Task AddPairingCodeAsync(string code, CancellationToken ct, bool timeLimited = true)
     {
         var now = DateTimeOffset.UtcNow;
         db.PluginPairingCodes.Add(new PluginPairingCode
@@ -454,8 +479,8 @@ public sealed partial class IdentityCoordinator(
             Id = Guid.NewGuid(),
             CodeHash = Hash(code),
             CreatedAt = now,
-            // 保留旧数据库的非空列结构；配对码的实际生命周期只由 UsedAt 控制。
-            ExpiresAt = DateTimeOffset.MaxValue,
+            // WebUI 生成的配对码限时 30 分钟；一次性消费仍由 UsedAt 原子控制。
+            ExpiresAt = timeLimited ? now.Add(PairCodeLifetime) : DateTimeOffset.MaxValue,
         });
         await db.SaveChangesAsync(ct);
     }
@@ -466,7 +491,7 @@ public sealed partial class IdentityCoordinator(
     private async Task GuardLastAdminAsync(Guid id, CancellationToken ct)
     {
         var otherAdmins = await users.Users.CountAsync(x => x.Id != id && x.Enabled && x.Role == UserRole.Admin, ct);
-        if (otherAdmins == 0) throw new IdentityOperationException("LAST_ADMIN", "不能删除、禁用或降级最后一个管理员");
+        if (otherAdmins == 0) throw new IdentityOperationException(ApiErrorCodes.LastAdmin, "不能删除、禁用或降级最后一个管理员");
     }
 
     private async Task RevokeAllSessionsAsync(Guid userId, CancellationToken ct)
@@ -560,6 +585,12 @@ public sealed partial class IdentityCoordinator(
         PasswordHash = users.PasswordHasher.HashPassword(new AppUser(), CreateSecret(16)),
     };
 
+    /// <summary>
+    /// 对不存在/已禁用的账号执行一次等成本 PBKDF2 校验，避免响应时间泄露用户名是否存在。
+    /// WebUI 登录页与 REST 登录端点共用同一逻辑。
+    /// </summary>
+    public Task EqualizeLoginTimingAsync(string password) => users.CheckPasswordAsync(TimingUser(), password);
+
     private static void ValidateUserInput(string username, string displayName, string password, UserRole role)
     {
         if (string.IsNullOrWhiteSpace(username) || !UsernameRegex().IsMatch(username.Trim()))
@@ -592,7 +623,7 @@ public sealed partial class IdentityCoordinator(
         if (result.Succeeded) return;
         var duplicate = result.Errors.FirstOrDefault(x => x.Code.Contains("Duplicate", StringComparison.OrdinalIgnoreCase));
         var message = string.Join("；", result.Errors.Select(x => x.Description));
-        throw new IdentityOperationException(duplicate is null ? ApiErrorCodes.InvalidRequest : "USERNAME_EXISTS", message);
+        throw new IdentityOperationException(duplicate is null ? ApiErrorCodes.InvalidRequest : ApiErrorCodes.UsernameExists, message);
     }
 
     [GeneratedRegex("^[A-Za-z0-9._-]{3,32}$", RegexOptions.CultureInvariant)]

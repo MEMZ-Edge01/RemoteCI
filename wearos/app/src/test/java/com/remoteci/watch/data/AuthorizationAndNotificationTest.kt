@@ -1,5 +1,6 @@
 package com.remoteci.watch.data
 
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -164,11 +165,38 @@ class AuthorizationAndNotificationTest {
 
     @Test
     fun `bootstrap change detection ignores defaults and matches case-insensitively`() {
-        // 默认开发地址与空值视为“从未使用”，不触发变更警告。
+        // 默认开发地址视为“从未使用”，不触发变更警告。
         assertFalse(bootstrapUrlChanged("http://10.0.2.2:8080", "https://ci.example.com"))
-        assertFalse(bootstrapUrlChanged("", "https://ci.example.com"))
+        // 首次引导（无历史记录）必须要求用户显式确认云服务器，防 UDP 发现钓鱼。
+        assertTrue(bootstrapUrlChanged("", "https://ci.example.com"))
         // 与上次实际使用的地址不同才警告；大小写与结尾斜杠差异不算变更。
         assertTrue(bootstrapUrlChanged("https://old.example.com", "https://new.example.com"))
         assertFalse(bootstrapUrlChanged("https://old.example.com", "https://OLD.example.com/"))
+    }
+
+    @Test
+    fun `cleartext is permitted only for rfc1918 ipv4 literals`() {
+        assertTrue(isRfc1918Host("192.168.1.100"))
+        assertTrue(isRfc1918Host("10.0.2.2"))
+        assertTrue(isRfc1918Host("172.16.0.1"))
+        assertTrue(isRfc1918Host("172.31.255.254"))
+        assertFalse(isRfc1918Host("172.32.0.1"))
+        assertFalse(isRfc1918Host("8.8.8.8"))
+        assertFalse(isRfc1918Host("ci.example.com"))
+        assertFalse(isRfc1918Host("192.168.1"))
+        assertFalse(isRfc1918Host("192.168.1.256"))
+        assertFalse(isRfc1918Host("192.168.1.+1"))
+    }
+
+    @Test
+    fun `cleartext urls are rejected outside rfc1918`() {
+        // 私网、环回明文与任何 TLS 地址放行。
+        requireCleartextPrivateUrl("http://192.168.1.5:8080/api")
+        requireCleartextPrivateUrl("ws://10.0.2.2:9123/ws")
+        requireCleartextPrivateUrl("ws://localhost:9123/ws")
+        requireCleartextPrivateUrl("https://ci.example.com")
+        // 公网主机的明文连接一律拒绝。
+        assertFailsWith<IOException> { requireCleartextPrivateUrl("http://ci.example.com") }
+        assertFailsWith<IOException> { requireCleartextPrivateUrl("ws://8.8.8.8:9123/ws") }
     }
 }

@@ -55,7 +55,7 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task PluginPairingCode_RemainsValidPastLegacyExpiryUntilUsed()
+    public async Task PluginPairingCode_ExpiredCodeIsRejected()
     {
         var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "pairing.db");
         await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
@@ -65,7 +65,7 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         {
             var database = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var pairing = await database.PluginPairingCodes.SingleAsync();
-            pairing.ExpiresAt = DateTimeOffset.UtcNow.AddDays(-1);
+            pairing.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1);
             await database.SaveChangesAsync();
         }
 
@@ -75,7 +75,29 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
             Role = "plugin",
         });
 
+        // 启用 ExpiresAt 后，过期配对码不能再签发插件凭证。
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PluginPairingCode_WebUiGeneratedCodeExpiresInThirtyMinutes()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "pairing-ttl.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
+        var auth = await factory.LoginAsync();
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post, "/api/plugin/pairing-code", auth.AccessToken));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var database = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        // SQLite 不支持 DateTimeOffset 比较的 SQL 翻译；引导码不限时（MaxValue），只筛限时的新码。
+        var created = (await database.PluginPairingCodes.ToListAsync())
+            .Single(x => x.ExpiresAt < DateTimeOffset.MaxValue);
+        var remaining = created.ExpiresAt - DateTimeOffset.UtcNow;
+        Assert.InRange(remaining, TimeSpan.FromMinutes(29), TimeSpan.FromMinutes(31));
     }
 
     [Fact]
@@ -669,6 +691,79 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
                 GrantedPermissions = UserPermissions.ManageUsers,
             }));
         Assert.Equal(HttpStatusCode.OK, editPeer.StatusCode);
+    }
+
+    [Fact]
+    public async Task ManageUsersGrant_CannotTakeOverDisabledAdmins()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "disabled-admin.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
+        var client = factory.CreateClient();
+        var admin = await factory.LoginAsync();
+
+        // 第二个管理员被禁用后，守卫不得因 GetProfile 返回 null 而放行普通用户接管。
+        var createAdmin = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "second.admin",
+                DisplayName = "被禁用的管理员",
+                Password = "Second-Admin-Password-2026",
+                Role = UserRole.Admin,
+            }));
+        createAdmin.EnsureSuccessStatusCode();
+        var secondAdmin = (await createAdmin.Content.ReadFromJsonAsync<UserListItem>())!;
+        var disable = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Put,
+            $"/api/users/{secondAdmin.Id}",
+            admin.AccessToken,
+            new UpdateUserRequest
+            {
+                DisplayName = "被禁用的管理员",
+                Role = UserRole.Admin,
+                Enabled = false,
+            }));
+        disable.EnsureSuccessStatusCode();
+
+        var createManager = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "manager.user",
+                DisplayName = "普通管理者",
+                Password = "Manager-Password-2026",
+                GrantedPermissions = UserPermissions.ManageUsers,
+            }));
+        createManager.EnsureSuccessStatusCode();
+        var manager = await LoginViaAsync(client, "manager.user", "Manager-Password-2026");
+
+        // 不能通过重新启用被禁用的管理员完成接管。
+        var reenable = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Put,
+            $"/api/users/{secondAdmin.Id}",
+            manager.AccessToken,
+            new UpdateUserRequest
+            {
+                DisplayName = "被禁用的管理员",
+                Role = UserRole.User,
+                Enabled = true,
+            }));
+        Assert.Equal(HttpStatusCode.Forbidden, reenable.StatusCode);
+        var resetDisabled = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            $"/api/users/{secondAdmin.Id}/password",
+            manager.AccessToken,
+            new ResetPasswordRequest { Password = "Stolen-Password-2026" }));
+        Assert.Equal(HttpStatusCode.Forbidden, resetDisabled.StatusCode);
+        var deleteDisabled = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Delete,
+            $"/api/users/{secondAdmin.Id}",
+            manager.AccessToken));
+        Assert.Equal(HttpStatusCode.Forbidden, deleteDisabled.StatusCode);
     }
 
     [Fact]

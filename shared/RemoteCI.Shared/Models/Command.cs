@@ -68,6 +68,14 @@ public sealed class CommandResult
     [JsonPropertyName("scheduleRevision")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ScheduleRevision { get; set; }
+
+    /// <summary>失败回执统一工厂，服务端与插件端共用，避免各处重复同一辅助实现。</summary>
+    public static CommandResult Failure(string code, string message) => new()
+    {
+        Success = false,
+        Code = code,
+        Message = message,
+    };
 }
 
 public static class CommandResultCodes
@@ -82,4 +90,8 @@ public static class CommandResultCodes
     public const string ScheduleUnavailable = "SCHEDULE_UNAVAILABLE";
     public const string SaveFailed = "SAVE_FAILED";
     public const string InternalError = "INTERNAL_ERROR";
+    /// <summary>单连接命令频率超限（滑动窗口限速）。</summary>
+    public const string TooManyRequests = "TOO_MANY_REQUESTS";
+    /// <summary>目标扩展上一次执行尚未结束，拒绝重复触发。</summary>
+    public const string Busy = "BUSY";
 }

@@ -17,6 +17,7 @@ import com.remoteci.watch.data.EventHistory
 import com.remoteci.watch.data.Protocol
 import com.remoteci.watch.data.WatchSettings
 import com.remoteci.watch.data.receives
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 通知+振动助手：课程事件到达时发系统通知并振动。
@@ -24,13 +25,16 @@ import com.remoteci.watch.data.receives
 object NotificationHelper {
     internal const val CHANNEL_ID = "remoteci_class"
 
+    // 通知 ID 用自增序号：哈希作 ID 时不同事件可能碰撞互相覆盖，导致通知丢失。
+    private val notificationIds = AtomicInteger(1)
+
     fun ensureChannel(context: Context) {
         val channel = NotificationChannel(
             CHANNEL_ID,
-            "RemoteCI 通知",
+            context.getString(R.string.notification_channel_name),
             NotificationManager.IMPORTANCE_HIGH,
         ).apply {
-            description = "课程、自动化和 ClassIsland 插件提醒"
+            description = context.getString(R.string.notification_channel_description)
             enableVibration(true)
         }
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -47,14 +51,14 @@ object NotificationHelper {
         }
 
         val title = when (event.event) {
-            Protocol.EVENT_ON_CLASS -> "上课了"
-            Protocol.EVENT_ON_BREAKING -> "课间休息"
-            Protocol.EVENT_AFTER_SCHOOL -> "放学啦"
-            Protocol.EVENT_SCHEDULE_CHANGED -> "课表已更新"
-            Protocol.EVENT_CUSTOM -> event.subject ?: "RemoteCI 通知"
+            Protocol.EVENT_ON_CLASS -> context.getString(R.string.notification_title_on_class)
+            Protocol.EVENT_ON_BREAKING -> context.getString(R.string.notification_title_on_breaking)
+            Protocol.EVENT_AFTER_SCHOOL -> context.getString(R.string.notification_title_after_school)
+            Protocol.EVENT_SCHEDULE_CHANGED -> context.getString(R.string.notification_title_schedule_changed)
+            Protocol.EVENT_CUSTOM -> event.subject ?: context.getString(R.string.notification_title_remote_ci)
             Protocol.EVENT_AUTOMATION_NOTIFICATION,
-            Protocol.EVENT_PLUGIN_NOTIFICATION -> event.subject ?: "ClassIsland 通知"
-            else -> "RemoteCI"
+            Protocol.EVENT_PLUGIN_NOTIFICATION -> event.subject ?: context.getString(R.string.notification_title_classisland)
+            else -> context.getString(R.string.notification_title_fallback)
         }
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
@@ -65,7 +69,7 @@ object NotificationHelper {
             .setAutoCancel(true)
             .build()
 
-        NotificationManagerCompat.from(context).notify(event.id.ifBlank { event.message.orEmpty() }.hashCode(), notification)
+        NotificationManagerCompat.from(context).notify(notificationIds.getAndIncrement(), notification)
         vibrate(context)
     }
 
