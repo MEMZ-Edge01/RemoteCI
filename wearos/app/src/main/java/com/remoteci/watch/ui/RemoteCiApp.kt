@@ -95,6 +95,7 @@ fun RemoteCiApp(context: Context) {
     val liveExtensions by ConnectionManager.extensions.collectAsState()
     val serverSettings by ConnectionManager.settings.collectAsState()
     val commandResult by ConnectionManager.lastCommandResult.collectAsState()
+    val schedulePullState by ConnectionManager.schedulePullState.collectAsState()
     val lanPlugins by ConnectionManager.lanPlugins.collectAsState()
     val lanDiscoveryStatus by ConnectionManager.lanDiscoveryStatus.collectAsState()
     val lanDiscoveryScanning by ConnectionManager.lanDiscoveryScanning.collectAsState()
@@ -268,6 +269,7 @@ fun RemoteCiApp(context: Context) {
                 today = today,
                 connectionReady = connectionState is ConnectionManager.State.LanConnected ||
                     connectionState is ConnectionManager.State.CloudConnected,
+                pullState = schedulePullState,
                 onRequestSchedule = ConnectionManager::requestSchedulePull,
                 onPickDate = { screen = Screen.ScheduleDatePicker },
                 onBack = { screen = Screen.Home },
@@ -525,5 +527,5 @@ internal fun describeClassState(snapshot: com.remoteci.watch.data.ClassStateSnap
     Protocol.STATE_PREPARE_CLASS -> "即将上课"
     Protocol.STATE_BREAKING -> "下课"
     Protocol.STATE_AFTER_SCHOOL -> "放学"
-    else -> "待机"
+    else -> if (homeCourseContent(snapshot).isAvailable) "待机" else "暂无课程"
 }

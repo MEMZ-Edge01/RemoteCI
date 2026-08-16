@@ -5,6 +5,7 @@ using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteCI.Plugin.Services;
 using RemoteCI.Plugin.Settings;
+using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 using Xunit;
 
@@ -12,6 +13,13 @@ namespace RemoteCI.Plugin.Tests;
 
 public sealed class CloudClientTests
 {
+    private static ScheduleSyncStatus RunningStatus(ScheduleSyncRequest request) => new()
+    {
+        TaskId = request.TaskId,
+        Source = request.Source,
+        State = ScheduleSyncTaskState.Running,
+    };
+
     private sealed class FakeSocket : ICloudSocket
     {
         public WebSocketState State { get; set; } = WebSocketState.Open;
@@ -66,7 +74,7 @@ public sealed class CloudClientTests
             settings ?? new PluginSettings { CloudToken = "test-token", EnableCloud = true },
             mirror,
             commands: null,
-            requestFreshSchedule: () => { },
+            requestScheduleSync: request => RunningStatus(request),
             NullLogger<CloudClient>.Instance,
             tokenStore: tokenStore,
             socketFactory: () =>

@@ -1,9 +1,11 @@
+using RemoteCI.Shared;
+
 namespace RemoteCI.Server.Services;
 
 /// <summary>按数据库中的管理员设置定时请求插件重新生成七日课表。</summary>
 public sealed class SchedulePullWorker(
     IServiceScopeFactory scopeFactory,
-    PeerRegistry peers,
+    ScheduleSyncService scheduleSync,
     TimeProvider timeProvider,
     ILogger<SchedulePullWorker> logger) : BackgroundService
 {
@@ -31,10 +33,12 @@ public sealed class SchedulePullWorker(
         if (!_cadence.IsDue(interval, now)) return;
 
         _cadence.MarkAttempt(now);
-        var sent = await peers.RequestSchedulePullAsync(ct);
-        if (sent)
+        var status = await scheduleSync.StartAsync(ScheduleSyncSource.Automatic, ct);
+        if (status.State == ScheduleSyncTaskState.Running)
             logger.LogInformation("已按 {Interval} 分钟周期请求插件刷新七日课表", (int)interval);
+        else if (status.State == ScheduleSyncTaskState.Busy)
+            logger.LogInformation("已到课表拉取周期，但已有课表任务正在执行，本次自动拉取已跳过");
         else
-            logger.LogDebug("已到课表拉取周期，但当前没有在线插件");
+            logger.LogDebug("自动课表拉取未启动：{Message}", status.Message);
     }
 }

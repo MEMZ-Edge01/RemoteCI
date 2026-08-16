@@ -2,6 +2,51 @@ using System.Text.Json.Serialization;
 
 namespace RemoteCI.Shared.Models;
 
+public sealed class ScheduleSyncRequest
+{
+    [JsonPropertyName("taskId")]
+    public string TaskId { get; set; } = Guid.NewGuid().ToString("N");
+
+    [JsonPropertyName("source")]
+    public ScheduleSyncSource Source { get; set; }
+
+    [JsonPropertyName("requestedAt")]
+    public DateTimeOffset RequestedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    public static ScheduleSyncRequest Create(ScheduleSyncSource source, string? taskId = null) => new()
+    {
+        TaskId = string.IsNullOrWhiteSpace(taskId) ? Guid.NewGuid().ToString("N") : taskId,
+        Source = source,
+    };
+}
+
+public sealed class ScheduleSyncStatus
+{
+    [JsonPropertyName("taskId")]
+    public string TaskId { get; set; } = string.Empty;
+
+    [JsonPropertyName("source")]
+    public ScheduleSyncSource Source { get; set; }
+
+    [JsonPropertyName("state")]
+    public ScheduleSyncTaskState State { get; set; }
+
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    [JsonPropertyName("startedAt")]
+    public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
+
+    [JsonPropertyName("finishedAt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DateTimeOffset? FinishedAt { get; set; }
+
+    /// <summary>Busy 状态下指向当前正在执行的任务。</summary>
+    [JsonPropertyName("activeTaskId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ActiveTaskId { get; set; }
+}
+
 public sealed class ScheduleBundle
 {
     [JsonPropertyName("fromDate")]

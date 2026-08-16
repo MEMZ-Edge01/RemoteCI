@@ -25,6 +25,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -47,6 +48,13 @@ object ConnectionManager {
         data class Error(val message: String) : State
     }
 
+    sealed interface SchedulePullState {
+        data object Idle : SchedulePullState
+        data class Pulling(val message: String) : SchedulePullState
+        data class Success(val message: String) : SchedulePullState
+        data class Error(val message: String) : SchedulePullState
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val okHttp = OkHttpClient.Builder()
@@ -64,6 +72,7 @@ object ConnectionManager {
     private var refreshJob: Job? = null
     private var volumeJob: Job? = null
     private var discoveryJob: Job? = null
+    private var schedulePullJob: Job? = null
     @Volatile private var desiredSettings: WatchSettings? = null
     @Volatile private var accessToken: String? = null
     @Volatile private var lastLanAdvertisement: PluginNetworkInfo? = null
@@ -82,6 +91,7 @@ object ConnectionManager {
     val settings = MutableStateFlow<SettingsSync?>(null)
     val events = MutableSharedFlow<ClassEvent>(extraBufferCapacity = 32)
     val lastCommandResult = MutableStateFlow<CommandResult?>(null)
+    val schedulePullState = MutableStateFlow<SchedulePullState>(SchedulePullState.Idle)
     /** 网络发现或成功直连后产生的本地设置更新，由界面层持久化。 */
     val discoveredSettings = MutableSharedFlow<WatchSettings>(extraBufferCapacity = 1)
     val lanPlugins = MutableStateFlow<List<LanPluginCandidate>>(emptyList())
@@ -248,6 +258,8 @@ object ConnectionManager {
         activeJob?.cancel()
         refreshJob?.cancel()
         volumeJob?.cancel()
+        schedulePullJob?.cancel()
+        schedulePullState.value = SchedulePullState.Idle
         webSocket?.close(1000, "disconnect")
         webSocket = null
         serverVersion.value = null
@@ -285,10 +297,27 @@ object ConnectionManager {
         )
     }
 
-    /** 请求当前连接对应的插件重新生成课表；云端和局域网使用同一只读协议消息。 */
+    /** 请求当前连接对应的插件重新生成课表；所有端共享任务状态，运行中不会重复发送。 */
     fun requestSchedulePull() {
+        if (schedulePullState.value is SchedulePullState.Pulling) {
+            schedulePullState.value = SchedulePullState.Pulling("已有课表拉取或推送任务正在执行，请稍候")
+            return
+        }
+        val socket = webSocket
+        if (socket == null || state.value !in setOf(State.LanConnected, State.CloudConnected)) {
+            schedulePullState.value = SchedulePullState.Error("当前未连接，无法拉取课表")
+            return
+        }
+
         lastCommandResult.value = null
-        sendEnvelope(schedulePullEnvelope())
+        val envelope = schedulePullEnvelope()
+        schedulePullState.value = SchedulePullState.Pulling("正在连接插件…")
+        if (!socket.send(json.encodeToString(Envelope.serializer(), envelope))) {
+                schedulePullState.value = SchedulePullState.Error("发送拉取请求失败，请重试")
+            return
+        }
+
+        armSchedulePullTimeout("请求已发送，正在等待插件返回最新课表…")
     }
 
     fun sendNotification(
@@ -588,7 +617,16 @@ object ConnectionManager {
             null
         }
         Protocol.TYPE_SCHEDULE_SYNC -> {
-            decodePayload(envelope.payload, ScheduleBundle.serializer())?.let { schedule.value = it }
+            decodePayload(envelope.payload, ScheduleBundle.serializer())?.let {
+                schedule.value = it
+                // 兼容未实现状态消息的旧插件：收到新课表本身也可作为成功终态。
+                if (schedulePullState.value is SchedulePullState.Pulling)
+                    finishSchedulePull(SchedulePullState.Success("课表拉取完成，已使用插件最新课表"))
+            }
+            null
+        }
+        Protocol.TYPE_SCHEDULE_SYNC_STATUS -> {
+            decodePayload(envelope.payload, ScheduleSyncStatus.serializer())?.let(::applyScheduleSyncStatus)
             null
         }
         Protocol.TYPE_EXTENSIONS_SYNC -> {
@@ -613,6 +651,43 @@ object ConnectionManager {
             null
         }
         else -> null
+    }
+
+    private fun applyScheduleSyncStatus(status: ScheduleSyncStatus) {
+        when (status.state) {
+            Protocol.SCHEDULE_TASK_RUNNING -> {
+                armSchedulePullTimeout(status.message.ifBlank { "课表任务正在执行…" })
+            }
+            Protocol.SCHEDULE_TASK_BUSY -> {
+                armSchedulePullTimeout(status.message.ifBlank { "已有课表任务正在执行，请稍候" })
+            }
+            Protocol.SCHEDULE_TASK_COMPLETED ->
+                finishSchedulePull(SchedulePullState.Success(status.message.ifBlank { "课表同步完成" }))
+            Protocol.SCHEDULE_TASK_FAILED ->
+                finishSchedulePull(SchedulePullState.Error(status.message.ifBlank { "课表同步失败" }))
+        }
+    }
+
+    private fun armSchedulePullTimeout(message: String) {
+        schedulePullState.value = SchedulePullState.Pulling(message)
+        schedulePullJob?.cancel()
+        schedulePullJob = scope.launch {
+            delay(SchedulePullTimeoutMs)
+            if (schedulePullState.value is SchedulePullState.Pulling)
+                finishSchedulePull(SchedulePullState.Error("等待课表任务完成超时"))
+        }
+    }
+
+    private fun finishSchedulePull(result: SchedulePullState) {
+        schedulePullJob?.cancel()
+        schedulePullState.value = result
+        if (result is SchedulePullState.Success) {
+            schedulePullJob = scope.launch {
+                delay(3_000)
+                if (schedulePullState.value is SchedulePullState.Success)
+                    schedulePullState.value = SchedulePullState.Idle
+            }
+        }
     }
 
     /** 反序列化失败的载荷忽略不处理：版本不兼容或脏数据不得从 OkHttp 回调线程逃逸击断连接。 */
@@ -679,6 +754,9 @@ internal const val MaxReconnectDelayMs = 60_000L
 
 /** 认证握手限时：对端只完成 WebSocket 握手但从不回 auth_state 时不得永久挂起。 */
 internal const val AuthHandshakeTimeoutMs = 15_000L
+
+/** 手动拉取课表等待插件回传的最长时间，与 WebUI 的等待上限保持一致。 */
+internal const val SchedulePullTimeoutMs = 15_000L
 
 /** 断线重连的指数退避：每次翻倍并封顶 [MaxReconnectDelayMs]；连接成功后调用方复位为 [InitialReconnectDelayMs]。 */
 internal fun nextReconnectDelay(currentMs: Long): Long = (currentMs * 2).coerceAtMost(MaxReconnectDelayMs)
@@ -778,7 +856,14 @@ internal fun planConnection(settings: WatchSettings, password: String?): Connect
     allowCloudFallback = settings.cloudConnectionEnabled,
 )
 
-internal fun schedulePullEnvelope() = Envelope(
-    type = Protocol.TYPE_SCHEDULE_PULL,
-    messageId = UUID.randomUUID().toString().replace("-", ""),
-)
+internal fun schedulePullEnvelope(): Envelope {
+    val taskId = UUID.randomUUID().toString().replace("-", "")
+    return Envelope(
+        type = Protocol.TYPE_SCHEDULE_PULL,
+        messageId = taskId,
+        payload = Json.encodeToJsonElement(
+            ScheduleSyncRequest.serializer(),
+            ScheduleSyncRequest(taskId = taskId, source = Protocol.SCHEDULE_SOURCE_WATCH),
+        ),
+    )
+}

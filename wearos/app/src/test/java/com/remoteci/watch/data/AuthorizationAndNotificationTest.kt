@@ -5,7 +5,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlinx.serialization.json.Json
 import kotlin.test.assertTrue
 
 class AuthorizationAndNotificationTest {
@@ -98,7 +100,9 @@ class AuthorizationAndNotificationTest {
 
         assertEquals(Protocol.TYPE_SCHEDULE_PULL, envelope.type)
         assertTrue(envelope.messageId.isNotBlank())
-        assertNull(envelope.payload)
+        val request = Json.decodeFromJsonElement(ScheduleSyncRequest.serializer(), assertNotNull(envelope.payload))
+        assertEquals(envelope.messageId, request.taskId)
+        assertEquals(Protocol.SCHEDULE_SOURCE_WATCH, request.source)
     }
 
     @Test

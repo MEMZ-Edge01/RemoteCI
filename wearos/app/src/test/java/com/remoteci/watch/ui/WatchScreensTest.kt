@@ -1,6 +1,7 @@
 package com.remoteci.watch.ui
 
 import com.remoteci.watch.data.ClassStateSnapshot
+import com.remoteci.watch.data.ConnectionManager
 import com.remoteci.watch.data.CourseEntry
 import com.remoteci.watch.data.ExtensionDefinition
 import com.remoteci.watch.data.ExtensionParameter
@@ -41,15 +42,25 @@ class WatchScreensTest {
     }
 
     @Test
-    fun `empty schedule offers pull only while connected`() {
+    fun `schedule pull is available while connected even when cache exists`() {
         assertTrue(shouldOfferSchedulePull(day = null, connectionReady = true))
         assertFalse(shouldOfferSchedulePull(day = null, connectionReady = false))
-        assertFalse(
+        assertTrue(
             shouldOfferSchedulePull(
                 day = ScheduleDay("2026-08-13", "revision", enabled = true),
                 connectionReady = true,
             ),
         )
+    }
+
+    @Test
+    fun `running schedule task disables duplicate pull action`() {
+        assertFalse(
+            schedulePullActionEnabled(
+                ConnectionManager.SchedulePullState.Pulling("已有 WebUI 拉取任务正在执行"),
+            ),
+        )
+        assertTrue(schedulePullActionEnabled(ConnectionManager.SchedulePullState.Idle))
     }
 
     @Test
@@ -86,8 +97,8 @@ class WatchScreensTest {
     }
 
     @Test
-    fun `home time chip can grow for long ranges without exceeding the safe width`() {
-        val bounds = homeTimeChipWidthBounds(200.dp)
+    fun `home info chips share a flexible safe width range`() {
+        val bounds = homeInfoChipWidthBounds(200.dp)
 
         assertEquals(78.dp, bounds.minWidth)
         assertEquals(144.dp, bounds.maxWidth)
@@ -167,6 +178,28 @@ class WatchScreensTest {
         assertEquals("16:30-17:10 语文", content.timeLayoutItem)
         assertFalse(content.targetsNextLesson)
         assertTrue(shouldShowNextLessonSummary(Protocol.STATE_CLASS))
+    }
+
+    @Test
+    fun `idle home without a course uses empty title and hides the course action`() {
+        val snapshot = ClassStateSnapshot(currentState = Protocol.STATE_NONE)
+        val content = homeCourseContent(snapshot)
+
+        assertEquals("暂无课程", describeClassState(snapshot))
+        assertEquals("暂无课程", content.subject)
+        assertFalse(content.isAvailable)
+    }
+
+    @Test
+    fun `idle home with a course keeps standby title and shows the course action`() {
+        val snapshot = ClassStateSnapshot(
+            currentState = Protocol.STATE_NONE,
+            currentSubject = "自习",
+            currentTimeLayoutItem = "18:30-19:10 自习",
+        )
+
+        assertEquals("待机", describeClassState(snapshot))
+        assertTrue(homeCourseContent(snapshot).isAvailable)
     }
 
     @Test

@@ -9,6 +9,7 @@ object Protocol {
     const val TYPE_STATE_PUSH = "state_push"
     const val TYPE_SCHEDULE_SYNC = "schedule_sync"
     const val TYPE_SCHEDULE_PULL = "schedule_pull"
+    const val TYPE_SCHEDULE_SYNC_STATUS = "schedule_sync_status"
     const val TYPE_EVENT_NOTIFY = "event_notify"
     const val TYPE_EXTENSIONS_SYNC = "extensions_sync"
     const val TYPE_COMMAND = "command"
@@ -63,6 +64,17 @@ object Protocol {
     const val PERMISSION_SEND_NOTIFICATIONS = 8
     const val PERMISSION_MANAGE_SCHEDULE = 16
     const val PERMISSION_SYSTEM_CONTROL = 32
+
+    const val SCHEDULE_SOURCE_PLUGIN = 1
+    const val SCHEDULE_SOURCE_WEB_UI = 2
+    const val SCHEDULE_SOURCE_WATCH = 3
+    const val SCHEDULE_SOURCE_AUTOMATIC = 4
+    const val SCHEDULE_SOURCE_CONNECTION = 5
+
+    const val SCHEDULE_TASK_RUNNING = 1
+    const val SCHEDULE_TASK_COMPLETED = 2
+    const val SCHEDULE_TASK_FAILED = 3
+    const val SCHEDULE_TASK_BUSY = 4
 }
 
 @Serializable
@@ -99,6 +111,23 @@ data class ClassStateSnapshot(
     @SerialName("volumePercent") val volumePercent: Int = 0,
     @SerialName("isMuted") val isMuted: Boolean = false,
     @SerialName("generatedAt") val generatedAt: String? = null,
+)
+
+@Serializable
+data class ScheduleSyncRequest(
+    @SerialName("taskId") val taskId: String,
+    val source: Int = Protocol.SCHEDULE_SOURCE_WATCH,
+)
+
+@Serializable
+data class ScheduleSyncStatus(
+    @SerialName("taskId") val taskId: String = "",
+    val source: Int = 0,
+    val state: Int = Protocol.SCHEDULE_TASK_RUNNING,
+    val message: String = "",
+    @SerialName("startedAt") val startedAt: String? = null,
+    @SerialName("finishedAt") val finishedAt: String? = null,
+    @SerialName("activeTaskId") val activeTaskId: String? = null,
 )
 
 @Serializable

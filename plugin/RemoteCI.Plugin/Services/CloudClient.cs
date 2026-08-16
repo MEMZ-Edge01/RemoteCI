@@ -36,7 +36,7 @@ public sealed class CloudClient : IDisposable
         PluginSettings settings,
         AccountMirror accounts,
         CommandHandler? commands,
-        Action requestFreshSchedule,
+        Func<ScheduleSyncRequest, ScheduleSyncStatus> requestScheduleSync,
         ILogger<CloudClient> logger,
         CloudTokenStore? tokenStore = null,
         Func<ICloudSocket>? socketFactory = null,
@@ -55,7 +55,7 @@ public sealed class CloudClient : IDisposable
                 Code = CommandResultCodes.InternalError,
                 Message = "命令执行器未初始化",
             });
-        _schedulePullRequests = new SchedulePullRequestHandler(requestFreshSchedule);
+        _schedulePullRequests = new SchedulePullRequestHandler(requestScheduleSync);
         _logger = logger;
         _socketFactory = socketFactory ?? (() => new ClientWebSocketAdapter(new ClientWebSocket()));
         _http = new HttpClient(httpHandler ?? new HttpClientHandler()) { Timeout = TimeSpan.FromSeconds(30) };
@@ -84,7 +84,8 @@ public sealed class CloudClient : IDisposable
     }
 
     public Task SendStateAsync(ClassStateSnapshot value) => SendAsync(Envelope.StatePush(value));
-    public Task SendScheduleAsync(ScheduleBundle value) => SendAsync(Envelope.ScheduleSync(value));
+    public Task<bool> SendScheduleAsync(ScheduleBundle value) => TrySendAsync(Envelope.ScheduleSync(value));
+    public Task<bool> SendScheduleSyncStatusAsync(ScheduleSyncStatus value) => TrySendAsync(Envelope.ScheduleSyncStatus(value));
     public Task SendEventAsync(ClassEvent value) => SendAsync(Envelope.EventNotify(value));
     public Task SendExtensionsAsync(IReadOnlyList<ExtensionDefinition> value) => SendAsync(Envelope.ExtensionsSync(value));
 
@@ -229,24 +230,30 @@ public sealed class CloudClient : IDisposable
         await SendAsync(response, ct);
     }
 
-    private async Task SendAsync(Envelope envelope, CancellationToken ct = default)
+    private async Task SendAsync(Envelope envelope, CancellationToken ct = default) =>
+        _ = await TrySendAsync(envelope, ct);
+
+    private async Task<bool> TrySendAsync(Envelope envelope, CancellationToken ct = default)
     {
-        if (_ws is not { State: WebSocketState.Open }) return;
+        if (_ws is not { State: WebSocketState.Open }) return false;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonDefaults.Options);
         await _sendLock.WaitAsync(ct);
         try
         {
-            if (_ws is { State: WebSocketState.Open } socket)
-                await socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+            if (_ws is not { State: WebSocketState.Open } socket) return false;
+            await socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
+            return true;
         }
         catch (WebSocketException)
         {
             // 发送失败说明对端已不可达：立即释放连接，让接收循环解除阻塞并触发外层重连。
             DisposeSocket();
+            return false;
         }
         catch (ObjectDisposedException)
         {
             // 与 DisposeSocket/Dispose 的正常竞态，无需处理。
+            return false;
         }
         finally
         {

@@ -69,6 +69,7 @@ public class Plugin : PluginBase
         services.AddSingleton<CommandHandler>();
         services.AddSingleton<ClassIslandNotificationBridge>();
         services.AddSingleton<StateCollector>();
+        services.AddSingleton<ScheduleSyncTaskCoordinator>();
         services.AddSingleton<RemoteCiService>();
         // 公开扩展注册表：其他 ClassIsland 插件在 AppStarted 后通过 IAppHost.GetService<IRemoteCiExtensionRegistry>() 获取并注册自定义远程功能。
         services.AddSingleton<IRemoteCiExtensionRegistry, RemoteCiExtensionRegistry>();

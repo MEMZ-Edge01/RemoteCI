@@ -39,12 +39,15 @@ public sealed class Envelope
     public static Envelope ScheduleSync(object payload) =>
         New(Protocol.MessageTypeScheduleSync, payload);
 
-    /// <summary>请求插件立即重新生成并推送七日课表；该消息不携带可变参数。</summary>
-    public static Envelope SchedulePull() => new()
+    /// <summary>请求插件立即重新生成并推送七日课表；旧客户端仍可省略载荷。</summary>
+    public static Envelope SchedulePull(ScheduleSyncRequest? request = null) => new()
     {
         Type = Protocol.MessageTypeSchedulePull,
-        Payload = null,
+        Payload = request,
     };
+
+    public static Envelope ScheduleSyncStatus(ScheduleSyncStatus status) =>
+        New(Protocol.MessageTypeScheduleSyncStatus, status);
 
     public static Envelope EventNotify(object payload) =>
         New(Protocol.MessageTypeEventNotify, payload);

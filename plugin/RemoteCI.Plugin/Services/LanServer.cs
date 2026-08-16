@@ -29,7 +29,7 @@ public sealed class LanServer : IDisposable
         PluginSettings settings,
         AccountMirror accounts,
         CommandHandler? commands,
-        Action requestFreshSchedule,
+        Func<ScheduleSyncRequest, ScheduleSyncStatus> requestScheduleSync,
         Func<ClassStateSnapshot?> snapshotProvider,
         Func<ScheduleBundle?> scheduleProvider,
         ILogger<LanServer> logger,
@@ -46,7 +46,7 @@ public sealed class LanServer : IDisposable
                 Code = CommandResultCodes.InternalError,
                 Message = "命令执行器未初始化",
             }));
-        _schedulePullRequests = new SchedulePullRequestHandler(requestFreshSchedule);
+        _schedulePullRequests = new SchedulePullRequestHandler(requestScheduleSync);
         _snapshotProvider = snapshotProvider;
         _scheduleProvider = scheduleProvider;
         _logger = logger;
@@ -81,12 +81,14 @@ public sealed class LanServer : IDisposable
     }
 
     public void BroadcastState(ClassStateSnapshot value) => Broadcast(Envelope.StatePush(value));
-    public void BroadcastSchedule(ScheduleBundle value) => Broadcast(Envelope.ScheduleSync(value));
+    public bool BroadcastSchedule(ScheduleBundle value) => Broadcast(Envelope.ScheduleSync(value));
+    public bool BroadcastScheduleSyncStatus(ScheduleSyncStatus value) => Broadcast(Envelope.ScheduleSyncStatus(value));
     public void BroadcastEvent(ClassEvent value) => Broadcast(Envelope.EventNotify(value));
     public void BroadcastExtensions(IReadOnlyList<ExtensionDefinition> value) => Broadcast(Envelope.ExtensionsSync(value));
 
-    private void Broadcast(Envelope envelope)
+    private bool Broadcast(Envelope envelope)
     {
+        var sent = false;
         foreach (var client in AuthenticatedClients())
         {
             // 发送与连接关闭之间存在竞态，单个客户端失败不能影响其余客户端，
@@ -94,12 +96,14 @@ public sealed class LanServer : IDisposable
             try
             {
                 Send(client.Socket, envelope);
+                sent = true;
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "向局域网客户端 {Id} 广播失败", client.Socket.ConnectionInfo.Id);
             }
         }
+        return sent;
     }
 
     internal void OnOpened(IWebSocketConnection socket)

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using Avalonia.Threading;
 using RemoteCI.Plugin.Extensions;
 using RemoteCI.Plugin.Settings;
+using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Plugin.Services;
@@ -19,11 +20,13 @@ public sealed class RemoteCiService : IDisposable
     private readonly AccountMirror _accounts;
     private readonly CloudTokenStore _tokenStore;
     private readonly IRemoteCiExtensionRegistry _extensions;
+    private readonly ScheduleSyncTaskCoordinator _scheduleSync;
     private readonly ILoggerFactory _loggerFactory;
     private readonly ILogger<RemoteCiService> _logger;
     private LanServer? _lanServer;
     private CloudClient? _cloudClient;
     private CancellationTokenSource? _cts;
+    private CancellationTokenSource? _scheduleSyncTimeout;
     private ClassStateSnapshot? _latestSnapshot;
     private ScheduleBundle? _latestSchedule;
 
@@ -35,6 +38,7 @@ public sealed class RemoteCiService : IDisposable
         AccountMirror accounts,
         CloudTokenStore tokenStore,
         IRemoteCiExtensionRegistry extensions,
+        ScheduleSyncTaskCoordinator scheduleSync,
         ILoggerFactory loggerFactory)
     {
         _collector = collector;
@@ -44,9 +48,14 @@ public sealed class RemoteCiService : IDisposable
         _accounts = accounts;
         _tokenStore = tokenStore;
         _extensions = extensions;
+        _scheduleSync = scheduleSync;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<RemoteCiService>();
     }
+
+    public event Action<ScheduleSyncStatus>? ScheduleSyncStatusChanged;
+
+    public ScheduleSyncStatus? CurrentScheduleSyncStatus => _scheduleSync.Current;
 
     public void Start()
     {
@@ -62,12 +71,14 @@ public sealed class RemoteCiService : IDisposable
 
         _collector.SnapshotPushed += OnSnapshotPushed;
         _collector.SchedulePushed += OnSchedulePushed;
+        _collector.SchedulePushFailed += OnSchedulePushFailed;
         _collector.EventOccurred += OnEventOccurred;
         _commandHandler.NotificationSent += OnEventOccurred;
         _commandHandler.ScheduleChanged += OnScheduleChanged;
         _commandHandler.HostStateChanged += OnHostStateChanged;
         _notificationBridge.NotificationCaptured += OnEventOccurred;
         _extensions.ExtensionsChanged += OnExtensionsChanged;
+        _scheduleSync.StatusChanged += OnScheduleSyncStatusChanged;
         _notificationBridge.Start();
 
         if (_settings.EnableLanServer)
@@ -76,7 +87,7 @@ public sealed class RemoteCiService : IDisposable
                 _settings,
                 _accounts,
                 _commandHandler,
-                RequestFreshSchedule,
+                RequestScheduleSync,
                 () => _latestSnapshot,
                 () => _latestSchedule,
                 _loggerFactory.CreateLogger<LanServer>());
@@ -89,7 +100,7 @@ public sealed class RemoteCiService : IDisposable
                 _settings,
                 _accounts,
                 _commandHandler,
-                RequestFreshSchedule,
+                RequestScheduleSync,
                 _loggerFactory.CreateLogger<CloudClient>(),
                 tokenStore: _tokenStore);
             _ = _cloudClient.StartAsync(_cts.Token);
@@ -104,12 +115,17 @@ public sealed class RemoteCiService : IDisposable
         _collector.Stop();
         _collector.SnapshotPushed -= OnSnapshotPushed;
         _collector.SchedulePushed -= OnSchedulePushed;
+        _collector.SchedulePushFailed -= OnSchedulePushFailed;
         _collector.EventOccurred -= OnEventOccurred;
         _commandHandler.NotificationSent -= OnEventOccurred;
         _commandHandler.ScheduleChanged -= OnScheduleChanged;
         _commandHandler.HostStateChanged -= OnHostStateChanged;
         _notificationBridge.NotificationCaptured -= OnEventOccurred;
         _extensions.ExtensionsChanged -= OnExtensionsChanged;
+        if (_scheduleSync.Current is { } active)
+            _scheduleSync.TryFail(active.TaskId, "RemoteCI 服务已停止，课表任务已取消", out _);
+        _scheduleSync.StatusChanged -= OnScheduleSyncStatusChanged;
+        CancelScheduleSyncTimeout();
         _notificationBridge.Stop();
         _cts?.Cancel();
         _commandHandler.CancelPendingPowerActions();
@@ -122,6 +138,25 @@ public sealed class RemoteCiService : IDisposable
         _cts = null;
     }
 
+    /// <summary>由插件设置页触发同步；所有入口共享同一个任务闸门。</summary>
+    public ScheduleSyncStatus PushCurrentSchedule()
+    {
+        if (_cts is null)
+        {
+            _logger.LogWarning("RemoteCI 服务尚未启动，无法手动推送课表");
+            return new ScheduleSyncStatus
+            {
+                TaskId = Guid.NewGuid().ToString("N"),
+                Source = ScheduleSyncSource.Plugin,
+                State = ScheduleSyncTaskState.Failed,
+                Message = "RemoteCI 服务尚未启动，暂时无法推送课表",
+                FinishedAt = DateTimeOffset.UtcNow,
+            };
+        }
+
+        return RequestScheduleSync(ScheduleSyncRequest.Create(ScheduleSyncSource.Plugin));
+    }
+
     private void OnSnapshotPushed(ClassStateSnapshot snapshot)
     {
         _latestSnapshot = snapshot;
@@ -132,17 +167,82 @@ public sealed class RemoteCiService : IDisposable
         }
     }
 
-    private void OnSchedulePushed(ScheduleBundle schedule)
+    private void OnSchedulePushed(ScheduleBundle schedule) =>
+        Observe(PublishScheduleAsync(schedule), "七日课表任务");
+
+    private async Task PublishScheduleAsync(ScheduleBundle schedule)
     {
         _latestSchedule = schedule;
-        _lanServer?.BroadcastSchedule(schedule);
+        var delivered = _lanServer?.BroadcastSchedule(schedule) == true;
         if (_cloudClient is { } cloud)
-            Observe(cloud.SendScheduleAsync(schedule), "七日课表");
+            delivered |= await cloud.SendScheduleAsync(schedule);
+
+        if (_scheduleSync.Current is not { } active) return;
+        if (delivered)
+            _scheduleSync.TryComplete(active.TaskId, "课表已生成并推送完成", out _);
+        else
+            _scheduleSync.TryFail(active.TaskId, "课表已生成，但当前没有可用的服务端或手表连接", out _);
+    }
+
+    private void OnSchedulePushFailed(string error)
+    {
+        if (_scheduleSync.Current is { } active)
+            _scheduleSync.TryFail(active.TaskId, $"生成课表失败：{error}", out _);
     }
 
     private void OnScheduleChanged() => Dispatcher.UIThread.Post(_collector.ForceSchedulePush);
 
-    private void RequestFreshSchedule() => Dispatcher.UIThread.Post(_collector.RequestSchedulePush);
+    private ScheduleSyncStatus RequestScheduleSync(ScheduleSyncRequest request)
+    {
+        var status = _scheduleSync.TryStart(request);
+        if (status.State != ScheduleSyncTaskState.Running) return status;
+
+        ArmScheduleSyncTimeout(status.TaskId);
+        // ClassIsland 课表服务只能在 UI 线程读取。
+        Dispatcher.UIThread.Post(_collector.RequestSchedulePush);
+        return status;
+    }
+
+    private void OnScheduleSyncStatusChanged(ScheduleSyncStatus status)
+    {
+        _logger.LogInformation(
+            "课表任务状态：{TaskId} {Source} {State} - {Message}",
+            status.TaskId, status.Source, status.State, status.Message);
+        if (status.State is ScheduleSyncTaskState.Completed or ScheduleSyncTaskState.Failed)
+            CancelScheduleSyncTimeout();
+
+        _lanServer?.BroadcastScheduleSyncStatus(status);
+        if (_cloudClient is { } cloud)
+            Observe(cloud.SendScheduleSyncStatusAsync(status), "课表同步状态");
+        ScheduleSyncStatusChanged?.Invoke(status);
+    }
+
+    private void ArmScheduleSyncTimeout(string taskId)
+    {
+        CancelScheduleSyncTimeout();
+        var timeout = new CancellationTokenSource();
+        var token = timeout.Token;
+        _scheduleSyncTimeout = timeout;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(15), token);
+                _scheduleSync.TryFail(taskId, "课表任务执行超时，请检查 ClassIsland 课表和网络连接", out _);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                // 正常完成或服务停止。
+            }
+        });
+    }
+
+    private void CancelScheduleSyncTimeout()
+    {
+        var timeout = Interlocked.Exchange(ref _scheduleSyncTimeout, null);
+        timeout?.Cancel();
+        timeout?.Dispose();
+    }
 
     private void OnHostStateChanged() => Dispatcher.UIThread.Post(_collector.ForceSnapshotPush);
 

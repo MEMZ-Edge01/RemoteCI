@@ -2,9 +2,13 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
+using Avalonia.Threading;
 using ClassIsland.Core.Abstractions.Controls;
 using ClassIsland.Core.Attributes;
+using RemoteCI.Plugin.Services;
 using RemoteCI.Plugin.Settings;
+using RemoteCI.Shared;
+using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Plugin.Views.SettingsPages;
 
@@ -16,15 +20,18 @@ namespace RemoteCI.Plugin.Views.SettingsPages;
 public sealed class RemoteCiSettingsPage : SettingsPageBase
 {
     private readonly PluginSettings _settings;
+    private readonly RemoteCiService? _service;
     private readonly TextBox _portBox;
     private readonly TextBox _cloudUrlBox;
     private readonly TextBox _pairCodeBox;
     private readonly TextBlock _httpWarning;
+    private readonly Button _pushScheduleButton;
     private readonly TextBlock _hint;
 
-    public RemoteCiSettingsPage(PluginSettings settings)
+    public RemoteCiSettingsPage(PluginSettings settings, RemoteCiService? service = null)
     {
         _settings = settings;
+        _service = service;
 
         _portBox = new TextBox { Text = settings.LanServerPort.ToString(), Watermark = "端口（默认 8765）" };
         _cloudUrlBox = new TextBox { Text = settings.CloudServerUrl, Watermark = "云端地址，如 https://nas:8080" };
@@ -43,6 +50,8 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
 
         var saveButton = new Button { Content = "保存设置" };
         saveButton.Click += OnSaveClick;
+        _pushScheduleButton = new Button { Content = "立即推送当前课表" };
+        _pushScheduleButton.Click += OnPushScheduleClick;
         _hint = new TextBlock { Text = string.Empty, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
 
         var panel = new StackPanel
@@ -69,6 +78,7 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
                     Children = { new TextBlock { Text = "一次性插件配对码" }, _pairCodeBox },
                 },
                 saveButton,
+                _pushScheduleButton,
                 _hint,
             },
         };
@@ -78,6 +88,12 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
             Content = panel,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
+
+        if (_service is not null)
+        {
+            _service.ScheduleSyncStatusChanged += OnScheduleSyncStatusChanged;
+            if (_service.CurrentScheduleSyncStatus is { } current) ApplyScheduleSyncStatus(current);
+        }
     }
 
     /// <summary>端口必须在 1-65535；云端地址留空或为合法 http/https URI 才有效。</summary>
@@ -120,5 +136,34 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         // 属性变更已由 Plugin.cs 的 PropertyChanged 订阅自动落盘，无需重复写 Settings.json。
 
         _hint.Text = "已保存。连接与端口设置在重启 ClassIsland 后生效，云端配对码即时生效。";
+    }
+
+    private void OnPushScheduleClick(object? sender, RoutedEventArgs e)
+    {
+        var status = _service?.PushCurrentSchedule() ?? new ScheduleSyncStatus
+        {
+            Source = ScheduleSyncSource.Plugin,
+            State = ScheduleSyncTaskState.Failed,
+            Message = "RemoteCI 服务尚未启动，暂时无法推送课表",
+        };
+        ApplyScheduleSyncStatus(status);
+    }
+
+    private void OnScheduleSyncStatusChanged(ScheduleSyncStatus status) =>
+        Dispatcher.UIThread.Post(() => ApplyScheduleSyncStatus(status));
+
+    internal static string ScheduleStatusText(ScheduleSyncStatus status) => status.State switch
+    {
+        ScheduleSyncTaskState.Running => $"{status.Message}，请勿重复操作。",
+        ScheduleSyncTaskState.Completed => status.Message,
+        ScheduleSyncTaskState.Failed => status.Message,
+        ScheduleSyncTaskState.Busy => status.Message,
+        _ => status.Message,
+    };
+
+    private void ApplyScheduleSyncStatus(ScheduleSyncStatus status)
+    {
+        _pushScheduleButton.IsEnabled = _service?.CurrentScheduleSyncStatus is null;
+        _hint.Text = ScheduleStatusText(status);
     }
 }

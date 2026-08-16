@@ -6,6 +6,7 @@
     var currentPage = ViewContext.RouteData.Values["page"]?.ToString();
     string NavClass(string page) => currentPage == page ? "nav-link active" : "nav-link";
     string? CurrentPage(string page) => currentPage == page ? "page" : null;
+    var userInitial = string.IsNullOrWhiteSpace(current?.DisplayName) ? "R" : current.DisplayName.Trim()[0].ToString().ToUpperInvariant();
 }
 <!doctype html>
 <html lang="zh-CN">
@@ -21,52 +22,66 @@
 <body class="@(current is null ? "auth-layout" : "app-layout")">
     @if (current is not null)
     {
-        <aside class="sidebar" aria-label="主导航">
+        <aside class="sidebar" aria-label="主导航" data-sidebar>
             <a class="brand" href="@(permissions.HasFlag(UserPermissions.AccessWebUi) ? Url.Page("/Index") : Url.Page("/Account"))">
-                <img class="brand-logo" src="~/logo-mark.svg" alt="RemoteCI" asp-append-version="true" />
-                <span class="brand-full">RemoteCI</span><small>v2</small>
+                <span class="brand-badge"><img class="brand-logo" src="~/logo-mark.svg" alt="" asp-append-version="true" /></span>
+                <span class="brand-copy"><strong>RemoteCI</strong><small>课堂控制中心</small></span>
             </a>
             <nav class="side-nav">
                 @if (permissions.HasFlag(UserPermissions.AccessWebUi))
                 {
-                    <a class="@NavClass("/Index")" aria-current="@CurrentPage("/Index")" asp-page="/Index">
-                        <i class="bi bi-grid" aria-hidden="true"></i><span>概览</span>
-                    </a>
+                    <a class="@NavClass("/Index")" aria-current="@CurrentPage("/Index")" asp-page="/Index" data-search-label="概览 仪表盘 课堂状态"><i class="bi bi-grid" aria-hidden="true"></i><span>概览</span></a>
                 }
                 @if (permissions.HasFlag(UserPermissions.ManageSchedule))
                 {
-                    <a class="@NavClass("/Schedule")" aria-current="@CurrentPage("/Schedule")" asp-page="/Schedule">
-                        <i class="bi bi-calendar-week" aria-hidden="true"></i><span>七日课表</span>
-                    </a>
+                    <a class="@NavClass("/Schedule")" aria-current="@CurrentPage("/Schedule")" asp-page="/Schedule" data-search-label="七日课表 换课 课程安排"><i class="bi bi-calendar-week" aria-hidden="true"></i><span>七日课表</span></a>
                 }
                 @if (permissions.HasFlag(UserPermissions.SendNotifications))
                 {
-                    <a class="@NavClass("/Notifications")" aria-current="@CurrentPage("/Notifications")" asp-page="/Notifications">
-                        <i class="bi bi-send" aria-hidden="true"></i><span>发送通知</span>
-                    </a>
+                    <a class="@NavClass("/Notifications")" aria-current="@CurrentPage("/Notifications")" asp-page="/Notifications" data-search-label="发送通知 提醒 消息"><i class="bi bi-send" aria-hidden="true"></i><span>发送通知</span></a>
                 }
                 @if (permissions.HasFlag(UserPermissions.ManageUsers))
                 {
-                    <a class="@NavClass("/Users")" aria-current="@CurrentPage("/Users")" asp-page="/Users">
-                        <i class="bi bi-people" aria-hidden="true"></i><span>人员权限</span>
-                    </a>
+                    <a class="@NavClass("/Users")" aria-current="@CurrentPage("/Users")" asp-page="/Users" data-search-label="人员权限 用户 账号管理"><i class="bi bi-people" aria-hidden="true"></i><span>人员权限</span></a>
                 }
-                <a class="@NavClass("/Account")" aria-current="@CurrentPage("/Account")" asp-page="/Account">
-                    <i class="bi bi-person" aria-hidden="true"></i><span>个人账号</span>
-                </a>
+                <a class="@NavClass("/Account")" aria-current="@CurrentPage("/Account")" asp-page="/Account" data-search-label="个人账号 密码 设备 更新 设置"><i class="bi bi-person" aria-hidden="true"></i><span>个人账号</span></a>
             </nav>
+            <div class="sidebar-note"><strong>RemoteCI v2</strong><span>清晰查看状态，并安全执行课堂操作。</span></div>
             <form class="logout-form" method="post" asp-page="/Logout">
-                <button class="logout-button" type="submit" title="退出登录">
-                    <i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>退出</span>
-                </button>
+                <button class="logout-button" type="submit" title="退出登录"><i class="bi bi-box-arrow-right" aria-hidden="true"></i><span>退出登录</span></button>
             </form>
         </aside>
+        <div class="sidebar-backdrop" data-sidebar-backdrop></div>
+        <div class="app-frame">
+            <header class="topbar">
+                <button class="topbar-button menu-button" type="button" data-sidebar-toggle aria-label="展开或收起导航" title="展开或收起导航"><i class="bi bi-list" aria-hidden="true"></i></button>
+                <div class="app-search" role="search">
+                    <i class="bi bi-search" aria-hidden="true"></i>
+                    <input type="search" data-app-search placeholder="搜索页面或功能" autocomplete="off" aria-label="搜索页面或功能" />
+                    <span class="search-feedback" data-search-feedback aria-live="polite"></span>
+                </div>
+                <div class="topbar-actions">
+                    <button class="topbar-button" type="button" data-theme-toggle aria-label="切换明暗主题" title="切换明暗主题"><i class="bi bi-circle-half" aria-hidden="true"></i></button>
+                    <button class="topbar-button" type="button" data-page-refresh aria-label="刷新当前页面" title="刷新当前页面"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i></button>
+                    <a class="topbar-button" asp-page="/Account" aria-label="打开个人账号" title="个人账号"><i class="bi bi-gear" aria-hidden="true"></i></a>
+                    <a class="user-avatar" asp-page="/Account" aria-label="打开 @current.DisplayName 的个人账号" title="@current.DisplayName">@userInitial</a>
+                </div>
+            </header>
+            <main class="shell">
+                @if (TempData["Message"] is string message) { <div class="flash">@message</div> }
+                @if (TempData["Error"] is string error) { <div class="flash error">@error</div> }
+                @RenderBody()
+            </main>
+        </div>
     }
-    <main class="shell">
-        @if (TempData["Message"] is string message) { <div class="flash">@message</div> }
-        @if (TempData["Error"] is string error) { <div class="flash error">@error</div> }
-        @RenderBody()
-    </main>
+    else
+    {
+        <main class="shell auth-shell">
+            @if (TempData["Message"] is string message) { <div class="flash">@message</div> }
+            @if (TempData["Error"] is string error) { <div class="flash error">@error</div> }
+            @RenderBody()
+        </main>
+    }
     <script src="~/app.js" asp-append-version="true" defer></script>
 </body>
 </html>

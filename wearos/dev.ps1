@@ -30,7 +30,24 @@ switch ($Action) {
         & .\gradlew.bat assembleDebug
         if ($LASTEXITCODE -ne 0) { throw "构建失败，请查看上方日志" }
 
-        $apk = "app\build\outputs\apk\debug\app-debug.apk"
+        # 与 build.gradle.kts 使用相同的本机构建目录优先级，避免云盘项目中的重解析文件导致 Gradle 快照失败。
+        $externalBuildRoot = $env:REMOTECI_WEAROS_BUILD_DIR
+        if (-not $externalBuildRoot -and (Test-Path ".\local.properties")) {
+            $buildDirEntry = Get-Content ".\local.properties" |
+                Where-Object { $_ -match '^remoteci\.buildDir=' } |
+                Select-Object -Last 1
+            if ($buildDirEntry) {
+                $externalBuildRoot = ($buildDirEntry -split '=', 2)[1].Trim().Replace('\:', ':')
+            }
+        }
+        if ($externalBuildRoot -and -not [IO.Path]::IsPathRooted($externalBuildRoot)) {
+            $externalBuildRoot = Join-Path $PSScriptRoot $externalBuildRoot
+        }
+        $apk = if ($externalBuildRoot) {
+            Join-Path $externalBuildRoot "app\outputs\apk\debug\app-debug.apk"
+        } else {
+            "app\build\outputs\apk\debug\app-debug.apk"
+        }
         Write-Host "==> 安装 $apk"
         & $adb install -r $apk
         if ($LASTEXITCODE -ne 0) { throw "安装失败（模拟器是否已启动？）" }

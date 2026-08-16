@@ -80,6 +80,8 @@ builder.Services.AddScoped<IdentityCoordinator>();
 builder.Services.AddScoped<SchedulePullSettings>();
 builder.Services.AddSingleton<IStateStore, StateStore>();
 builder.Services.AddSingleton<PeerRegistry>();
+builder.Services.AddSingleton<ScheduleSyncTaskTracker>();
+builder.Services.AddSingleton<ScheduleSyncService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddHostedService<SchedulePullWorker>();
 builder.Services.AddSingleton(new UpdateService(args));
@@ -138,6 +140,7 @@ app.Map("/ws", async context =>
         context.RequestServices.GetRequiredService<IdentityCoordinator>(),
         context.RequestServices.GetRequiredService<PeerRegistry>(),
         context.RequestServices.GetRequiredService<IStateStore>(),
+        context.RequestServices.GetRequiredService<ScheduleSyncService>(),
         logger);
 });
 

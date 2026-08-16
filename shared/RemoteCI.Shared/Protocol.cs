@@ -8,6 +8,7 @@ public static class Protocol
     public const string MessageTypeStatePush = "state_push";
     public const string MessageTypeScheduleSync = "schedule_sync";
     public const string MessageTypeSchedulePull = "schedule_pull";
+    public const string MessageTypeScheduleSyncStatus = "schedule_sync_status";
     public const string MessageTypeEventNotify = "event_notify";
     public const string MessageTypeCommand = "command";
     public const string MessageTypeCommandResult = "command_result";
@@ -128,4 +129,22 @@ public enum ScheduleChangeMode
 {
     Exchange = 1,
     Replace = 2,
+}
+
+public enum ScheduleSyncSource
+{
+    Unknown = 0,
+    Plugin = 1,
+    WebUi = 2,
+    Watch = 3,
+    Automatic = 4,
+    Connection = 5,
+}
+
+public enum ScheduleSyncTaskState
+{
+    Running = 1,
+    Completed = 2,
+    Failed = 3,
+    Busy = 4,
 }

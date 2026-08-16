@@ -78,6 +78,9 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
     public Task SendScheduleToWatchesAsync(ScheduleBundle value, CancellationToken ct = default) =>
         BroadcastWatchesAsync(Envelope.ScheduleSync(value), ct);
 
+    public Task SendScheduleSyncStatusToWatchesAsync(ScheduleSyncStatus value, CancellationToken ct = default) =>
+        BroadcastWatchesAsync(Envelope.ScheduleSyncStatus(value), ct);
+
     public Task SendEventToWatchesAsync(ClassEvent value, CancellationToken ct = default) =>
         BroadcastWatchesAsync(Envelope.EventNotify(value), ct);
 
@@ -146,17 +149,19 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
         BroadcastToPluginsAsync(Envelope.AccountSync(sync), ct);
 
     /// <summary>请求最早接入的在线插件立即重新生成课表；返回是否成功发送。</summary>
-    public Task<bool> RequestSchedulePullAsync(CancellationToken ct = default) =>
-        SendToPluginAsync(Envelope.SchedulePull(), ct);
+    public Task<bool> RequestSchedulePullAsync(ScheduleSyncRequest request, CancellationToken ct = default) =>
+        SendToPluginAsync(Envelope.SchedulePull(request), ct);
 
     /// <summary>
     /// 向指定插件连接发送课表拉取请求：新插件接入时的补齐拉取必须定向发给它自己，
     /// 否则多插件在线时拉取会被投递给最早的插件，新插件的启动竞态窗口无法消除。
     /// </summary>
-    public async Task RequestSchedulePullFromAsync(Guid connectionId, CancellationToken ct = default)
+    public async Task<bool> RequestSchedulePullFromAsync(
+        Guid connectionId, ScheduleSyncRequest request, CancellationToken ct = default)
     {
         if (_pluginPeers.TryGetValue(connectionId, out var peer) && await RefreshAsync(peer, ct) is not null)
-            await TrySendAsync(peer, Envelope.SchedulePull(), ct);
+            return await TrySendAsync(peer, Envelope.SchedulePull(request), ct);
+        return false;
     }
 
     public async Task SendToWatchAsync(Guid connectionId, Envelope envelope, CancellationToken ct = default)

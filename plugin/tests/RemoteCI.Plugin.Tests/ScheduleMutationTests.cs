@@ -11,13 +11,24 @@ public sealed class ScheduleMutationTests
     [Fact]
     public void SchedulePullRequest_TriggersFreshScheduleCollection()
     {
-        var requested = 0;
-        var handler = new SchedulePullRequestHandler(() => requested++);
+        ScheduleSyncRequest? requested = null;
+        var handler = new SchedulePullRequestHandler(request =>
+        {
+            requested = request;
+            return new ScheduleSyncStatus
+            {
+                TaskId = request.TaskId,
+                Source = request.Source,
+                State = ScheduleSyncTaskState.Running,
+            };
+        });
 
-        var handled = handler.TryHandle(Envelope.SchedulePull());
+        var envelope = Envelope.SchedulePull();
+        var handled = handler.TryHandle(envelope);
 
         Assert.True(handled);
-        Assert.Equal(1, requested);
+        Assert.NotNull(requested);
+        Assert.Equal(envelope.MessageId, requested.TaskId);
     }
 
     [Fact]

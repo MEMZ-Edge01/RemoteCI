@@ -16,6 +16,7 @@ public static class WebSocketHub
         IdentityCoordinator identities,
         PeerRegistry registry,
         IStateStore store,
+        ScheduleSyncService scheduleSync,
         ILogger logger)
     {
         if (!context.WebSockets.IsWebSocketRequest)
@@ -47,7 +48,8 @@ public static class WebSocketHub
             await registry.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(context.RequestAborted), context.RequestAborted);
             // 插件自身的启动推送可能早于云端连接完成；认证后主动拉取可消除这段竞态窗口。
             // 补齐拉取必须定向发给新接入的插件自己，不能走“最早接入优先”的单插件投递。
-            await registry.RequestSchedulePullFromAsync(connectionId, context.RequestAborted);
+            await scheduleSync.StartFromPluginAsync(
+                connectionId, ScheduleSyncSource.Connection, context.RequestAborted);
         }
         else
         {
@@ -64,6 +66,8 @@ public static class WebSocketHub
                     await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSync(schedule), context.RequestAborted);
                 if (store.GetLatestExtensions() is { } extensions)
                     await registry.SendToWatchAsync(connectionId, Envelope.ExtensionsSync(extensions), context.RequestAborted);
+                if (scheduleSync.Current is { } task)
+                    await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSyncStatus(task), context.RequestAborted);
                 await registry.SendToWatchAsync(connectionId, Envelope.SettingsSync(new SettingsSync
                 {
                     ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(context.RequestAborted),
@@ -121,7 +125,7 @@ public static class WebSocketHub
                 if (principal is null) break;
                 envelope.Sender = principal.PeerRole;
                 await DispatchAsync(
-                    envelope, principal, connectionId, registry, store, identities, logger, commandRate, context.RequestAborted);
+                    envelope, principal, connectionId, registry, store, scheduleSync, identities, logger, commandRate, context.RequestAborted);
             }
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
@@ -134,6 +138,8 @@ public static class WebSocketHub
         }
         finally
         {
+            if (principal?.IsPlugin == true)
+                await scheduleSync.FailActiveAsync("插件连接已断开，课表任务未完成");
             await registry.UnregisterAsync(connectionId);
             logger.LogInformation("WebSocket disconnected: {Id}", connectionId);
         }
@@ -145,6 +151,7 @@ public static class WebSocketHub
         Guid connectionId,
         PeerRegistry registry,
         IStateStore store,
+        ScheduleSyncService scheduleSync,
         IdentityCoordinator identities,
         ILogger logger,
         CommandRateLimiter commandRate,
@@ -163,8 +170,10 @@ public static class WebSocketHub
             case Protocol.MessageTypeScheduleSync when principal.IsPlugin:
                 if (ConvertPayload<ScheduleBundle>(envelope.Payload) is { } schedule)
                 {
+                    // 每次插件回传都整体替换旧缓存，手动拉取不会与服务端旧课表做合并。
                     store.SaveSchedule(schedule);
                     await registry.SendScheduleToWatchesAsync(schedule, ct);
+                    await scheduleSync.CompleteFromScheduleAsync(ct);
                 }
                 return;
 
@@ -191,6 +200,11 @@ public static class WebSocketHub
                     logger.LogWarning("插件上报了无效的局域网地址或端口");
                 return;
 
+            case Protocol.MessageTypeScheduleSyncStatus when principal.IsPlugin:
+                if (ConvertPayload<ScheduleSyncStatus>(envelope.Payload) is { } syncStatus)
+                    await scheduleSync.ObserveFromPluginAsync(syncStatus, ct);
+                return;
+
             case Protocol.MessageTypeCommandResult when principal.IsPlugin:
                 if (ConvertPayload<CommandResult>(envelope.Payload) is { } result)
                     await registry.CompleteCommandAsync(envelope, result, ct);
@@ -201,7 +215,9 @@ public static class WebSocketHub
                 return;
 
             case Protocol.MessageTypeSchedulePull when principal.User is not null:
-                await registry.RequestSchedulePullAsync(ct);
+                var pullRequest = ConvertPayload<ScheduleSyncRequest>(envelope.Payload);
+                await scheduleSync.StartAsync(
+                    ScheduleSyncSource.Watch, ct, pullRequest?.TaskId ?? envelope.MessageId);
                 return;
 
             default:

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -116,14 +117,14 @@ internal data class WatchSurfaceLayout(
     val clipToCircle: Boolean,
 )
 
-internal data class HomeTimeChipWidthBounds(
+internal data class HomeInfoChipWidthBounds(
     val minWidth: Dp,
     val maxWidth: Dp,
 )
 
-/** 时间按钮由文本固有宽度决定实际宽度，同时保留圆屏内的安全上下限。 */
-internal fun homeTimeChipWidthBounds(diameter: Dp): HomeTimeChipWidthBounds =
-    HomeTimeChipWidthBounds(
+/** 课程按钮与时间框共同按内容伸缩，同时保留圆屏内的安全上下限。 */
+internal fun homeInfoChipWidthBounds(diameter: Dp): HomeInfoChipWidthBounds =
+    HomeInfoChipWidthBounds(
         minWidth = diameter * .39f,
         maxWidth = diameter * .72f,
     )
@@ -291,7 +292,7 @@ private fun HomeStatusPage(
     // 下课和即将上课时，主页的主课程入口代表即将发生的下一节课；
     // 文案、时间和点击后的换课源课必须始终来自同一个目标，避免“显示数学却换了语文”。
     val courseContent = homeCourseContent(snapshot)
-    val timeChipWidth = homeTimeChipWidthBounds(diameter)
+    val infoChipWidth = homeInfoChipWidthBounds(diameter)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -326,25 +327,32 @@ private fun HomeStatusPage(
             )
         }
         Spacer(Modifier.height(diameter * .10f))
-        HomeInfoChip(
-            text = courseContent.subject,
-            icon = Icons.Rounded.SwapHoriz,
-            filled = true,
-            modifier = Modifier.width(diameter * .39f).height(diameter * .14f),
-            fontSize = if (courseContent.subject.length <= 2) 16.sp else 12.sp,
-            iconSize = diameter * .055f,
-            onClick = onQuickSwapCourse,
-        )
-        Spacer(Modifier.height(diameter * .035f))
-        HomeInfoChip(
-            text = extractTimeRange(courseContent.timeLayoutItem).ifBlank { "--:--" },
-            filled = false,
-            // widthIn 不强制固定宽度：Row 会按时间文字的固有宽度扩展，并受圆屏安全上限约束。
+        // 先按两个控件的固有宽度取较大值，再让它们填满同一容器，保证始终等宽。
+        Column(
             modifier = Modifier
-                .widthIn(min = timeChipWidth.minWidth, max = timeChipWidth.maxWidth)
-                .height(diameter * .105f),
-            fontSize = 12.sp,
-        )
+                .widthIn(min = infoChipWidth.minWidth, max = infoChipWidth.maxWidth)
+                .width(IntrinsicSize.Max),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (courseContent.isAvailable) {
+                HomeInfoChip(
+                    text = courseContent.subject,
+                    icon = Icons.Rounded.SwapHoriz,
+                    filled = true,
+                    modifier = Modifier.fillMaxWidth().height(diameter * .14f),
+                    fontSize = if (courseContent.subject.length <= 2) 16.sp else 12.sp,
+                    iconSize = diameter * .055f,
+                    onClick = onQuickSwapCourse,
+                )
+                Spacer(Modifier.height(diameter * .035f))
+            }
+            HomeInfoChip(
+                text = extractTimeRange(courseContent.timeLayoutItem).ifBlank { "--:--" },
+                filled = false,
+                modifier = Modifier.fillMaxWidth().height(diameter * .105f),
+                fontSize = 12.sp,
+            )
+        }
         if (canViewExtendedSchedule(user) && shouldShowNextLessonSummary(snapshot?.currentState)) {
             Spacer(Modifier.height(diameter * .035f))
             Text(
@@ -405,14 +413,13 @@ internal fun ScheduleOverviewScreen(
     day: ScheduleDay?,
     today: LocalDate,
     connectionReady: Boolean,
+    pullState: ConnectionManager.SchedulePullState,
     onRequestSchedule: () -> Unit,
     onPickDate: () -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = stringResource(R.string.schedule_title)) {
     if (day == null) {
         item { Hint(stringResource(R.string.schedule_not_synced)) }
-        if (shouldOfferSchedulePull(day, connectionReady))
-            item { ActionButton(stringResource(R.string.schedule_pull_button), Icons.Rounded.Refresh, true, onRequestSchedule) }
     } else {
         // 日期标题同时承担切换入口，单页始终只渲染一天，避免七日内容在圆屏上过长。
         item { ActionButton(scheduleDateTitle(day.date, today), null, true, onPickDate) }
@@ -421,11 +428,36 @@ internal fun ScheduleOverviewScreen(
             item { LessonSummary(course) }
         }
     }
+
+    when (pullState) {
+        is ConnectionManager.SchedulePullState.Pulling -> {
+            item { CircularProgressIndicator(modifier = Modifier.size(34.dp)) }
+            item { Hint(pullState.message) }
+        }
+        is ConnectionManager.SchedulePullState.Success -> item { Hint(pullState.message) }
+        is ConnectionManager.SchedulePullState.Error -> item { Hint(pullState.message) }
+        ConnectionManager.SchedulePullState.Idle -> Unit
+    }
+    if (shouldOfferSchedulePull(day, connectionReady)) {
+        val pulling = !schedulePullActionEnabled(pullState)
+        item {
+            ActionButton(
+                stringResource(if (pulling) R.string.schedule_pulling_button else R.string.schedule_pull_button),
+                Icons.Rounded.Refresh,
+                !pulling,
+                onRequestSchedule,
+            )
+        }
+    }
     item { BackButton(onBack) }
 }
 
-internal fun shouldOfferSchedulePull(day: ScheduleDay?, connectionReady: Boolean): Boolean =
-    day == null && connectionReady
+/** 无论本地是否已有缓存，只要在线就允许强制拉取并覆盖旧课表。 */
+internal fun shouldOfferSchedulePull(day: ScheduleDay?, connectionReady: Boolean): Boolean = connectionReady
+
+/** 任一端的课表任务正在运行时，本端按钮禁用，避免重复提交。 */
+internal fun schedulePullActionEnabled(state: ConnectionManager.SchedulePullState): Boolean =
+    state !is ConnectionManager.SchedulePullState.Pulling
 
 @Composable
 internal fun ScheduleDatePickerScreen(
@@ -1310,6 +1342,7 @@ internal data class HomeCourseContent(
     val subject: String,
     val timeLayoutItem: String?,
     val targetsNextLesson: Boolean,
+    val isAvailable: Boolean,
 )
 
 /**
@@ -1321,17 +1354,21 @@ internal fun homeCourseContent(snapshot: ClassStateSnapshot?): HomeCourseContent
         Protocol.STATE_BREAKING,
         Protocol.STATE_PREPARE_CLASS,
     )
+    val subject = if (targetsNextLesson) snapshot?.nextClassSubject else snapshot?.currentSubject
+    val availableSubject = subject?.trim()?.takeIf(String::isNotEmpty)
     return if (targetsNextLesson) {
         HomeCourseContent(
-            subject = snapshot?.nextClassSubject ?: "暂无下一节",
+            subject = availableSubject ?: "暂无下一节",
             timeLayoutItem = snapshot?.nextClassTimeLayoutItem,
             targetsNextLesson = true,
+            isAvailable = availableSubject != null,
         )
     } else {
         HomeCourseContent(
-            subject = snapshot?.currentSubject ?: "暂无课程",
+            subject = availableSubject ?: "暂无课程",
             timeLayoutItem = snapshot?.currentTimeLayoutItem,
             targetsNextLesson = false,
+            isAvailable = availableSubject != null,
         )
     }
 }

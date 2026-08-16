@@ -55,6 +55,14 @@ $env:JAVA_HOME = 'E:\Android Studio\jbr'
 
 一键脚本：`wearos/dev.ps1 run`（构建 + 安装 + 启动）。
 
+如果源码位于云盘、NAS 按需同步盘或其他会把文件转换为重解析点的目录，Gradle 可能报告 `Cannot snapshot ...: not a regular file`。在不入库的 `wearos/local.properties` 中配置普通本地磁盘目录即可把所有 Gradle 构建产物移出同步盘：
+
+```properties
+remoteci.buildDir=C:/Users/<用户名>/AppData/Local/RemoteCI/wearos-build
+```
+
+也可以设置环境变量 `REMOTECI_WEAROS_BUILD_DIR`，或在命令行传入 `-Premoteci.buildDir=<目录>`。配置后 Debug APK 位于 `<目录>/app/outputs/apk/debug/app-debug.apk`，`wearos/dev.ps1 run` 会自动使用该位置；CI 未配置时仍保留默认的 `app/build` 路径。
+
 ### 2.4 模拟器网络说明
 
 - 模拟器内访问宿主机使用 `http://10.0.2.2:8080`（已在手表端默认设置）。

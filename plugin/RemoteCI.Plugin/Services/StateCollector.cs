@@ -35,6 +35,7 @@ public sealed class StateCollector
 
     public event Action<ClassStateSnapshot>? SnapshotPushed;
     public event Action<ScheduleBundle>? SchedulePushed;
+    public event Action<string>? SchedulePushFailed;
     public event Action<ClassEvent>? EventOccurred;
 
     public void Start()
@@ -130,6 +131,7 @@ public sealed class StateCollector
         catch (Exception ex)
         {
             _logger.LogError(ex, "生成或推送七日课表失败");
+            SchedulePushFailed?.Invoke(ex.Message);
         }
     }
 

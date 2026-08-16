@@ -207,7 +207,12 @@ public sealed class LanServerTests
         new PluginSettings { CloudServerUrl = "https://cloud.example.com" },
         mirror ?? new AccountMirror(TempPath("accounts.json")),
         commands: null,
-        requestFreshSchedule: () => { },
+        requestScheduleSync: request => new ScheduleSyncStatus
+        {
+            TaskId = request.TaskId,
+            Source = request.Source,
+            State = ScheduleSyncTaskState.Running,
+        },
         snapshotProvider: snapshotProvider ?? (() => null),
         scheduleProvider: () => null,
         NullLogger<LanServer>.Instance,

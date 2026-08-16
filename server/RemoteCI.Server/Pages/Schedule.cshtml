@@ -2,12 +2,32 @@
 @model ScheduleModel
 @{ ViewData["Title"] = "七日课表"; }
 <div class="page-head"><div><p class="eyebrow">指定日期临时课表</p><h1>未来七日换课</h1></div><span class="status @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "可执行" : "插件离线")</span></div>
+<section class="panel">
+    <h2>从插件拉取课表</h2>
+    <p class="muted">立即连接在线插件重新生成当前七日课表；拉取成功后会强制覆盖服务端缓存。</p>
+    <form method="post" asp-page-handler="Pull" class="stack" data-schedule-pull-form>
+        <button type="submit" disabled="@(!Model.PluginOnline || Model.CurrentTask is not null)" data-schedule-pull-button>
+            @(Model.CurrentTask is null ? "立即向插件拉取课表" : "已有课表任务正在执行")
+        </button>
+        @if (Model.CurrentTask is { } task)
+        {
+            <div class="schedule-pull-progress" data-schedule-pull-progress aria-live="polite">
+                <progress></progress>
+                <span>@task.Message，请勿重复操作。</span>
+            </div>
+        }
+        else
+        {
+            <div class="schedule-pull-progress" data-schedule-pull-progress hidden aria-live="polite">
+                <progress></progress>
+                <span>正在连接插件并拉取课表，请稍候…</span>
+            </div>
+        }
+    </form>
+</section>
 @if (Model.Bundle is null)
 {
     <div class="notice warning">插件尚未同步七日课表。</div>
-    <form method="post" asp-page-handler="Pull" class="stack">
-        <button type="submit" disabled="@(!Model.PluginOnline)">立即向插件拉取课表</button>
-    </form>
 }
 else
 {

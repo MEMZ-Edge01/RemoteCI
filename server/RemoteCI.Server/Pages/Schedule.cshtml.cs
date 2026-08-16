@@ -13,12 +13,14 @@ public sealed class ScheduleModel(
     UserManager<AppUser> users,
     IStateStore state,
     PeerRegistry peers,
-    SchedulePullSettings pullSettings) : WebPageModel(users)
+    SchedulePullSettings pullSettings,
+    ScheduleSyncService scheduleSync) : WebPageModel(users)
 {
     [BindProperty]
     public ScheduleInput Input { get; set; } = new();
     public ScheduleBundle? Bundle { get; private set; }
     public bool PluginOnline => peers.HasPlugin;
+    public ScheduleSyncStatus? CurrentTask => scheduleSync.Current;
     [BindProperty]
     public SchedulePullInterval PullInterval { get; set; }
 
@@ -33,10 +35,11 @@ public sealed class ScheduleModel(
     public async Task<IActionResult> OnPostPullAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageSchedule) is { } denied) return denied;
-        var sent = await peers.RequestSchedulePullAsync(ct);
-        TempData[sent ? "Message" : "Error"] = sent
-            ? "已请求插件重新生成七日课表。"
-            : "插件未在线，无法拉取课表。";
+        var status = await scheduleSync.StartAndWaitAsync(ScheduleSyncSource.WebUi, ct);
+        if (status.State == ScheduleSyncTaskState.Completed)
+            TempData["Message"] = "已从插件拉取最新课表，并强制覆盖服务端缓存。";
+        else
+            TempData["Error"] = status.Message;
         return RedirectToPage();
     }
 

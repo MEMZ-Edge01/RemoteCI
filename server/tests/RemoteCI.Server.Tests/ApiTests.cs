@@ -369,6 +369,29 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
             Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync(path)).StatusCode);
     }
 
+    [Theory]
+    [InlineData("", "正文")]
+    [InlineData("标题", "")]
+    [InlineData("", "")]
+    public async Task RazorWebUi_NotificationAllowsEmptyTitleOrMessage(string title, string message)
+    {
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var notificationHtml = await browser.GetStringAsync("/Notifications");
+
+        var response = await PostRazorFormAsync(
+            browser,
+            "/Notifications",
+            notificationHtml,
+            new Dictionary<string, string>
+            {
+                ["Input.Title"] = title,
+                ["Input.Message"] = message,
+            });
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+    }
+
     [Fact]
     public async Task RazorWebUi_SchedulePageExposesManualPullAndIntervalOptions()
     {
@@ -377,6 +400,8 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var scheduleHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Schedule"));
 
         Assert.Contains("立即向插件拉取课表", scheduleHtml);
+        Assert.Contains("强制覆盖服务端缓存", scheduleHtml);
+        Assert.Contains("data-schedule-pull-progress", scheduleHtml);
         Assert.Contains("每 15 分钟", scheduleHtml);
         Assert.Contains("每小时", scheduleHtml);
         Assert.Contains("每 6 小时", scheduleHtml);
@@ -392,6 +417,45 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         using var scope = _factory.Services.CreateScope();
         var settings = scope.ServiceProvider.GetRequiredService<SchedulePullSettings>();
         Assert.Equal(SchedulePullInterval.Hourly, await settings.GetIntervalAsync());
+    }
+
+    [Fact]
+    public async Task RazorWebUi_HidesInactiveSchedulePullProgress()
+    {
+        using var browser = CreateBrowserClient();
+        var css = await browser.GetStringAsync("/app.css");
+
+        Assert.Contains(".schedule-pull-progress[hidden]", css);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_ShowsGlobalScheduleTaskAndDisablesDuplicatePull()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var tracker = scope.ServiceProvider.GetRequiredService<ScheduleSyncTaskTracker>();
+        var running = tracker.TryBegin(ScheduleSyncRequest.Create(ScheduleSyncSource.Automatic));
+        try
+        {
+            using var browser = CreateBrowserClient();
+            await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+            var scheduleHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Schedule"));
+
+            Assert.Contains("已有课表任务正在执行", scheduleHtml);
+            Assert.Contains("请勿重复操作", scheduleHtml);
+            Assert.Contains("disabled", scheduleHtml);
+        }
+        finally
+        {
+            tracker.Observe(new ScheduleSyncStatus
+            {
+                TaskId = running.TaskId,
+                Source = running.Source,
+                State = ScheduleSyncTaskState.Failed,
+                Message = "测试清理",
+                StartedAt = running.StartedAt,
+                FinishedAt = DateTimeOffset.UtcNow,
+            });
+        }
     }
 
     [Fact]
