@@ -212,6 +212,10 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     public async Task UserCanListAndRevokeOwnDeviceSession()
     {
         var auth = await _factory.LoginAsync();
+        var socketClient = _factory.Server.CreateWebSocketClient();
+        using var connectedWatch = await socketClient.ConnectAsync(
+            new Uri(_factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(auth.AccessToken)}"),
+            CancellationToken.None);
         var sessionsResponse = await _client.SendAsync(TestWebApplicationFactory.Bearer(
             HttpMethod.Get, "/api/me/sessions", auth.AccessToken));
         sessionsResponse.EnsureSuccessStatusCode();
@@ -221,6 +225,7 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var revoke = await _client.SendAsync(TestWebApplicationFactory.Bearer(
             HttpMethod.Delete, $"/api/me/sessions/{auth.DeviceSessionId}", auth.AccessToken));
         Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
+        await AssertWebSocketClosedAsync(connectedWatch);
         Assert.Equal(HttpStatusCode.Unauthorized, (await _client.SendAsync(
             TestWebApplicationFactory.Bearer(HttpMethod.Get, "/api/me", auth.AccessToken))).StatusCode);
     }
@@ -365,8 +370,100 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         using var browser = CreateBrowserClient();
         await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
 
-        foreach (var path in new[] { "/", "/Account", "/Users", "/Schedule", "/Notifications" })
+        foreach (var path in new[] { "/", "/Account", "/Users", "/Schedule", "/Control", "/SystemConfig" })
             Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync(path)).StatusCode);
+        var accountHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Account"));
+        Assert.DoesNotContain("<h2>系统更新", accountHtml);
+        var configHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/SystemConfig"));
+        Assert.Contains("<span>系统配置</span>", configHtml);
+        Assert.Contains("系统更新", configHtml);
+        Assert.Contains("自动备份", configHtml);
+        Assert.Contains("本地备份", configHtml);
+        Assert.Contains("导出加密配置", configHtml);
+        var usersHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Users"));
+        Assert.Contains("角色配置", usersHtml);
+        Assert.Contains("创建角色", usersHtml);
+        Assert.Contains("""class="user-account-table role-summary-table""", usersHtml);
+        Assert.Contains("""<dialog id="role-create-dialog""", usersHtml);
+        var roleTableStart = usersHtml.IndexOf("""class="user-account-table role-summary-table""", StringComparison.Ordinal);
+        var roleTableEnd = usersHtml.IndexOf("</table>", roleTableStart, StringComparison.Ordinal);
+        Assert.True(roleTableStart >= 0 && roleTableEnd > roleTableStart);
+        var roleTableHtml = usersHtml[roleTableStart..roleTableEnd];
+        Assert.DoesNotContain("默认权限", roleTableHtml);
+        Assert.DoesNotContain("<form", roleTableHtml);
+        Assert.Contains("data-backup-settings-form", configHtml);
+        Assert.Contains("data-backup-cadence", configHtml);
+        Assert.Contains(">每小时</option>", configHtml);
+        Assert.DoesNotContain("每小时整点", configHtml);
+        Assert.Contains("data-backup-weekday hidden", configHtml);
+
+        var oldNotifications = await browser.GetAsync("/Notifications");
+        Assert.Equal(HttpStatusCode.Redirect, oldNotifications.StatusCode);
+        Assert.Equal("/Control#send-notification", oldNotifications.Headers.Location?.OriginalString);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_ControlPageContainsActionsNotificationAndLiveVolume()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var store = scope.ServiceProvider.GetRequiredService<IStateStore>();
+            store.SaveSnapshot(new ClassStateSnapshot
+            {
+                IsNotificationPlaying = true,
+                IsMainMenuVisible = false,
+                IsSleepAvailable = true,
+                IsHibernateAvailable = true,
+                IsVolumeControlAvailable = true,
+                VolumePercent = 42,
+                IsMuted = false,
+            });
+            store.SaveExtensions(new[]
+            {
+                new ExtensionDefinition
+                {
+                    Id = "demo.lock",
+                    DisplayName = "锁定教室",
+                    RequiredPermission = UserPermissions.SystemControl,
+                    Parameters =
+                    [
+                        new ExtensionParameter
+                        {
+                            Key = "reason",
+                            Label = "原因",
+                            Type = ExtensionParameterType.Text,
+                            Required = true,
+                        },
+                    ],
+                },
+            });
+        }
+
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var html = WebUtility.HtmlDecode(await browser.GetStringAsync("/Control"));
+
+        Assert.Contains("<span>控制</span>", html);
+        Assert.Contains(@"href=""/Control""", html);
+        Assert.DoesNotContain("nav-submenu", html);
+        Assert.DoesNotContain(@"href=""/Notifications""", html);
+        Assert.Contains(@"id=""send-notification""", html);
+        Assert.Contains("发送并等待回执", html);
+        Assert.Contains("老师来了", html);
+        Assert.Contains("清除当前提醒", html);
+        Assert.Contains("显示主菜单", html);
+        Assert.Matches(@"name=""visible""\s+value=""true""", html);
+        Assert.Contains("当前音量 42%", html);
+        Assert.Matches(@"name=""muted""\s+value=""true""", html);
+        Assert.Contains("data-volume-form", html);
+        Assert.Contains("data-volume-slider", html);
+        Assert.DoesNotContain("设置音量", html);
+        Assert.Contains("关机", html);
+        Assert.Contains("重启", html);
+        Assert.Contains("睡眠", html);
+        Assert.Contains("休眠", html);
+        Assert.Contains("锁定教室", html);
+        Assert.Contains(@"name=""ExtensionInputs[0].Value""", html);
     }
 
     [Theory]
@@ -377,12 +474,12 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     {
         using var browser = CreateBrowserClient();
         await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
-        var notificationHtml = await browser.GetStringAsync("/Notifications");
+        var controlHtml = await browser.GetStringAsync("/Control");
 
         var response = await PostRazorFormAsync(
             browser,
-            "/Notifications",
-            notificationHtml,
+            "/Control?handler=Notification",
+            controlHtml,
             new Dictionary<string, string>
             {
                 ["Input.Title"] = title,
@@ -395,17 +492,73 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task RazorWebUi_SchedulePageExposesManualPullAndIntervalOptions()
     {
+        var subjectId = Guid.NewGuid();
+        using (var setupScope = _factory.Services.CreateScope())
+        {
+            setupScope.ServiceProvider.GetRequiredService<IStateStore>().SaveSchedule(new ScheduleBundle
+            {
+                FromDate = "2026-08-17",
+                Days =
+                [
+                    new ScheduleDay
+                    {
+                        Date = "2026-08-17",
+                        Revision = "revision-1",
+                        ClassPlanName = "测试课表",
+                        Enabled = true,
+                        Courses =
+                        [
+                            new CourseEntry
+                            {
+                                Index = 0,
+                                Label = "第一节",
+                                SubjectId = subjectId,
+                                Subject = "信息技术实践课程",
+                                StartTime = "08:00",
+                                EndTime = "08:45",
+                                Enabled = true,
+                            },
+                        ],
+                    },
+                ],
+                Subjects = [new SubjectEntry { Id = subjectId, Name = "信息技术实践课程" }],
+            });
+        }
+
         using var browser = CreateBrowserClient();
         await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
         var scheduleHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Schedule"));
 
-        Assert.Contains("立即向插件拉取课表", scheduleHtml);
+        Assert.Contains("立即拉取课表", scheduleHtml);
+        Assert.Contains("class=\"schedule-pull-layout\"", scheduleHtml);
+        Assert.Contains("class=\"schedule-pull-button\"", scheduleHtml);
+        Assert.Contains("class=\"schedule-submit-button\"", scheduleHtml);
+        Assert.Contains("<span>课表</span>", scheduleHtml);
         Assert.Contains("强制覆盖服务端缓存", scheduleHtml);
         Assert.Contains("data-schedule-pull-progress", scheduleHtml);
+        Assert.Contains("""class="schedule-table""", scheduleHtml);
+        Assert.Contains("""class="schedule-period-heading">节次""", scheduleHtml);
+        Assert.Contains("<strong>周一</strong>", scheduleHtml);
+        var scheduleTableStart = scheduleHtml.IndexOf("""<table class="schedule-table">""", StringComparison.Ordinal);
+        var scheduleTableEnd = scheduleHtml.IndexOf("</table>", scheduleTableStart, StringComparison.Ordinal);
+        Assert.True(scheduleTableStart >= 0 && scheduleTableEnd > scheduleTableStart);
+        var scheduleTableHtml = scheduleHtml[scheduleTableStart..scheduleTableEnd];
+        Assert.Single(Regex.Matches(scheduleTableHtml, "第一节").OfType<Match>());
+        Assert.Contains("""class="schedule-course-name""", scheduleTableHtml);
+        Assert.Contains("信息技术实践课程", scheduleTableHtml);
+        Assert.Contains("08:00–08:45", scheduleTableHtml);
         Assert.Contains("每 15 分钟", scheduleHtml);
         Assert.Contains("每小时", scheduleHtml);
         Assert.Contains("每 6 小时", scheduleHtml);
         Assert.Contains("每天", scheduleHtml);
+        Assert.Contains(">交换</option>", scheduleHtml);
+        Assert.Contains(">替换</option>", scheduleHtml);
+        Assert.DoesNotContain(">Exchange</option>", scheduleHtml);
+        Assert.DoesNotContain(">Replace</option>", scheduleHtml);
+        Assert.Contains("data-schedule-change-form", scheduleHtml);
+        Assert.Contains("data-exchange-field", scheduleHtml);
+        Assert.Contains("data-replace-field hidden", scheduleHtml);
+        Assert.Matches(@"data-replace-field hidden[\s\S]*?<select[^>]+disabled", scheduleHtml);
 
         var response = await PostRazorFormAsync(
             browser,
@@ -426,6 +579,16 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var css = await browser.GetStringAsync("/app.css");
 
         Assert.Contains(".schedule-pull-progress[hidden]", css);
+        Assert.Contains(".schedule-table { width: 100%; min-width: 1120px; table-layout: fixed", css);
+        Assert.Contains(".schedule-period-heading, .schedule-period-cell { width: 90px; white-space: nowrap; }", css);
+        Assert.Contains(".schedule-course-name, .schedule-course-time { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }", css);
+        Assert.Contains(".schedule-pull-layout { display: grid; grid-template-columns: minmax(0,1fr) auto", css);
+        Assert.Contains(".schedule-pull-button { width: auto; min-width: 240px; justify-self: end; }", css);
+        Assert.Contains(".schedule-change-form .schedule-submit-button { grid-column: 3; width: 100%; }", css);
+        Assert.Contains(".backup-list .row-actions { flex: 0 0 auto; align-items: center; flex-direction: row", css);
+        var script = await browser.GetStringAsync("/app.js");
+        Assert.Contains("[data-backup-settings-form]", script);
+        Assert.Contains("weekdayField.hidden = !weekly", script);
     }
 
     [Fact]
@@ -459,24 +622,22 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task RazorWebUi_CheckUpdateDoesNotValidateUntouchedPasswordForm()
+    public async Task RazorWebUi_SystemConfigHostsUpdateActions()
     {
         using var browser = CreateBrowserClient();
         await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
-        var accountHtml = await browser.GetStringAsync("/Account");
+        var systemConfigHtml = await browser.GetStringAsync("/SystemConfig");
         var previousRuntime = Environment.GetEnvironmentVariable("REMOTECI_RUNTIME");
 
         try
         {
             // 让处理器走无需访问 GitHub 的 fnOS 分支，只验证真实 Razor 绑定与 ModelState 行为。
             Environment.SetEnvironmentVariable("REMOTECI_RUNTIME", "fnos");
-            var response = await PostRazorFormAsync(browser, "/Account?handler=CheckUpdate", accountHtml);
+            var response = await PostRazorFormAsync(browser, "/SystemConfig?handler=CheckUpdate", systemConfigHtml);
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             var responseHtml = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
             Assert.Contains("由fnOS应用商店管理", responseHtml);
-            Assert.DoesNotContain("<li>The CurrentPassword field is required.</li>", responseHtml);
-            Assert.DoesNotContain("<li>The NewPassword field is required.</li>", responseHtml);
         }
         finally
         {
@@ -490,10 +651,11 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         using var browser = CreateBrowserClient();
         await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
 
-        var response = await browser.GetAsync("/Account");
+        var response = await browser.GetAsync("/SystemConfig");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var html = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
+        Assert.Contains("系统配置", html);
         Assert.Contains(UpdateService.DevelopmentManagedMessage, html);
         Assert.DoesNotContain("强制更新（同版本重新下载并覆盖安装）", html);
     }
@@ -552,19 +714,88 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task RazorWebUi_UsersPageUsesSummaryRowsAndRoleAwareEditDialogs()
+    {
+        var admin = await _factory.LoginAsync();
+        var create = await _client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "dialog.student",
+                DisplayName = "弹窗学生账号",
+                Password = "Dialog-Student-Password-2026",
+                GrantedPermissions = UserPermissions.AccessWebUi | UserPermissions.ManageSchedule,
+            }));
+        create.EnsureSuccessStatusCode();
+
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var html = WebUtility.HtmlDecode(await browser.GetStringAsync("/Users"));
+
+        Assert.Contains("<table class=\"user-account-table\">", html);
+        Assert.Contains("弹窗学生账号", html);
+        Assert.Contains("<code>dialog.student</code>", html);
+        Assert.Contains("data-user-edit-open=", html);
+        Assert.Contains("data-role-select", html);
+        Assert.Contains(">学生</option>", html);
+        Assert.Contains(">管理员</option>", html);
+
+        var tableStart = html.IndexOf("<table class=\"user-account-table\">", StringComparison.Ordinal);
+        var tableEnd = html.IndexOf("</table>", tableStart, StringComparison.Ordinal);
+        Assert.True(tableStart >= 0 && tableEnd > tableStart);
+        var tableHtml = html[tableStart..(tableEnd + "</table>".Length)];
+        Assert.DoesNotContain("handler=Update", tableHtml);
+        Assert.DoesNotContain("附加权限", tableHtml);
+        Assert.DoesNotContain("重置密码", tableHtml);
+        var studentRow = Regex.Match(tableHtml, @"<tr>[\s\S]*?<code>dialog\.student</code>[\s\S]*?</tr>");
+        var adminRow = Regex.Match(tableHtml, @"<tr>[\s\S]*?<code>admin</code>[\s\S]*?</tr>");
+        Assert.True(studentRow.Success);
+        Assert.True(adminRow.Success);
+        Assert.Contains("handler=Delete", studentRow.Value);
+        Assert.Contains("删除", studentRow.Value);
+        Assert.DoesNotContain("handler=Delete", adminRow.Value);
+
+        var firstDialog = html.IndexOf("<dialog", tableEnd, StringComparison.Ordinal);
+        Assert.True(firstDialog > tableEnd);
+        Assert.True(html.IndexOf("重置密码", firstDialog, StringComparison.Ordinal) > firstDialog);
+
+        var adminIdIndex = html.LastIndexOf("ID：admin", StringComparison.Ordinal);
+        var adminDialogStart = html.LastIndexOf("<dialog", adminIdIndex, StringComparison.Ordinal);
+        var adminDialogEnd = html.IndexOf("</dialog>", adminIdIndex, StringComparison.Ordinal);
+        Assert.True(adminDialogStart >= 0 && adminDialogEnd > adminDialogStart);
+        var adminDialog = html[adminDialogStart..(adminDialogEnd + "</dialog>".Length)];
+        Assert.Contains("管理员默认拥有全部权限，附加权限不可修改。", adminDialog);
+        Assert.Matches("data-role-permissions[^>]*\\shidden(?:=|\\s|>)", adminDialog);
+        Assert.Matches("name=\\\"Edit.AccessWebUi\\\"[^>]*\\sdisabled(?:=|\\s|/|>)", adminDialog);
+
+        var studentIdIndex = html.LastIndexOf("ID：dialog.student", StringComparison.Ordinal);
+        var studentDialogStart = html.LastIndexOf("<dialog", studentIdIndex, StringComparison.Ordinal);
+        var studentDialogEnd = html.IndexOf("</dialog>", studentIdIndex, StringComparison.Ordinal);
+        Assert.True(studentDialogStart >= 0 && studentDialogEnd > studentDialogStart);
+        var studentDialog = html[studentDialogStart..(studentDialogEnd + "</dialog>".Length)];
+        Assert.Contains("data-role-permissions", studentDialog);
+        Assert.DoesNotContain("handler=Delete", studentDialog);
+        var studentPermission = Regex.Match(studentDialog, "<input[^>]*name=\\\"Edit.AccessWebUi\\\"[^>]*>");
+        Assert.True(studentPermission.Success);
+        Assert.DoesNotContain("disabled", studentPermission.Value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task RazorWebUi_PluginActionsLiveOnOverviewAndRetryReportsResult()
     {
         using var browser = CreateBrowserClient();
         await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
 
         var usersHtml = await browser.GetStringAsync("/Users");
-        Assert.DoesNotContain("生成插件配对码", usersHtml);
+        Assert.DoesNotContain("生成配对码", usersHtml);
         Assert.Contains("<label>ID<input", usersHtml);
-        Assert.Contains("<label>用户名<input", usersHtml);
+        Assert.Contains("<label>账号名<input", usersHtml);
         Assert.Contains("ID：admin", usersHtml);
 
         var overviewHtml = await browser.GetStringAsync("/");
-        Assert.Contains("生成插件配对码", overviewHtml);
+        Assert.Contains("生成配对码", overviewHtml);
         Assert.Contains("重新检测连接", overviewHtml);
         Assert.DoesNotContain("去重试连接</a>", overviewHtml);
 
@@ -582,6 +813,75 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         Assert.Contains("使用前持续有效", pairCodeHtml);
         Assert.Contains("data-copy-value", pairCodeHtml);
         Assert.Contains("bi-copy", pairCodeHtml);
+    }
+
+    [Fact]
+    public async Task TeacherComingPermission_IsIndependentFromNotificationPermission()
+    {
+        var admin = await _factory.LoginAsync();
+        var create = await _client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "teacher.alert",
+                DisplayName = "老师来了权限测试",
+                Password = "Teacher-Alert-Password-2026",
+                GrantedPermissions = UserPermissions.AccessWebUi | UserPermissions.TeacherComing,
+            }));
+        create.EnsureSuccessStatusCode();
+        var login = await LoginAsync("teacher.alert", "Teacher-Alert-Password-2026");
+
+        var teacherComing = await _client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/commands",
+            login.AccessToken,
+            new CommandMessage { Command = CommandKind.TeacherComing }));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, teacherComing.StatusCode);
+
+        var notification = await _client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/commands",
+            login.AccessToken,
+            new CommandMessage
+            {
+                Command = CommandKind.SendNotification,
+                Notification = new NotificationRequest { Title = "x", Message = "x" },
+            }));
+        Assert.Equal(HttpStatusCode.Forbidden, notification.StatusCode);
+
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, "teacher.alert", "Teacher-Alert-Password-2026");
+        var html = WebUtility.HtmlDecode(await browser.GetStringAsync("/Control"));
+        Assert.Contains("老师来了", html);
+        Assert.DoesNotContain(@"id=""send-notification""", html);
+        Assert.DoesNotContain("清除当前提醒", html);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_RoleDefaultsDriveControlNavigation()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var role = await scope.ServiceProvider.GetRequiredService<AccountRoleService>()
+                .CreateAsync("Navigation default", UserPermissions.TeacherComing);
+            await scope.ServiceProvider.GetRequiredService<IdentityCoordinator>().CreateUserAsync(new CreateUserRequest
+            {
+                Username = "role.navigation",
+                DisplayName = "Role navigation",
+                Password = "Role-Navigation-Password-2026",
+                RoleId = role.Id,
+            });
+        }
+
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, "role.navigation", "Role-Navigation-Password-2026");
+        var accountHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Account"));
+        Assert.Contains("<span>控制</span>", accountHtml);
+        var control = await browser.GetAsync("/Control");
+        Assert.Equal(HttpStatusCode.OK, control.StatusCode);
+        Assert.Contains("老师来了", WebUtility.HtmlDecode(await control.Content.ReadAsStringAsync()));
     }
 
     [Fact]
@@ -603,7 +903,7 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         using var browser = CreateBrowserClient();
         await LoginWebUiAsync(browser, "web.student", "Web-Student-Password-2026");
         Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync("/Account")).StatusCode);
-        foreach (var path in new[] { "/", "/Users", "/Schedule", "/Notifications" })
+        foreach (var path in new[] { "/", "/Users", "/Schedule", "/Control", "/Notifications", "/SystemConfig" })
         {
             var response = await browser.GetAsync(path);
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
@@ -846,6 +1146,11 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var credential = Assert.Single(credentials);
         Assert.True(credential.Enabled);
 
+        var connectedSocketClient = factory.Server.CreateWebSocketClient();
+        using var connectedPlugin = await connectedSocketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(pluginToken)}"),
+            CancellationToken.None);
+
         // 未登录与仅持有 ManageUsers 的普通用户均不可访问。
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/plugins/credentials")).StatusCode);
         var create = await client.SendAsync(TestWebApplicationFactory.Bearer(
@@ -870,6 +1175,7 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var revoke = await client.SendAsync(TestWebApplicationFactory.Bearer(
             HttpMethod.Delete, $"/api/plugins/credentials/{credential.Id}", admin.AccessToken));
         Assert.Equal(HttpStatusCode.NoContent, revoke.StatusCode);
+        await AssertWebSocketClosedAsync(connectedPlugin);
 
         var after = await client.SendAsync(TestWebApplicationFactory.Bearer(
             HttpMethod.Get, "/api/plugins/credentials", admin.AccessToken));
@@ -890,7 +1196,11 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var databasePath = Path.Combine(Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "credential-ui.db");
         await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
         var client = factory.CreateClient();
-        await factory.GetPluginTokenAsync(); // 制造一条插件凭证（名称“ClassIsland 插件”）。
+        var pluginToken = await factory.GetPluginTokenAsync(); // 制造一条插件凭证（名称“ClassIsland 插件”）。
+        var connectedSocketClient = factory.Server.CreateWebSocketClient();
+        using var connectedPlugin = await connectedSocketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(pluginToken)}"),
+            CancellationToken.None);
 
         using var browser = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -912,6 +1222,7 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         }
         var revoke = await PostRazorFormAsync(browser, $"/?handler=RevokeCredential&id={credentialId}", overview);
         Assert.Equal(HttpStatusCode.Redirect, revoke.StatusCode);
+        await AssertWebSocketClosedAsync(connectedPlugin);
 
         var afterHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/"));
         Assert.Contains("已吊销", afterHtml);
@@ -1018,6 +1329,19 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         });
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<AuthResponse>())!;
+    }
+
+    private static async Task AssertWebSocketClosedAsync(WebSocket socket)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var buffer = new byte[256 * 1024];
+        while (true)
+        {
+            var result = await socket.ReceiveAsync(buffer, timeout.Token);
+            if (result.MessageType != WebSocketMessageType.Close) continue;
+            Assert.Equal(WebSocketCloseStatus.PolicyViolation, result.CloseStatus);
+            return;
+        }
     }
 
     private static async Task<AuthResponse> LoginViaAsync(HttpClient client, string username, string password)

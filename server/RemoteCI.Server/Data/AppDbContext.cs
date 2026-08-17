@@ -11,6 +11,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<PluginCredential> PluginCredentials => Set<PluginCredential>();
     public DbSet<PluginPairingCode> PluginPairingCodes => Set<PluginPairingCode>();
     public DbSet<SystemMetadata> SystemMetadata => Set<SystemMetadata>();
+    public DbSet<AccountRole> AccountRoles => Set<AccountRole>();
+    public DbSet<BackupConfiguration> BackupConfigurations => Set<BackupConfiguration>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -20,6 +22,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         {
             entity.Property(x => x.DisplayName).HasMaxLength(40);
             entity.HasIndex(x => x.Version);
+            entity.HasOne(x => x.RoleDefinition).WithMany(x => x.Users).HasForeignKey(x => x.RoleDefinitionId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<AccountRole>(entity =>
+        {
+            entity.Property(x => x.Name).HasMaxLength(40);
+            entity.Property(x => x.NormalizedName).HasMaxLength(40);
+            entity.HasIndex(x => x.NormalizedName).IsUnique();
+        });
+        builder.Entity<BackupConfiguration>(entity =>
+        {
+            entity.Property(x => x.LastError).HasMaxLength(1000);
         });
         builder.Entity<DeviceSession>(entity =>
         {

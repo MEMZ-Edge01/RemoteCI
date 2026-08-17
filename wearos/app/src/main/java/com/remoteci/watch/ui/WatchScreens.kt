@@ -558,9 +558,10 @@ internal fun ControlScreen(
     onRunExtension: (ExtensionDefinition) -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = stringResource(R.string.control_title)) {
+    val canTeacherComing = user?.has(Protocol.PERMISSION_TEACHER_COMING) == true
     val canNotify = user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true
     val canControlSystem = user?.has(Protocol.PERMISSION_SYSTEM_CONTROL) == true
-    item { ActionButton(stringResource(R.string.teacher_coming), Icons.Rounded.School, canNotify, onTeacherComing) }
+    item { ActionButton(stringResource(R.string.teacher_coming), Icons.Rounded.School, canTeacherComing, onTeacherComing) }
     item { ActionButton(stringResource(R.string.send_notification), Icons.Rounded.EditNotifications, canNotify, onOpenNotification) }
     if (shouldShowClearNotifications(snapshot)) item {
         ActionButton(stringResource(R.string.clear_notifications), Icons.Rounded.NotificationsOff, canNotify, onClearNotifications)
@@ -1150,7 +1151,8 @@ private data class HomeAction(val label: String, val icon: ImageVector, val onCl
 internal fun homeActionLabels(user: UserProfile?): List<String> = buildList {
     if (user?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) add("课表")
     if (user?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) add("换课")
-    if (user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true ||
+    if (user?.has(Protocol.PERMISSION_TEACHER_COMING) == true ||
+        user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true ||
         user?.has(Protocol.PERMISSION_SYSTEM_CONTROL) == true) add("控制")
     add("设置")
 }

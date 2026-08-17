@@ -11,6 +11,9 @@ public sealed class ServerOptions
     public TimeSpan AccessTokenTtl { get; set; } = TimeSpan.FromHours(1);
     public TimeSpan DeviceSessionTtl { get; set; } = TimeSpan.FromDays(30);
 
+    /// <summary>在线 WebSocket 连接重新查询持久化授权状态的兜底周期。</summary>
+    public TimeSpan ConnectionAuthorizationRefreshInterval { get; set; } = TimeSpan.FromMinutes(1);
+
     /// <summary>认证端点（登录/刷新/插件配对）每个来源 IP 每分钟的请求上限。</summary>
     public int AuthRateLimitPerMinute { get; set; } = 20;
 

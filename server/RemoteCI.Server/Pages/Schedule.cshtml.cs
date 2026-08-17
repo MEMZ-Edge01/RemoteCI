@@ -85,8 +85,8 @@ public sealed class ScheduleModel(
                 Date = selection[0],
                 Mode = Input.Mode,
                 SourceIndex = sourceIndex,
-                TargetIndex = Input.TargetIndex,
-                ReplacementSubjectId = Input.ReplacementSubjectId,
+                TargetIndex = Input.Mode == ScheduleChangeMode.Exchange ? Input.TargetIndex : null,
+                ReplacementSubjectId = Input.Mode == ScheduleChangeMode.Replace ? Input.ReplacementSubjectId : null,
                 ExpectedRevision = selection[1],
             },
         }, TimeSpan.FromSeconds(15), ct);

@@ -1,0 +1,176 @@
+@page
+@model ControlModel
+@{
+    ViewData["Title"] = "控制";
+    var snapshot = Model.Snapshot;
+    var mainMenuVisible = snapshot?.IsMainMenuVisible ?? true;
+    var volumeAvailable = snapshot?.IsVolumeControlAvailable == true;
+}
+<div class="page-head">
+    <div>
+        <p class="eyebrow">ClassIsland 远程操作</p>
+        <h1>控制</h1>
+        <p class="muted">这里汇总手表控制页中的操作，命令仅在插件在线且账号具有对应权限时执行。</p>
+    </div>
+    <span class="status @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "插件在线" : "插件离线")</span>
+</div>
+
+<div class="control-grid">
+    @if (Model.CanTeacherComing)
+    {
+        <section class="panel control-card" id="teacher-coming">
+            <div class="control-card-head">
+                <span class="feature-icon"><i class="bi bi-mortarboard" aria-hidden="true"></i></span>
+                <div><h2>老师来了</h2><p class="muted">向插件发送单一指令，由插件显示强调提醒并在 1 秒后自动清除。</p></div>
+            </div>
+            <form method="post" asp-page-handler="TeacherComing">
+                <button type="submit" disabled="@(!Model.PluginOnline)"><i class="bi bi-bell" aria-hidden="true"></i>发送快捷提醒</button>
+            </form>
+        </section>
+    }
+
+    @if (Model.CanSendNotifications)
+    {
+        <section class="panel control-card control-card-full" id="send-notification">
+            <div class="control-card-head">
+                <span class="feature-icon"><i class="bi bi-send" aria-hidden="true"></i></span>
+                <div><h2>发送通知</h2><p class="muted">向 ClassIsland 发送自定义通知，成功后广播给在线手表。</p></div>
+            </div>
+            <div class="notification-control-grid">
+                <form method="post" asp-page-handler="Notification" class="stack">
+                    <label>标题<input asp-for="Input.Title" maxlength="60" placeholder="RemoteCI 通知" /></label>
+                    <p class="muted">标题留空时显示“RemoteCI 通知”，正文留空时显示原标题。</p>
+                    <label>正文<textarea asp-for="Input.Message" maxlength="500" rows="5"></textarea></label>
+                    <button type="submit" disabled="@(!Model.PluginOnline)">发送并等待回执</button>
+                </form>
+                <form method="post" asp-page-handler="NotificationSettings" class="stack notification-settings-form">
+                    <h3>发送人显示</h3>
+                    <label class="check"><input type="checkbox" asp-for="ForceSenderInTitle" /> 强制在标题显示发送人</label>
+                    <p class="muted">此设置对 WebUI 和手表发送的自定义通知全局生效。</p>
+                    <button class="ghost" type="submit">保存设置</button>
+                </form>
+            </div>
+        </section>
+
+        <section class="panel control-card" id="clear-notifications">
+            <div class="control-card-head">
+                <span class="feature-icon"><i class="bi bi-bell-slash" aria-hidden="true"></i></span>
+                <div><h2>清除通知</h2><p class="muted">清除 ClassIsland 当前正在显示的提醒。</p></div>
+            </div>
+            <form method="post" asp-page-handler="ClearNotifications">
+                <button class="ghost" type="submit" disabled="@(!Model.PluginOnline || snapshot?.IsNotificationPlaying != true)">清除当前提醒</button>
+            </form>
+        </section>
+    }
+
+    @if (Model.CanControlSystem)
+    {
+        <section class="panel control-card" id="main-menu">
+            <div class="control-card-head">
+                <span class="feature-icon"><i class="bi @(mainMenuVisible ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i></span>
+                <div><h2>主界面</h2><p class="muted">当前状态：@(mainMenuVisible ? "已显示" : "已隐藏")。</p></div>
+            </div>
+            <form method="post" asp-page-handler="MainMenu">
+                <input type="hidden" name="visible" value="@(!mainMenuVisible ? "true" : "false")" />
+                <button type="submit" disabled="@(!Model.PluginOnline)">@(mainMenuVisible ? "隐藏主菜单" : "显示主菜单")</button>
+            </form>
+        </section>
+
+        <section class="panel control-card control-card-wide" id="volume">
+            <div class="control-card-head">
+                <span class="feature-icon"><i class="bi @(snapshot?.IsMuted == true ? "bi-volume-mute" : "bi-volume-up")" aria-hidden="true" data-volume-icon></i></span>
+                <div><h2>音量</h2><p class="muted" data-volume-summary>当前音量 @(snapshot?.VolumePercent ?? 0)% · @(snapshot?.IsMuted == true ? "已静音" : "未静音")</p></div>
+            </div>
+            <div class="control-actions">
+                <form method="post" asp-page-handler="Volume" class="volume-form" data-volume-form>
+                    <label>Windows 主音量
+                        <span class="range-field">
+                            <input asp-for="VolumeLevel" type="range" min="0" max="100"
+                                   data-volume-slider data-muted="@(snapshot?.IsMuted == true ? "true" : "false")"
+                                   disabled="@(!Model.PluginOnline || !volumeAvailable)" />
+                            <output data-volume-output>@Model.VolumeLevel%</output>
+                        </span>
+                    </label>
+                    <span class="control-note" data-volume-feedback aria-live="polite">拖动后自动应用</span>
+                </form>
+                <form method="post" asp-page-handler="Mute" data-mute-form>
+                    <input type="hidden" name="muted" value="@(snapshot?.IsMuted != true ? "true" : "false")" />
+                    <button class="ghost" type="submit" data-mute-button disabled="@(!Model.PluginOnline || !volumeAvailable)">@(snapshot?.IsMuted == true ? "取消静音" : "静音")</button>
+                </form>
+            </div>
+            @if (!volumeAvailable)
+            {
+                <p class="control-note">插件尚未报告可用的 Windows 默认播放设备。</p>
+            }
+        </section>
+
+        <section class="panel control-card control-card-wide" id="power">
+            <div class="control-card-head">
+                <span class="feature-icon"><i class="bi bi-power" aria-hidden="true"></i></span>
+                <div><h2>电源</h2><p class="muted">直接控制运行 ClassIsland 的教室电脑，请在执行前确认。</p></div>
+            </div>
+            <div class="power-actions">
+                <form method="post" asp-page-handler="Power" onsubmit="return confirm('确定关闭教室电脑？')"><button class="danger ghost" type="submit" name="action" value="Shutdown" disabled="@(!Model.PluginOnline)">关机</button></form>
+                <form method="post" asp-page-handler="Power" onsubmit="return confirm('确定重启教室电脑？')"><button class="danger ghost" type="submit" name="action" value="Restart" disabled="@(!Model.PluginOnline)">重启</button></form>
+                <form method="post" asp-page-handler="Power" onsubmit="return confirm('确定让教室电脑进入睡眠？')"><button class="ghost" type="submit" name="action" value="Sleep" disabled="@(!Model.PluginOnline || snapshot?.IsSleepAvailable != true)">睡眠</button></form>
+                @if (snapshot?.IsHibernateAvailable == true)
+                {
+                    <form method="post" asp-page-handler="Power" onsubmit="return confirm('确定让教室电脑进入休眠？')"><button class="ghost" type="submit" name="action" value="Hibernate" disabled="@(!Model.PluginOnline)">休眠</button></form>
+                }
+            </div>
+        </section>
+    }
+
+    @if (Model.VisibleExtensions.Count > 0)
+    {
+        <section class="panel control-card control-card-full" id="extensions">
+            <div class="control-card-head">
+                <span class="feature-icon"><i class="bi bi-puzzle" aria-hidden="true"></i></span>
+                <div><h2>扩展功能</h2><p class="muted">由其他 ClassIsland 插件注册，并按当前账号权限显示。</p></div>
+            </div>
+            <div class="extension-list">
+                @foreach (var extension in Model.VisibleExtensions)
+                {
+                    <article class="extension-control">
+                        <div><strong>@extension.DisplayName</strong><small>ID：@extension.Id</small></div>
+                        <form method="post" asp-page-handler="Extension" class="extension-form">
+                            <input type="hidden" name="extensionId" value="@extension.Id" />
+                            @for (var index = 0; index < (extension.Parameters?.Count ?? 0); index++)
+                            {
+                                var parameter = extension.Parameters![index];
+                                <input type="hidden" name="ExtensionInputs[@index].Key" value="@parameter.Key" />
+                                <label>@parameter.Label
+                                    @if (parameter.Type == ExtensionParameterType.Switch)
+                                    {
+                                        <select name="ExtensionInputs[@index].Value">
+                                            <option value="false" selected="@(!string.Equals(parameter.DefaultValue, "true", StringComparison.OrdinalIgnoreCase))">关闭</option>
+                                            <option value="true" selected="@(string.Equals(parameter.DefaultValue, "true", StringComparison.OrdinalIgnoreCase))">开启</option>
+                                        </select>
+                                    }
+                                    else if (parameter.Type == ExtensionParameterType.Select)
+                                    {
+                                        <select name="ExtensionInputs[@index].Value" required="@parameter.Required">
+                                            @if (!parameter.Required)
+                                            {
+                                                <option value="">未选择</option>
+                                            }
+                                            @foreach (var option in parameter.Options ?? [])
+                                            {
+                                                <option value="@option" selected="@(option == parameter.DefaultValue)">@option</option>
+                                            }
+                                        </select>
+                                    }
+                                    else
+                                    {
+                                        <input name="ExtensionInputs[@index].Value" type="@(parameter.Type == ExtensionParameterType.Number ? "number" : "text")" value="@parameter.DefaultValue" required="@parameter.Required" />
+                                    }
+                                </label>
+                            }
+                            <button type="submit" disabled="@(!Model.PluginOnline)">执行</button>
+                        </form>
+                    </article>
+                }
+            </div>
+        </section>
+    }
+</div>

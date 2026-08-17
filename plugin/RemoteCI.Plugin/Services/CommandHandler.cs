@@ -65,6 +65,7 @@ public sealed class CommandHandler
                     command.Notification,
                     GetNotificationSenderName(command.RequestedBy)),
                 CommandKind.ClearNotifications => await HandleClearNotificationsAsync(),
+                CommandKind.TeacherComing => await HandleTeacherComingAsync(),
                 CommandKind.SetMainMenuVisibility => await HandleMainMenuVisibilityAsync(command.MainMenuVisible),
                 CommandKind.Power => HandlePowerAction(command.PowerAction),
                 CommandKind.Volume => HandleVolume(command.Volume),
@@ -140,6 +141,34 @@ public sealed class CommandHandler
         await _hostControl.ClearNotificationsAsync();
         HostStateChanged?.Invoke();
         return Success("已清除 ClassIsland 提醒");
+    }
+
+    /// <summary>“老师来了”由插件原子执行显示、等待和清除，客户端只发送一次命令。</summary>
+    private Task<CommandResult> HandleTeacherComingAsync() => RunTeacherComingWorkflowAsync(
+        () => HandleNotificationAsync(new NotificationRequest
+        {
+            Title = "老师来了",
+            Message = "老师来了",
+            ForceSenderInTitle = false,
+            IsNotificationEffectEnabled = true,
+            IsNotificationSoundEnabled = false,
+            IsSpeechEnabled = false,
+        }, string.Empty),
+        HandleClearNotificationsAsync);
+
+    /// <summary>可测试的顺序编排：仅显示成功后等待 1 秒并清除，任一步失败都原样返回。</summary>
+    internal static async Task<CommandResult> RunTeacherComingWorkflowAsync(
+        Func<Task<CommandResult>> show,
+        Func<Task<CommandResult>> clear,
+        Func<TimeSpan, Task>? delay = null)
+    {
+        var shown = await show();
+        if (!shown.Success) return shown;
+        await (delay ?? Task.Delay)(TimeSpan.FromSeconds(1));
+        var cleared = await clear();
+        return cleared.Success
+            ? Success("已显示“老师来了”并自动清除")
+            : cleared;
     }
 
     private async Task<CommandResult> HandleMainMenuVisibilityAsync(bool? visible)

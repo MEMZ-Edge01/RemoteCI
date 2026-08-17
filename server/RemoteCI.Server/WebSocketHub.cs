@@ -33,279 +33,421 @@ public static class WebSocketHub
             return;
         }
 
-        // ping/pong 保活参数在 Program.cs 的 UseWebSockets 全局配置：对端无响应超过
-        // KeepAliveTimeout 时由底层中止，避免 NAT/代理静默丢弃后僵尸连接永不释放。
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
         var connectionId = registry.Register(socket, token, principal);
-        logger.LogInformation("WebSocket connected: {Role}/{User} ({Id})",
-            principal.PeerRole, principal.User?.Username ?? "plugin", connectionId);
+        var session = new ConnectionSession(
+            context, identities, registry, store, scheduleSync, logger, socket, connectionId, principal);
+        logger.LogInformation(
+            "WebSocket connected: {Role}/{User} ({Id})",
+            principal.PeerRole,
+            principal.User?.Username ?? "plugin",
+            connectionId);
 
-        if (principal.IsPlugin)
+        if (await InitializeConnectionAsync(session))
+            await RunConnectionAsync(session);
+    }
+
+    private static async Task<bool> InitializeConnectionAsync(ConnectionSession session)
+    {
+        try
         {
-            // 本版本按“单教室单插件”设计：命令与拉取请求只投递给最早接入的插件，授权镜像仍广播给全部插件。
-            if (registry.PluginCount > 1)
-                logger.LogWarning("检测到 {Count} 个插件同时在线，命令将只投递给最早接入的插件，请确认是否为预期部署", registry.PluginCount);
-            await registry.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(context.RequestAborted), context.RequestAborted);
-            // 插件自身的启动推送可能早于云端连接完成；认证后主动拉取可消除这段竞态窗口。
-            // 补齐拉取必须定向发给新接入的插件自己，不能走“最早接入优先”的单插件投递。
-            await scheduleSync.StartFromPluginAsync(
-                connectionId, ScheduleSyncSource.Connection, context.RequestAborted);
+            if (session.Principal.IsPlugin)
+                await InitializePluginAsync(session);
+            else
+                await InitializeWatchAsync(session);
+            return true;
         }
-        else
+        catch (Exception ex)
         {
-            try
-            {
-                await registry.SendToWatchAsync(
-                    connectionId,
-                    Envelope.AuthState(ServerAuthStateFactory.CreateAuthenticated(principal.User)),
-                    context.RequestAborted);
-                await registry.SendLatestPluginNetworkInfoToWatchAsync(connectionId, context.RequestAborted);
-                if (store.GetLatestSnapshot() is { } snapshot)
-                    await registry.SendToWatchAsync(connectionId, Envelope.StatePush(snapshot), context.RequestAborted);
-                if (store.GetLatestSchedule() is { } schedule)
-                    await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSync(schedule), context.RequestAborted);
-                if (store.GetLatestExtensions() is { } extensions)
-                    await registry.SendToWatchAsync(connectionId, Envelope.ExtensionsSync(extensions), context.RequestAborted);
-                if (scheduleSync.Current is { } task)
-                    await registry.SendToWatchAsync(connectionId, Envelope.ScheduleSyncStatus(task), context.RequestAborted);
-                await registry.SendToWatchAsync(connectionId, Envelope.SettingsSync(new SettingsSync
-                {
-                    ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(context.RequestAborted),
-                }), context.RequestAborted);
-            }
-            catch (Exception ex)
-            {
-                // 初始化推送失败时记录原因并关闭连接，避免半初始化状态悬挂。
-                logger.LogError(ex, "WebSocket 初始化推送失败 ({Id})", connectionId);
-                await registry.UnregisterAsync(connectionId, WebSocketCloseStatus.InternalServerError);
-                return;
-            }
+            session.Logger.LogError(ex, "WebSocket 初始化推送失败 ({Id})", session.ConnectionId);
+            await session.Registry.UnregisterAsync(session.ConnectionId, WebSocketCloseStatus.InternalServerError);
+            return false;
+        }
+    }
+
+    private static async Task InitializePluginAsync(ConnectionSession session)
+    {
+        if (session.Registry.PluginCount > 1)
+        {
+            session.Logger.LogWarning(
+                "检测到 {Count} 个插件同时在线，命令将只投递给最早接入的插件，请确认是否为预期部署",
+                session.Registry.PluginCount);
         }
 
+        var ct = session.CancellationToken;
+        await session.Registry.SendAccountSyncToPluginsAsync(
+            await session.Identities.CreateSyncAsync(ct), ct);
+        await session.ScheduleSync.StartFromPluginAsync(
+            session.ConnectionId, ScheduleSyncSource.Connection, ct);
+    }
+
+    private static async Task InitializeWatchAsync(ConnectionSession session)
+    {
+        var ct = session.CancellationToken;
+        await session.Registry.SendToWatchAsync(
+            session.ConnectionId,
+            Envelope.AuthState(ServerAuthStateFactory.CreateAuthenticated(session.Principal.User)),
+            ct);
+        await session.Registry.SendLatestPluginNetworkInfoToWatchAsync(session.ConnectionId, ct);
+
+        if (session.Store.GetLatestSnapshot() is { } snapshot)
+            await session.Registry.SendToWatchAsync(session.ConnectionId, Envelope.StatePush(snapshot), ct);
+        if (session.Store.GetLatestSchedule() is { } schedule)
+            await session.Registry.SendToWatchAsync(session.ConnectionId, Envelope.ScheduleSync(schedule), ct);
+        if (session.Store.GetLatestExtensions() is { } extensions)
+            await session.Registry.SendToWatchAsync(session.ConnectionId, Envelope.ExtensionsSync(extensions), ct);
+        if (session.ScheduleSync.Current is { } task)
+            await session.Registry.SendToWatchAsync(session.ConnectionId, Envelope.ScheduleSyncStatus(task), ct);
+
+        await session.Registry.SendToWatchAsync(
+            session.ConnectionId,
+            Envelope.SettingsSync(new SettingsSync
+            {
+                ForceSenderInTitle = await session.Identities.GetForceSenderInTitleAsync(ct),
+            }),
+            ct);
+    }
+
+    private static async Task RunConnectionAsync(ConnectionSession session)
+    {
         try
         {
             var commandRate = new CommandRateLimiter();
-            while (socket.State == WebSocketState.Open)
+            while (session.Socket.State == WebSocketState.Open)
             {
-                var json = await ReceiveTextAsync(socket, context.RequestAborted);
+                var json = await ReceiveTextAsync(session.Socket, session.CancellationToken);
                 if (json is null) break;
-                Envelope envelope;
-                try
-                {
-                    envelope = JsonSerializer.Deserialize<Envelope>(json, JsonDefaults.Options)!;
-                }
-                catch (JsonException)
-                {
-                    // 单条畸形消息不应终止整个健康会话。
-                    logger.LogWarning("忽略无法解析的 WebSocket 消息 ({Id})", connectionId);
-                    continue;
-                }
-                if (envelope.ProtocolVersion != Protocol.Version)
-                {
-                    var versionError = Envelope.AuthState(new AuthState
-                    {
-                        Authenticated = false,
-                        ErrorCode = ApiErrorCodes.ProtocolVersionUnsupported,
-                        Error = $"需要协议 v{Protocol.Version}，当前为 v{envelope.ProtocolVersion}",
-                    });
-                    if (principal.PeerRole == PeerRole.Plugin)
-                    {
-                        // 插件连接不在手表注册表中，直接写当前 socket。
-                        var bytes = JsonSerializer.SerializeToUtf8Bytes(versionError, JsonDefaults.Options);
-                        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, context.RequestAborted);
-                    }
-                    else
-                    {
-                        await registry.SendToWatchAsync(connectionId, versionError, context.RequestAborted);
-                    }
-                    break;
-                }
+                if (!TryDeserializeEnvelope(json, session, out var envelope)) continue;
+                if (!await EnsureProtocolVersionAsync(envelope, session)) break;
+                if (!await RefreshPrincipalAsync(session)) return;
 
-                principal = await identities.ValidateAnyTokenAsync(token, context.RequestAborted);
-                if (principal is null) break;
-                envelope.Sender = principal.PeerRole;
-                await DispatchAsync(
-                    envelope, principal, connectionId, registry, store, scheduleSync, identities, logger, commandRate, context.RequestAborted);
+                envelope.Sender = session.Principal.PeerRole;
+                await DispatchAsync(envelope, session, commandRate);
             }
         }
-        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        catch (OperationCanceledException) when (session.CancellationToken.IsCancellationRequested)
         {
-            logger.LogWarning("WebSocket 请求被取消: {Id}", connectionId);
+            session.Logger.LogWarning("WebSocket 请求被取消: {Id}", session.ConnectionId);
         }
         catch (WebSocketException ex)
         {
-            logger.LogWarning("WebSocket error ({Id}): {Message}", connectionId, ex.Message);
+            session.Logger.LogWarning("WebSocket error ({Id}): {Message}", session.ConnectionId, ex.Message);
         }
         finally
         {
-            if (principal?.IsPlugin == true)
-                await scheduleSync.FailActiveAsync("插件连接已断开，课表任务未完成");
-            await registry.UnregisterAsync(connectionId);
-            logger.LogInformation("WebSocket disconnected: {Id}", connectionId);
+            if (session.Principal.IsPlugin)
+                await session.ScheduleSync.FailActiveAsync("插件连接已断开，课表任务未完成");
+            await session.Registry.UnregisterAsync(session.ConnectionId);
+            session.Logger.LogInformation("WebSocket disconnected: {Id}", session.ConnectionId);
         }
+    }
+
+    private static bool TryDeserializeEnvelope(
+        string json,
+        ConnectionSession session,
+        out Envelope envelope)
+    {
+        try
+        {
+            envelope = JsonSerializer.Deserialize<Envelope>(json, JsonDefaults.Options)!;
+            return envelope is not null;
+        }
+        catch (JsonException)
+        {
+            session.Logger.LogWarning("忽略无法解析的 WebSocket 消息 ({Id})", session.ConnectionId);
+            envelope = null!;
+            return false;
+        }
+    }
+
+    private static async Task<bool> EnsureProtocolVersionAsync(
+        Envelope envelope,
+        ConnectionSession session)
+    {
+        if (envelope.ProtocolVersion == Protocol.Version) return true;
+
+        var versionError = Envelope.AuthState(new AuthState
+        {
+            Authenticated = false,
+            ErrorCode = ApiErrorCodes.ProtocolVersionUnsupported,
+            Error = $"需要协议 v{Protocol.Version}，当前为 v{envelope.ProtocolVersion}",
+        });
+        if (session.Principal.IsPlugin)
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(versionError, JsonDefaults.Options);
+            await session.Socket.SendAsync(
+                bytes, WebSocketMessageType.Text, true, session.CancellationToken);
+        }
+        else
+        {
+            await session.Registry.SendToWatchAsync(
+                session.ConnectionId, versionError, session.CancellationToken);
+        }
+        return false;
+    }
+
+    private static async Task<bool> RefreshPrincipalAsync(ConnectionSession session)
+    {
+        var refreshed = session.Registry.GetPrincipal(session.ConnectionId);
+        if (refreshed is not null)
+        {
+            session.Principal = refreshed;
+            return true;
+        }
+
+        await session.Registry.UnregisterAsync(
+            session.ConnectionId, WebSocketCloseStatus.PolicyViolation);
+        return false;
     }
 
     private static async Task DispatchAsync(
         Envelope envelope,
-        AuthPrincipal principal,
-        Guid connectionId,
-        PeerRegistry registry,
-        IStateStore store,
-        ScheduleSyncService scheduleSync,
-        IdentityCoordinator identities,
-        ILogger logger,
-        CommandRateLimiter commandRate,
-        CancellationToken ct)
+        ConnectionSession session,
+        CommandRateLimiter commandRate)
+    {
+        if (session.Principal.IsPlugin)
+        {
+            await DispatchPluginAsync(envelope, session);
+            return;
+        }
+
+        if (session.Principal.User is not null)
+        {
+            await DispatchUserAsync(envelope, session, commandRate);
+            return;
+        }
+
+        LogUnhandled(envelope, session);
+    }
+
+    private static async Task DispatchPluginAsync(Envelope envelope, ConnectionSession session)
+    {
+        if (await TryDispatchPluginStateAsync(envelope, session)) return;
+        if (await TryDispatchPluginControlAsync(envelope, session)) return;
+        LogUnhandled(envelope, session);
+    }
+
+    private static async Task<bool> TryDispatchPluginStateAsync(
+        Envelope envelope,
+        ConnectionSession session)
+    {
+        var ct = session.CancellationToken;
+        switch (envelope.Type)
+        {
+            case Protocol.MessageTypeStatePush:
+                if (ConvertPayload<ClassStateSnapshot>(envelope.Payload) is { } snapshot)
+                {
+                    session.Store.SaveSnapshot(snapshot);
+                    await session.Registry.SendSnapshotToWatchesAsync(snapshot, ct);
+                }
+                return true;
+            case Protocol.MessageTypeScheduleSync:
+                if (ConvertPayload<ScheduleBundle>(envelope.Payload) is { } schedule)
+                {
+                    session.Store.SaveSchedule(schedule);
+                    await session.Registry.SendScheduleToWatchesAsync(schedule, ct);
+                    await session.ScheduleSync.CompleteFromScheduleAsync(ct);
+                }
+                return true;
+            case Protocol.MessageTypeEventNotify:
+                if (ConvertPayload<ClassEvent>(envelope.Payload) is { } value)
+                {
+                    session.Store.SaveEvent(value);
+                    await session.Registry.SendEventToWatchesAsync(value, ct);
+                }
+                return true;
+            case Protocol.MessageTypeExtensionsSync:
+                if (ConvertPayload<List<ExtensionDefinition>>(envelope.Payload) is { } extensions)
+                {
+                    session.Store.SaveExtensions(extensions);
+                    await session.Registry.SendExtensionsToWatchesAsync(extensions, ct);
+                }
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static async Task<bool> TryDispatchPluginControlAsync(
+        Envelope envelope,
+        ConnectionSession session)
+    {
+        var ct = session.CancellationToken;
+        switch (envelope.Type)
+        {
+            case Protocol.MessageTypePluginNetworkInfo:
+                if (NormalizePluginNetworkInfo(ConvertPayload<PluginNetworkInfo>(envelope.Payload)) is { } info)
+                    await session.Registry.PublishPluginNetworkInfoAsync(info, ct);
+                else
+                    session.Logger.LogWarning("插件上报了无效的局域网地址或端口");
+                return true;
+            case Protocol.MessageTypeScheduleSyncStatus:
+                if (ConvertPayload<ScheduleSyncStatus>(envelope.Payload) is { } status)
+                    await session.ScheduleSync.ObserveFromPluginAsync(status, ct);
+                return true;
+            case Protocol.MessageTypeCommandResult:
+                if (ConvertPayload<CommandResult>(envelope.Payload) is { } result)
+                    await session.Registry.CompleteCommandAsync(envelope, result, ct);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static async Task DispatchUserAsync(
+        Envelope envelope,
+        ConnectionSession session,
+        CommandRateLimiter commandRate)
     {
         switch (envelope.Type)
         {
-            case Protocol.MessageTypeStatePush when principal.IsPlugin:
-                if (ConvertPayload<ClassStateSnapshot>(envelope.Payload) is { } snapshot)
-                {
-                    store.SaveSnapshot(snapshot);
-                    await registry.SendSnapshotToWatchesAsync(snapshot, ct);
-                }
+            case Protocol.MessageTypeCommand:
+                await ForwardUserCommandAsync(envelope, session, commandRate);
                 return;
-
-            case Protocol.MessageTypeScheduleSync when principal.IsPlugin:
-                if (ConvertPayload<ScheduleBundle>(envelope.Payload) is { } schedule)
-                {
-                    // 每次插件回传都整体替换旧缓存，手动拉取不会与服务端旧课表做合并。
-                    store.SaveSchedule(schedule);
-                    await registry.SendScheduleToWatchesAsync(schedule, ct);
-                    await scheduleSync.CompleteFromScheduleAsync(ct);
-                }
+            case Protocol.MessageTypeSchedulePull:
+                var request = ConvertPayload<ScheduleSyncRequest>(envelope.Payload);
+                await session.ScheduleSync.StartAsync(
+                    ScheduleSyncSource.Watch,
+                    session.CancellationToken,
+                    request?.TaskId ?? envelope.MessageId);
                 return;
-
-            case Protocol.MessageTypeEventNotify when principal.IsPlugin:
-                if (ConvertPayload<ClassEvent>(envelope.Payload) is { } value)
-                {
-                    store.SaveEvent(value);
-                    await registry.SendEventToWatchesAsync(value, ct);
-                }
-                return;
-
-            case Protocol.MessageTypeExtensionsSync when principal.IsPlugin:
-                if (ConvertPayload<List<ExtensionDefinition>>(envelope.Payload) is { } extensions)
-                {
-                    store.SaveExtensions(extensions);
-                    await registry.SendExtensionsToWatchesAsync(extensions, ct);
-                }
-                return;
-
-            case Protocol.MessageTypePluginNetworkInfo when principal.IsPlugin:
-                if (NormalizePluginNetworkInfo(ConvertPayload<PluginNetworkInfo>(envelope.Payload)) is { } networkInfo)
-                    await registry.PublishPluginNetworkInfoAsync(networkInfo, ct);
-                else
-                    logger.LogWarning("插件上报了无效的局域网地址或端口");
-                return;
-
-            case Protocol.MessageTypeScheduleSyncStatus when principal.IsPlugin:
-                if (ConvertPayload<ScheduleSyncStatus>(envelope.Payload) is { } syncStatus)
-                    await scheduleSync.ObserveFromPluginAsync(syncStatus, ct);
-                return;
-
-            case Protocol.MessageTypeCommandResult when principal.IsPlugin:
-                if (ConvertPayload<CommandResult>(envelope.Payload) is { } result)
-                    await registry.CompleteCommandAsync(envelope, result, ct);
-                return;
-
-            case Protocol.MessageTypeCommand when principal.User is not null:
-                await ForwardUserCommandAsync(envelope, principal.User, connectionId, registry, identities, store, commandRate, logger, ct);
-                return;
-
-            case Protocol.MessageTypeSchedulePull when principal.User is not null:
-                var pullRequest = ConvertPayload<ScheduleSyncRequest>(envelope.Payload);
-                await scheduleSync.StartAsync(
-                    ScheduleSyncSource.Watch, ct, pullRequest?.TaskId ?? envelope.MessageId);
-                return;
-
             default:
-                logger.LogWarning("Unhandled message type {Type} from {Role}", envelope.Type, principal.PeerRole);
+                LogUnhandled(envelope, session);
                 return;
         }
     }
 
+    private static void LogUnhandled(Envelope envelope, ConnectionSession session) =>
+        session.Logger.LogWarning(
+            "Unhandled message type {Type} from {Role}",
+            envelope.Type,
+            session.Principal.PeerRole);
+
     private static async Task ForwardUserCommandAsync(
         Envelope envelope,
-        UserProfile user,
-        Guid connectionId,
-        PeerRegistry registry,
-        IdentityCoordinator identities,
-        IStateStore store,
-        CommandRateLimiter commandRate,
-        ILogger logger,
-        CancellationToken ct)
+        ConnectionSession session,
+        CommandRateLimiter commandRate)
     {
-        // 回执依赖 ReplyToMessageId 定位挂起项：缺 Id 的命令无法回执，直接丢弃并记日志。
         if (string.IsNullOrWhiteSpace(envelope.MessageId))
         {
-            logger.LogWarning("忽略缺少 messageId 的命令 ({ConnectionId})", connectionId);
+            session.Logger.LogWarning(
+                "忽略缺少 messageId 的命令 ({ConnectionId})", session.ConnectionId);
             return;
         }
         if (!commandRate.TryAcquire())
         {
-            await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.TooManyRequests, "命令发送过于频繁", ct);
+            await SendFailureAsync(
+                envelope, session.ConnectionId, session.Registry,
+                CommandResultCodes.TooManyRequests, "命令发送过于频繁", session.CancellationToken);
             return;
         }
 
         var command = ConvertPayload<CommandMessage>(envelope.Payload);
         if (command is null)
         {
-            await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "命令格式无效", ct);
+            await SendFailureAsync(
+                envelope, session.ConnectionId, session.Registry,
+                CommandResultCodes.InvalidRequest, "命令格式无效", session.CancellationToken);
             return;
         }
 
-        // 通知署名是否强制由服务端全局设置决定，客户端携带的值一律被覆盖，防止绕过。
         if (command.Notification is not null)
-            command.Notification.ForceSenderInTitle = await identities.GetForceSenderInTitleAsync(ct);
+        {
+            command.Notification.ForceSenderInTitle =
+                await session.Identities.GetForceSenderInTitleAsync(session.CancellationToken);
+        }
 
+        if (GetCommandValidationError(command, session.Principal.User!, session.Store) is { } error)
+        {
+            await SendFailureAsync(
+                envelope, session.ConnectionId, session.Registry,
+                error.Code, error.Message, session.CancellationToken);
+            return;
+        }
+
+        await ForwardValidatedCommandAsync(envelope, command, session);
+    }
+
+    private static CommandError? GetCommandValidationError(
+        CommandMessage command,
+        UserProfile user,
+        IStateStore store)
+    {
         if (command.Command == CommandKind.RunExtension)
-        {
-            // 服务端用扩展注册表预检 RequiredPermission，防止客户端绕过手表 UI 直连云端越权；
-            // 注册表尚未同步（插件未推送过）时放行，由插件执行端复核。
-            if (string.IsNullOrEmpty(command.ExtensionId))
-            {
-                await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "缺少扩展 Id", ct);
-                return;
-            }
-            var definition = store.GetLatestExtensions()?.FirstOrDefault(x => x.Id == command.ExtensionId);
-            if (definition is not null && !user.Permissions.HasFlag(definition.RequiredPermission))
-            {
-                await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.Forbidden, "权限不足", ct);
-                return;
-            }
-        }
-        else
-        {
-            var required = CommandPermissions.Required(command.Command);
-            if (required == UserPermissions.None)
-            {
-                await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.InvalidRequest, "未知命令", ct);
-                return;
-            }
-            if (!user.Permissions.HasFlag(required))
-            {
-                await SendFailureAsync(envelope, connectionId, registry, CommandResultCodes.Forbidden, "权限不足", ct);
-                return;
-            }
-        }
+            return GetExtensionValidationError(command, user, store);
 
-        command.RequestedBy = user;
+        var required = CommandPermissions.Required(command.Command);
+        if (required == UserPermissions.None)
+            return new CommandError(CommandResultCodes.InvalidRequest, "未知命令");
+        return user.Permissions.HasFlag(required)
+            ? null
+            : new CommandError(CommandResultCodes.Forbidden, "权限不足");
+    }
+
+    private static CommandError? GetExtensionValidationError(
+        CommandMessage command,
+        UserProfile user,
+        IStateStore store)
+    {
+        if (string.IsNullOrWhiteSpace(command.ExtensionId))
+            return new CommandError(CommandResultCodes.InvalidRequest, "缺少扩展 Id");
+
+        var definition = store.GetLatestExtensions()?.FirstOrDefault(
+            extension => extension.Id == command.ExtensionId);
+        return definition is not null && !user.Permissions.HasFlag(definition.RequiredPermission)
+            ? new CommandError(CommandResultCodes.Forbidden, "权限不足")
+            : null;
+    }
+
+    private static async Task ForwardValidatedCommandAsync(
+        Envelope envelope,
+        CommandMessage command,
+        ConnectionSession session)
+    {
+        command.RequestedBy = session.Principal.User;
         envelope.Payload = command;
-        registry.RegisterWatchCommand(envelope.MessageId, connectionId);
-        if (!await registry.SendToPluginAsync(envelope, ct))
-            await registry.CompleteCommandAsync(new Envelope
+        session.Registry.RegisterWatchCommand(envelope.MessageId, session.ConnectionId);
+        if (await session.Registry.SendToPluginAsync(envelope, session.CancellationToken)) return;
+
+        await session.Registry.CompleteCommandAsync(
+            new Envelope
             {
                 Type = Protocol.MessageTypeCommandResult,
                 ReplyToMessageId = envelope.MessageId,
                 Payload = new CommandResult(),
-            }, new CommandResult
+            },
+            new CommandResult
             {
                 Success = false,
                 Code = CommandResultCodes.PluginOffline,
                 Message = "插件未在线，操作未执行",
-            }, ct);
+            },
+            session.CancellationToken);
+    }
+
+    private sealed record CommandError(string Code, string Message);
+
+    private sealed class ConnectionSession(
+        HttpContext context,
+        IdentityCoordinator identities,
+        PeerRegistry registry,
+        IStateStore store,
+        ScheduleSyncService scheduleSync,
+        ILogger logger,
+        WebSocket socket,
+        Guid connectionId,
+        AuthPrincipal principal)
+    {
+        public HttpContext Context { get; } = context;
+        public IdentityCoordinator Identities { get; } = identities;
+        public PeerRegistry Registry { get; } = registry;
+        public IStateStore Store { get; } = store;
+        public ScheduleSyncService ScheduleSync { get; } = scheduleSync;
+        public ILogger Logger { get; } = logger;
+        public WebSocket Socket { get; } = socket;
+        public Guid ConnectionId { get; } = connectionId;
+        public AuthPrincipal Principal { get; set; } = principal;
+        public CancellationToken CancellationToken => Context.RequestAborted;
     }
 
     private static Task SendFailureAsync(

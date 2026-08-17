@@ -10,7 +10,7 @@ using RemoteCI.Shared.Models;
 namespace RemoteCI.Server.Pages;
 
 [Authorize]
-public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator identities, PeerRegistry peers)
+public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator identities, AccountRoleService roleService, PeerRegistry peers)
     : WebPageModel(users)
 {
     [BindProperty]
@@ -18,12 +18,15 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
     [BindProperty]
     public UserInput Edit { get; set; } = new();
     public IReadOnlyList<UserListItem> Accounts { get; private set; } = [];
+    public IReadOnlyList<AccountRoleInfo> RoleDefinitions { get; private set; } = [];
+    [BindProperty] public RoleInput RoleEdit { get; set; } = new();
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct) => await LoadAsync(ct);
 
     public async Task<IActionResult> OnPostCreateAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        Create.Role = Create.RoleId == AccountRole.AdministratorId ? UserRole.Admin : UserRole.User;
         if (Create.Role == UserRole.Admin && CurrentUser.Role != UserRole.Admin)
             return await CreateFailureAsync("仅管理员可创建管理员账号。", Array.Empty<string>(), ct);
         KeepModelStateEntries(nameof(Create));
@@ -45,6 +48,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
                 DisplayName = Create.DisplayName,
                 Password = Create.Password,
                 Role = Create.Role,
+                RoleId = Create.RoleId,
                 GrantedPermissions = Create.Grants,
             }, ct);
             await SyncAsync(ct);
@@ -64,6 +68,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
     public async Task<IActionResult> OnPostUpdateAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        Edit.Role = Edit.RoleId == AccountRole.AdministratorId ? UserRole.Admin : UserRole.User;
         // 不能把账号升级为管理员；管理员账号本身也只有管理员能编辑（含禁用状态的管理员）。
         if (CurrentUser.Role != UserRole.Admin &&
             (Edit.Role == UserRole.Admin ||
@@ -78,6 +83,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
             {
                 DisplayName = Edit.DisplayName,
                 Role = Edit.Role,
+                RoleId = Edit.RoleId,
                 Enabled = Edit.Enabled,
                 GrantedPermissions = Edit.Grants,
             }, ct);
@@ -128,10 +134,38 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         return RedirectToPage();
     }
 
+    public async Task<IActionResult> OnPostCreateRoleAsync(CancellationToken ct)
+    {
+        if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        if (CurrentUser.Role != UserRole.Admin) return RedirectToPage("/Denied");
+        try { await roleService.CreateAsync(RoleEdit.Name, RoleEdit.Grants, ct); TempData["Message"] = "Role created."; }
+        catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
+        return RedirectToPage();
+    }
+
+    public async Task<IActionResult> OnPostUpdateRoleAsync(CancellationToken ct)
+    {
+        if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        if (CurrentUser.Role != UserRole.Admin) return RedirectToPage("/Denied");
+        try { await roleService.UpdateAsync(RoleEdit.Id, RoleEdit.Name, RoleEdit.Grants, ct); await SyncAsync(ct); TempData["Message"] = "Role updated."; }
+        catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
+        return RedirectToPage();
+    }
+
+    public async Task<IActionResult> OnPostDeleteRoleAsync(Guid id, CancellationToken ct)
+    {
+        if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        if (CurrentUser.Role != UserRole.Admin) return RedirectToPage("/Denied");
+        try { await roleService.DeleteAsync(id, ct); TempData["Message"] = "Role deleted."; }
+        catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
+        return RedirectToPage();
+    }
+
     private async Task<IActionResult> LoadAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
         Accounts = await identities.ListUsersAsync(ct);
+        RoleDefinitions = await roleService.ListAsync(ct);
         return Page();
     }
 
@@ -179,6 +213,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         Create.Password = string.Empty;
         TempData["Error"] = message;
         Accounts = await identities.ListUsersAsync(ct);
+        RoleDefinitions = await roleService.ListAsync(ct);
         return Page();
     }
 
@@ -188,6 +223,19 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
                      !key.Equals(prefix, StringComparison.OrdinalIgnoreCase) &&
                      !key.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase)).ToArray())
             ModelState.Remove(key);
+    }
+
+    public sealed class RoleInput
+    {
+        public Guid Id { get; set; }
+        [Required, StringLength(40, MinimumLength = 1)] public string Name { get; set; } = string.Empty;
+        public bool AccessWebUi { get; set; }
+        public bool ManageUsers { get; set; }
+        public bool SendNotifications { get; set; }
+        public bool TeacherComing { get; set; }
+        public bool ManageSchedule { get; set; }
+        public bool SystemControl { get; set; }
+        public UserPermissions Grants => (AccessWebUi ? UserPermissions.AccessWebUi : 0) | (ManageUsers ? UserPermissions.ManageUsers : 0) | (SendNotifications ? UserPermissions.SendNotifications : 0) | (TeacherComing ? UserPermissions.TeacherComing : 0) | (ManageSchedule ? UserPermissions.ManageSchedule : 0) | (SystemControl ? UserPermissions.SystemControl : 0);
     }
 
     public sealed class UserInput
@@ -204,16 +252,19 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         public string Password { get; set; } = string.Empty;
         [EnumDataType(typeof(UserRole), ErrorMessage = "角色无效")]
         public UserRole Role { get; set; } = UserRole.User;
+        public Guid? RoleId { get; set; } = AccountRole.StudentId;
         public bool Enabled { get; set; }
         public bool AccessWebUi { get; set; }
         public bool ManageUsers { get; set; }
         public bool SendNotifications { get; set; }
+        public bool TeacherComing { get; set; }
         public bool ManageSchedule { get; set; }
         public bool SystemControl { get; set; }
         public UserPermissions Grants =>
             (AccessWebUi ? UserPermissions.AccessWebUi : 0) |
             (ManageUsers ? UserPermissions.ManageUsers : 0) |
             (SendNotifications ? UserPermissions.SendNotifications : 0) |
+            (TeacherComing ? UserPermissions.TeacherComing : 0) |
             (ManageSchedule ? UserPermissions.ManageSchedule : 0) |
             (SystemControl ? UserPermissions.SystemControl : 0);
     }

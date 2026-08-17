@@ -23,7 +23,7 @@ class HomeVisualQaActivity : ComponentActivity() {
                 HomeScreen(
                     connectionState = ConnectionManager.State.CloudConnected,
                     snapshot = snapshot,
-                    user = UserProfile(role = Protocol.ROLE_ADMIN, permissions = 63),
+                    user = UserProfile(role = Protocol.ROLE_ADMIN, permissions = 127),
                     onOpenScheduleOverview = {},
                     onOpenScheduleChange = {},
                     onQuickSwapCourse = null,

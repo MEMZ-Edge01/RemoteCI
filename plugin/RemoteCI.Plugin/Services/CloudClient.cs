@@ -32,6 +32,9 @@ public sealed class CloudClient : IDisposable
     private volatile bool _running;
     private TimeSpan _reconnectDelay;
 
+    /// <summary>云端 WebSocket 完成连接且可以发送状态时触发，重连后也会再次触发。</summary>
+    public event EventHandler? Connected;
+
     internal CloudClient(
         PluginSettings settings,
         AccountMirror accounts,
@@ -172,7 +175,8 @@ public sealed class CloudClient : IDisposable
         builder.Scheme = builder.Scheme == Uri.UriSchemeHttps ? "wss" : "ws";
         await _ws.ConnectAsync(builder.Uri, ct);
         // 每次重连都重新发现网卡，避免 DHCP 或 Wi-Fi 切换后把过期地址留给手表。
-        await SendAsync(Envelope.PluginNetworkInfo(PluginNetworkInfoProvider.Create(_settings)), ct);
+        if (await TrySendAsync(Envelope.PluginNetworkInfo(PluginNetworkInfoProvider.Create(_settings)), ct))
+            Connected?.Invoke(this, EventArgs.Empty);
         _logger.LogInformation("已连接 RemoteCI 云端：{Host}", builder.Uri.Host);
     }
 

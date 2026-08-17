@@ -8,6 +8,7 @@ public sealed class CommandPermissionsTests
     [Theory]
     [InlineData(CommandKind.SendNotification, UserPermissions.SendNotifications)]
     [InlineData(CommandKind.ClearNotifications, UserPermissions.SendNotifications)]
+    [InlineData(CommandKind.TeacherComing, UserPermissions.TeacherComing)]
     [InlineData(CommandKind.SetMainMenuVisibility, UserPermissions.SystemControl)]
     [InlineData(CommandKind.Power, UserPermissions.SystemControl)]
     [InlineData(CommandKind.Volume, UserPermissions.SystemControl)]

@@ -14,8 +14,9 @@
 | 8 | `SendNotifications` |
 | 16 | `ManageSchedule` |
 | 32 | `SystemControl` |
+| 64 | `TeacherComing` |
 
-管理员的有效权限固定为 63。普通用户固定包含值 1，其余五项来自服务端授权。`SystemControl` 单独保护主界面显隐和 Windows 电源操作，不与发送通知权限混用。
+管理员的有效权限固定为 127。普通用户固定包含值 1，其余六项来自服务端授权。`TeacherComing` 单独保护“老师来了”快捷提醒；`SendNotifications` 只保护自定义通知与清除提醒，`SystemControl` 保护主界面显隐、音量和 Windows 电源操作。
 
 账号密码只出现在第一次 HTTPS `POST /api/auth/login` 的请求内。响应包含 1 小时 `accessToken`、30 天 `deviceSessionId/deviceSecret` 和用户有效权限。`POST /api/auth/refresh` 会同时轮换访问令牌和设备密钥；旧值立即失效。
 
@@ -51,7 +52,7 @@
 | `schedule_sync_status` | 插件 → 服务端/手表 | 全局课表任务状态：Running、Completed、Failed 或 Busy，以及任务来源和占用任务 ID |
 | `extensions_sync` | 插件 → 服务端/手表 | 扩展功能清单（id、displayName、icon、requiredPermission、parameters） |
 | `event_notify` | 插件 → 服务端/手表 | 上课、下课、放学、课表变更、自定义消息、ClassIsland 自动化或第三方插件通知 |
-| `command` | 手表/服务端 → 插件 | 结构化换课、通知、主界面或电源命令 |
+| `command` | 手表/服务端 → 插件 | 结构化换课、老师来了、通知、主界面、音量或电源命令 |
 | `command_result` | 插件 → 发起者 | 真实成功、失败码、消息和可选新修订号 |
 | `settings_sync` | 服务端 → 手表 | 全局通知设置快照（目前含 `forceSenderInTitle`） |
 | `plugin_network_info` | 插件 → 服务端 → 手表 | 插件局域网直连地址与端口（每次云端重连时重新发现网卡） |
@@ -77,9 +78,9 @@
 
 自定义通知的标题与正文均可留空：标题留空时插件统一显示默认标题 `RemoteCI 通知`（仍会按上述规则添加前缀），正文留空时以原标题兜底，避免 ClassIsland 显示空白正文。通知标题是否添加 `由用户名发送：` 前缀由服务端全局设置 `forceSenderInTitle` 决定（WebUI 通知页开关，默认开启）。开启时插件最终执行会把标题格式化为 `由用户名发送：原标题`；关闭时不添加前缀。发送者名称取自已认证账号的 `displayName`（界面称“用户名”），而 `username` 是唯一登录 ID；服务端转发命令时会按全局设置覆盖客户端请求中的署名标志，客户端不能绕过。设置变更时服务端通过 `settings_sync` 推送在线手表，手表通知页据此决定是否显示“将显示发送人”提示。通知请求还可通过 `isNotificationEffectEnabled`、`isNotificationSoundEnabled` 和 `isSpeechEnabled` 分别控制 ClassIsland 的提醒强调特效、提醒音效和语音朗读；省略时均为关闭。
 
-控制命令值 3 为清除当前 ClassIsland 提醒，值 4 通过 `mainMenuVisible` 设置主界面显隐，值 5 通过 `powerAction` 选择关机、重启、睡眠或休眠。值 6 通过 `volume.level` 设置 Windows 默认播放设备的 0-100 主音量，或通过 `volume.muted` 设置静音状态。休眠入口只在插件状态报告 Windows 已启用休眠时显示。
+控制命令值 3 为清除当前 ClassIsland 提醒，值 4 通过 `mainMenuVisible` 设置主界面显隐，值 5 通过 `powerAction` 选择关机、重启、睡眠或休眠。值 6 通过 `volume.level` 设置 Windows 默认播放设备的 0-100 主音量，或通过 `volume.muted` 设置静音状态；WebUI 在静音状态下向高调节时会在同一命令中同时发送 `level` 与 `muted: false`。休眠入口只在插件状态报告 Windows 已启用休眠时显示。
 
-`extensions_sync` 的载荷是其他 ClassIsland 插件通过 RemoteCI 注册的扩展功能列表；服务端只做内存缓存并转发给手表，新连接的手表会收到最近一次清单。命令值 7 为 `RunExtension`，通过 `extensionId` 指定目标扩展，`extensionArgs` 携带参数字典（值统一为字符串）。扩展命令的所需权限由插件端按注册项动态校验，服务端只要求已认证用户；未注册、缺少必填参数或权限不足时分别返回 `INVALID_REQUEST` / `FORBIDDEN`，执行异常统一返回 `INTERNAL_ERROR`。
+`extensions_sync` 的载荷是其他 ClassIsland 插件通过 RemoteCI 注册的扩展功能列表；服务端只做内存缓存并转发给手表，新连接的手表会收到最近一次清单。命令值 7 为 `RunExtension`，命令值 8 为 `TeacherComing`；后者由插件完成显示“老师来了”、等待 1 秒和清除提醒的完整流程。通过 `extensionId` 指定目标扩展，`extensionArgs` 携带参数字典（值统一为字符串）。扩展命令的所需权限由插件端按注册项动态校验，服务端只要求已认证用户；未注册、缺少必填参数或权限不足时分别返回 `INVALID_REQUEST` / `FORBIDDEN`，执行异常统一返回 `INTERNAL_ERROR`。
 
 状态快照中的 `isVolumeControlAvailable`、`volumePercent` 和 `isMuted` 分别表示默认播放设备是否可控、当前主音量百分比和静音状态，手表必须以这些真实状态刷新音量页。
 
@@ -114,3 +115,12 @@
 - `GET /api/admin/status`
 
 REST 手表请求使用 `Authorization: Bearer <accessToken>`。Razor WebUI 使用 HttpOnly、SameSite Cookie 和表单防伪令牌，不把令牌放入浏览器存储。
+
+
+
+## 自定义角色兼容
+
+服务端自定义角色在现有协议中仍以 `UserRole.User` 传输，并通过 `roleId`、`roleName` 可选字段提供管理信息。插件与旧版手表可以忽略新增字段，授权仍以 `effectivePermissions` 为准。
+
+
+插件每次云端 WebSocket 首次连接或重连成功后，都会重新发送当前 `extensions_sync` 快照。这保证其他 ClassIsland 插件在云端连接建立前已注册的扩展功能，也能进入服务端缓存并显示在 WebUI 控制页。

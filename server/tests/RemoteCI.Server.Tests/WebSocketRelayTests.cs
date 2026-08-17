@@ -2,6 +2,9 @@ using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using RemoteCI.Server.Data;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 using RemoteCI.Server.Services;
@@ -328,6 +331,171 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
         Assert.True(command.Notification?.ForceSenderInTitle);
     }
 
+    [Fact]
+    public async Task PluginStatePush_DoesNotRevalidateCredentialForEveryMessage()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "ws-query-count.db");
+        var commands = new DatabaseCommandCounterLoggerProvider();
+        await using var factory = TestWebApplicationFactory.ForDatabaseAndLogger(databasePath, commands);
+        var token = await factory.GetPluginTokenAsync();
+        var socketClient = factory.Server.CreateWebSocketClient();
+        using var plugin = await socketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(token)}"),
+            CancellationToken.None);
+        await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeSchedulePull);
+
+        commands.Reset();
+        for (var index = 0; index < 3; index++)
+        {
+            await SendAsync(plugin, Envelope.StatePush(new ClassStateSnapshot
+            {
+                CurrentSubject = $"性能回归-{index}",
+                CurrentState = ClassStateKind.Class,
+            }));
+        }
+
+        var store = factory.Services.GetRequiredService<IStateStore>();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (store.GetLatestSnapshot()?.CurrentSubject != "性能回归-2")
+            await Task.Delay(10, timeout.Token);
+
+        Assert.Equal(0, commands.Count);
+    }
+
+    [Fact]
+    public async Task PluginStatePush_ToConnectedWatchDoesNotRevalidateEitherPeer()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "ws-broadcast-query-count.db");
+        var commands = new DatabaseCommandCounterLoggerProvider();
+        await using var factory = TestWebApplicationFactory.ForDatabaseAndLogger(databasePath, commands);
+        var pluginToken = await factory.GetPluginTokenAsync();
+        var watchToken = (await factory.LoginAsync()).AccessToken;
+        var socketClient = factory.Server.CreateWebSocketClient();
+        using var plugin = await socketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(pluginToken)}"),
+            CancellationToken.None);
+        await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeSchedulePull);
+        using var watch = await socketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(watchToken)}"),
+            CancellationToken.None);
+        await ReceiveEnvelopeAsync(watch, Protocol.MessageTypeSettingsSync);
+
+        commands.Reset();
+        await SendAsync(plugin, Envelope.StatePush(new ClassStateSnapshot
+        {
+            CurrentSubject = "广播性能回归",
+            CurrentState = ClassStateKind.Class,
+        }));
+        var received = await ReceivePayloadAsync<ClassStateSnapshot>(watch, Protocol.MessageTypeStatePush);
+
+        Assert.Equal("广播性能回归", received.CurrentSubject);
+        Assert.Equal(0, commands.Count);
+    }
+
+    [Fact]
+    public async Task AuthorizationFallback_DisconnectsIdlePluginRevokedOutsideTheApi()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "ws-authorization-fallback.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath, new Dictionary<string, string?>
+        {
+            ["Server:ConnectionAuthorizationRefreshInterval"] = "00:00:00.100",
+        });
+        var token = await factory.GetPluginTokenAsync();
+        var socketClient = factory.Server.CreateWebSocketClient();
+        using var plugin = await socketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(token)}"),
+            CancellationToken.None);
+        await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeSchedulePull);
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var database = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var credential = await database.PluginCredentials.SingleAsync();
+            credential.Enabled = false;
+            await database.SaveChangesAsync();
+        }
+
+        await AssertWebSocketClosedAsync(plugin);
+    }
+
+    [Fact]
+    public async Task WatchAccessTokenExpiry_ClosesFromCachedExpiryWithoutDatabaseRevalidation()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "ws-token-expiry.db");
+        var commands = new DatabaseCommandCounterLoggerProvider();
+        await using var factory = TestWebApplicationFactory.ForDatabaseAndLogger(
+            databasePath,
+            commands,
+            new Dictionary<string, string?>
+            {
+                ["Server:AccessTokenTtl"] = "00:00:02",
+                ["Server:ConnectionAuthorizationRefreshInterval"] = "00:01:00",
+            });
+        var auth = await factory.LoginAsync();
+        var socketClient = factory.Server.CreateWebSocketClient();
+        using var watch = await socketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(auth.AccessToken)}"),
+            CancellationToken.None);
+        await ReceiveEnvelopeAsync(watch, Protocol.MessageTypeSettingsSync);
+
+        commands.Reset();
+        var remaining = auth.AccessExpiresAt - DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(100);
+        if (remaining > TimeSpan.Zero) await Task.Delay(remaining);
+        await SendAsync(watch, Envelope.SchedulePull());
+
+        await AssertWebSocketClosedAsync(watch);
+        Assert.Equal(0, commands.Count);
+    }
+
+    [Fact]
+    public async Task WatchAuthorization_RefreshesCachedPermissionsAfterAdminUpdate()
+    {
+        var databasePath = Path.Combine(
+            Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "ws-permission-refresh.db");
+        await using var factory = TestWebApplicationFactory.ForDatabase(databasePath);
+        var client = factory.CreateClient();
+        var admin = await factory.LoginAsync();
+        var create = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "ws.permission.user",
+                DisplayName = "权限刷新用户",
+                Password = "Permission-Refresh-Password-2026",
+            }));
+        create.EnsureSuccessStatusCode();
+        var created = (await create.Content.ReadFromJsonAsync<UserListItem>())!;
+        var watchAuth = await factory.LoginAsync("ws.permission.user", "Permission-Refresh-Password-2026");
+        var socketClient = factory.Server.CreateWebSocketClient();
+        using var watch = await socketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(watchAuth.AccessToken)}"),
+            CancellationToken.None);
+        var initial = await ReceivePayloadAsync<AuthState>(watch, Protocol.MessageTypeAuthState);
+        Assert.False(initial.User!.Permissions.HasFlag(UserPermissions.SendNotifications));
+
+        var update = await client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Put,
+            $"/api/users/{created.Id}",
+            admin.AccessToken,
+            new UpdateUserRequest
+            {
+                DisplayName = created.DisplayName,
+                Role = UserRole.User,
+                Enabled = true,
+                GrantedPermissions = UserPermissions.SendNotifications,
+            }));
+        update.EnsureSuccessStatusCode();
+
+        var refreshed = await ReceivePayloadAsync<AuthState>(watch, Protocol.MessageTypeAuthState);
+        Assert.True(refreshed.User!.Permissions.HasFlag(UserPermissions.SendNotifications));
+    }
+
     private async Task<WebSocket> ConnectPluginAsync() => await ConnectAsync(await _factory.GetPluginTokenAsync());
 
     private async Task<WebSocket> ConnectWatchAsync(
@@ -347,6 +515,19 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonDefaults.Options);
         await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+
+    private static async Task AssertWebSocketClosedAsync(WebSocket socket)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var buffer = new byte[256 * 1024];
+        while (true)
+        {
+            var result = await socket.ReceiveAsync(buffer, timeout.Token);
+            if (result.MessageType != WebSocketMessageType.Close) continue;
+            Assert.Equal(WebSocketCloseStatus.PolicyViolation, result.CloseStatus);
+            return;
+        }
     }
 
     private static async Task<T> ReceivePayloadAsync<T>(WebSocket socket, string expectedType) =>

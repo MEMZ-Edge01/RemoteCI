@@ -52,3 +52,16 @@ $env:JAVA_HOME="C:\path\to\jdk-17"
 ## 许可
 
 项目使用 GPLv3，第三方依赖见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
+
+## 一键构建 CIPX
+
+Windows 下双击仓库根目录的 `Build-Latest-Cipx.cmd`，脚本会先弹出“另存为”对话框。选择保存位置后，脚本会读取 `plugin/RemoteCI.Plugin/manifest.yml` 中的当前版本，自动执行 Release 构建并将最新 `.cipx` 复制到选定位置。
+
+构建成功后会显示实际保存路径、插件版本和 SHA-256 校验值。构建失败时会弹出错误提示，并保留命令窗口供查看详细输出。
+
+脚本也支持命令行调用，便于自动化验证：
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Build-Latest-Cipx.ps1 -OutputPath C:\Temp\RemoteCI.Plugin.cipx -NoPrompt
+```

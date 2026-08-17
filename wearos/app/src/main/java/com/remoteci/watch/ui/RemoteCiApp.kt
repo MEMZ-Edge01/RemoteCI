@@ -350,22 +350,7 @@ fun RemoteCiApp(context: Context) {
                 resultText = commandResult?.let {
                     context.getString(if (it.success) R.string.result_success else R.string.result_failure, it.message)
                 },
-                onTeacherComing = {
-                    // “老师来了”快捷提醒：标题展示“老师来了”，仅开启强调特效，不带音效和语音；
-                    // 1 秒后自动清除。ClassIsland 先播标题（遮罩）再播正文，因此正文不会在 1 秒内显示，
-                    // 这里传“老师来了”让 1 秒内也展示标题文字，效果等同正文留空。
-                    ConnectionManager.sendNotification(
-                        title = "老师来了",
-                        message = "老师来了",
-                        isNotificationEffectEnabled = true,
-                        isNotificationSoundEnabled = false,
-                        isSpeechEnabled = false,
-                    )
-                    scope.launch {
-                        delay(1_000)
-                        ConnectionManager.clearNotifications()
-                    }
-                },
+                onTeacherComing = ConnectionManager::teacherComing,
                 onOpenNotification = { screen = Screen.Notification },
                 onClearNotifications = ConnectionManager::clearNotifications,
                 onToggleMainMenu = {

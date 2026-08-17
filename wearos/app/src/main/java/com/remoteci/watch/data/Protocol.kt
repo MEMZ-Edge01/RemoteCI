@@ -44,6 +44,7 @@ object Protocol {
     const val CMD_POWER = 5
     const val CMD_VOLUME = 6
     const val CMD_RUN_EXTENSION = 7
+    const val CMD_TEACHER_COMING = 8
     const val POWER_SHUTDOWN = 1
     const val POWER_RESTART = 2
     const val POWER_SLEEP = 3
@@ -64,6 +65,7 @@ object Protocol {
     const val PERMISSION_SEND_NOTIFICATIONS = 8
     const val PERMISSION_MANAGE_SCHEDULE = 16
     const val PERMISSION_SYSTEM_CONTROL = 32
+    const val PERMISSION_TEACHER_COMING = 64
 
     const val SCHEDULE_SOURCE_PLUGIN = 1
     const val SCHEDULE_SOURCE_WEB_UI = 2

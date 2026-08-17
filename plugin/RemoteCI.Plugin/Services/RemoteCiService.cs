@@ -103,6 +103,7 @@ public sealed class RemoteCiService : IDisposable
                 RequestScheduleSync,
                 _loggerFactory.CreateLogger<CloudClient>(),
                 tokenStore: _tokenStore);
+            _cloudClient.Connected += OnCloudConnected;
             _ = _cloudClient.StartAsync(_cts.Token);
         }
 
@@ -129,7 +130,11 @@ public sealed class RemoteCiService : IDisposable
         _notificationBridge.Stop();
         _cts?.Cancel();
         _commandHandler.CancelPendingPowerActions();
-        _cloudClient?.Dispose();
+        if (_cloudClient is { } cloudClient)
+        {
+            cloudClient.Connected -= OnCloudConnected;
+            cloudClient.Dispose();
+        }
         _cloudClient = null;
         _lanServer?.Dispose();
         _lanServer = null;
@@ -256,6 +261,9 @@ public sealed class RemoteCiService : IDisposable
     }
 
     private void OnExtensionsChanged(object? sender, EventArgs e) => PublishExtensions();
+
+    // 首次连接或重连时补发当前扩展快照，避免注册早于 WebSocket 就绪时丢失 extensions_sync。
+    private void OnCloudConnected(object? sender, EventArgs e) => PublishExtensions();
 
     private void PublishExtensions()
     {

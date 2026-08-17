@@ -327,6 +327,14 @@ class WatchScreensTest {
                 ),
             ),
         )
+        assertEquals(
+            listOf("控制", "设置"),
+            homeActionLabels(
+                UserProfile(
+                    permissions = Protocol.PERMISSION_VIEW_CURRENT or Protocol.PERMISSION_TEACHER_COMING,
+                ),
+            ),
+        )
     }
 
     @Test
@@ -402,7 +410,7 @@ class WatchScreensTest {
             displayName = "锁屏",
             requiredPermission = Protocol.PERMISSION_SYSTEM_CONTROL,
         )
-        val admin = UserProfile(permissions = 63)
+        val admin = UserProfile(permissions = 127)
         val student = UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)
 
         assertEquals(listOf(extension), visibleExtensionsFor(admin, listOf(extension)))

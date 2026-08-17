@@ -12,6 +12,7 @@ using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 using System.Threading.RateLimiting;
 
+if (await ApplicationRestartCoordinator.TryRunHelperAsync(args)) return;
 if (await UpdateInstaller.TryRunAsync(args)) return;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -52,13 +53,12 @@ builder.Services.AddDataProtection()
 // 登录/刷新/配对等认证端点按客户端 IP 限流，作为 Identity 锁定之外的第一道爆破防线。
 builder.Services.AddRateLimiter(options =>
 {
-    var authRateLimit = Math.Max(1, serverSection.AuthRateLimitPerMinute);
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
         context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
         _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = authRateLimit,
+            PermitLimit = Math.Max(1, context.RequestServices.GetRequiredService<Microsoft.Extensions.Options.IOptions<ServerOptions>>().Value.AuthRateLimitPerMinute),
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0,
         }));
@@ -77,6 +77,8 @@ builder.Services.ConfigureApplicationCookie(options =>
 builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
 builder.Services.AddRazorPages(options => options.Conventions.AllowAnonymousToPage("/Login"));
 builder.Services.AddScoped<IdentityCoordinator>();
+builder.Services.AddScoped<AccountRoleService>();
+builder.Services.AddScoped<ConfigurationArchiveService>();
 builder.Services.AddScoped<SchedulePullSettings>();
 builder.Services.AddSingleton<IStateStore, StateStore>();
 builder.Services.AddSingleton<PeerRegistry>();
@@ -84,6 +86,8 @@ builder.Services.AddSingleton<ScheduleSyncTaskTracker>();
 builder.Services.AddSingleton<ScheduleSyncService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddHostedService<SchedulePullWorker>();
+builder.Services.AddHostedService<PeerAuthorizationRefreshWorker>();
+builder.Services.AddHostedService<AutomaticBackupWorker>();
 builder.Services.AddSingleton(new UpdateService(args));
 
 var app = builder.Build();
@@ -289,7 +293,7 @@ usersApi.MapPost("/", async (
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
     if (MissingFields(request.Username, request.Password) is { } bad) return bad;
     // 被授予 ManageUsers 的普通用户只能管理普通账号，不能创建管理员。
-    if (request.Role == UserRole.Admin && principal.User.Role != UserRole.Admin) return Forbidden();
+    if ((request.Role == UserRole.Admin || request.RoleId == AccountRole.AdministratorId) && principal.User.Role != UserRole.Admin) return Forbidden();
     try
     {
         var created = await identities.CreateUserAsync(request, ct);
@@ -306,7 +310,7 @@ usersApi.MapPut("/{id:guid}", async (
     if (!HasPermission(principal, UserPermissions.ManageUsers)) return Forbidden();
     // 不能把账号升级为管理员；管理员账号本身也只有管理员能编辑（含禁用状态的管理员）。
     if (principal.User.Role != UserRole.Admin &&
-        (request.Role == UserRole.Admin ||
+        ((request.Role == UserRole.Admin || request.RoleId == AccountRole.AdministratorId) ||
          await identities.GetRoleAsync(id, ct) == UserRole.Admin))
         return Forbidden();
     try
@@ -365,7 +369,7 @@ app.MapPost("/api/plugin/pairing-code", async (
         : Forbidden();
 });
 
-// 插件长期凭据管理：仅管理员可列举与吊销；吊销后插件 WebSocket 在下一条消息校验时被断开。
+// 插件长期凭据管理：仅管理员可列举与吊销；吊销后通过连接注册表立即断开对应插件。
 app.MapGet("/api/plugins/credentials", async (
     HttpContext ctx, IdentityCoordinator identities, CancellationToken ct) =>
 {
@@ -376,7 +380,7 @@ app.MapGet("/api/plugins/credentials", async (
 });
 
 app.MapDelete("/api/plugins/credentials/{id:guid}", async (
-    Guid id, HttpContext ctx, IdentityCoordinator identities, CancellationToken ct) =>
+    Guid id, HttpContext ctx, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
@@ -384,6 +388,7 @@ app.MapDelete("/api/plugins/credentials/{id:guid}", async (
     try
     {
         await identities.RevokePluginCredentialAsync(id, ct);
+        await peers.DisconnectPluginCredentialAsync(id, ct);
         return Results.NoContent();
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }

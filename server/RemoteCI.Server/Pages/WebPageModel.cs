@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using Microsoft.EntityFrameworkCore;
 using RemoteCI.Server.Data;
 using RemoteCI.Shared;
 
@@ -14,10 +15,16 @@ public abstract class WebPageModel(UserManager<AppUser> users) : PageModel
 
     protected async Task<IActionResult?> RequireAsync(UserPermissions? permission = null)
     {
-        var user = await Users.GetUserAsync(User);
+        var id = Users.GetUserId(User);
+        var user = id is not null && Guid.TryParse(id, out var userId)
+            ? await Users.Users.Include(x => x.RoleDefinition).SingleOrDefaultAsync(x => x.Id == userId)
+            : null;
         if (user is null || !user.Enabled) return RedirectToPage("/Login");
         CurrentUser = user;
-        Permissions = RolePermissions.Effective(user.Role, user.GrantedPermissions);
+        Permissions = RolePermissions.Effective(
+            user.Role,
+            user.GrantedPermissions,
+            user.RoleDefinition.DefaultPermissions);
         return permission is not null && !Permissions.HasFlag(permission.Value)
             ? RedirectToPage("/Denied")
             : null;
