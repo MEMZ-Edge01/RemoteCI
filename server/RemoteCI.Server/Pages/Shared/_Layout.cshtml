@@ -1,12 +1,30 @@
 @using Microsoft.AspNetCore.Identity
+@using Microsoft.EntityFrameworkCore
 @inject UserManager<AppUser> UserManager
+@inject AppDbContext Db
+@inject IStateStore StateStore
 @{
     var current = User.Identity?.IsAuthenticated == true ? await UserManager.GetUserAsync(User) : null;
-    var permissions = current is null ? UserPermissions.None : RolePermissions.Effective(current.Role, current.GrantedPermissions);
+    var roleDefaults = current is null
+        ? UserPermissions.None
+        : await Db.AccountRoles.AsNoTracking()
+            .Where(role => role.Id == current.RoleDefinitionId)
+            .Select(role => role.DefaultPermissions)
+            .SingleOrDefaultAsync();
+    var permissions = current is null
+        ? UserPermissions.None
+        : RolePermissions.Effective(current.Role, current.GrantedPermissions, roleDefaults);
     var currentPage = ViewContext.RouteData.Values["page"]?.ToString();
     string NavClass(string page) => currentPage == page ? "nav-link active" : "nav-link";
     string? CurrentPage(string page) => currentPage == page ? "page" : null;
     var userInitial = string.IsNullOrWhiteSpace(current?.DisplayName) ? "R" : current.DisplayName.Trim()[0].ToString().ToUpperInvariant();
+    var visibleControlExtensions = (StateStore.GetLatestExtensions() ?? [])
+        .Where(extension => permissions.HasFlag(extension.RequiredPermission))
+        .ToArray();
+    var controlMenuActive = currentPage is "/Control" or "/Notifications";
+    var showControlMenu = permissions.HasFlag(UserPermissions.TeacherComing) ||
+        permissions.HasFlag(UserPermissions.SendNotifications) ||
+        permissions.HasFlag(UserPermissions.SystemControl) || visibleControlExtensions.Length > 0;
 }
 <!doctype html>
 <html lang="zh-CN">
@@ -34,17 +52,21 @@
                 }
                 @if (permissions.HasFlag(UserPermissions.ManageSchedule))
                 {
-                    <a class="@NavClass("/Schedule")" aria-current="@CurrentPage("/Schedule")" asp-page="/Schedule" data-search-label="七日课表 换课 课程安排"><i class="bi bi-calendar-week" aria-hidden="true"></i><span>七日课表</span></a>
+                    <a class="@NavClass("/Schedule")" aria-current="@CurrentPage("/Schedule")" asp-page="/Schedule" data-search-label="七日课表 换课 课程安排"><i class="bi bi-calendar-week" aria-hidden="true"></i><span>课表</span></a>
                 }
-                @if (permissions.HasFlag(UserPermissions.SendNotifications))
+                @if (showControlMenu)
                 {
-                    <a class="@NavClass("/Notifications")" aria-current="@CurrentPage("/Notifications")" asp-page="/Notifications" data-search-label="发送通知 提醒 消息"><i class="bi bi-send" aria-hidden="true"></i><span>发送通知</span></a>
+                    <a class="@(controlMenuActive ? "nav-link active" : "nav-link")" aria-current="@(controlMenuActive ? "page" : null)" asp-page="/Control" data-search-label="控制 老师来了 发送通知 清除通知 主界面 音量 电源 扩展"><i class="bi bi-toggles" aria-hidden="true"></i><span>控制</span></a>
                 }
                 @if (permissions.HasFlag(UserPermissions.ManageUsers))
                 {
                     <a class="@NavClass("/Users")" aria-current="@CurrentPage("/Users")" asp-page="/Users" data-search-label="人员权限 用户 账号管理"><i class="bi bi-people" aria-hidden="true"></i><span>人员权限</span></a>
                 }
-                <a class="@NavClass("/Account")" aria-current="@CurrentPage("/Account")" asp-page="/Account" data-search-label="个人账号 密码 设备 更新 设置"><i class="bi bi-person" aria-hidden="true"></i><span>个人账号</span></a>
+                @if (current.Role == UserRole.Admin)
+                {
+                    <a class="@NavClass("/SystemConfig")" aria-current="@CurrentPage("/SystemConfig")" asp-page="/SystemConfig" data-search-label="系统配置 系统更新 服务端维护"><i class="bi bi-sliders" aria-hidden="true"></i><span>系统配置</span></a>
+                }
+                <a class="@NavClass("/Account")" aria-current="@CurrentPage("/Account")" asp-page="/Account" data-search-label="个人账号 密码 设备 会话"><i class="bi bi-person" aria-hidden="true"></i><span>个人账号</span></a>
             </nav>
             <div class="sidebar-note"><strong>RemoteCI v2</strong><span>清晰查看状态，并安全执行课堂操作。</span></div>
             <form class="logout-form" method="post" asp-page="/Logout">

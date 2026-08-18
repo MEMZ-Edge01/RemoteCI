@@ -2,26 +2,17 @@
 @model ScheduleModel
 @{ ViewData["Title"] = "七日课表"; }
 <div class="page-head"><div><p class="eyebrow">指定日期临时课表</p><h1>未来七日换课</h1></div><span class="status @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "可执行" : "插件离线")</span></div>
-<section class="panel">
-    <h2>从插件拉取课表</h2>
-    <p class="muted">立即连接在线插件重新生成当前七日课表；拉取成功后会强制覆盖服务端缓存。</p>
-    <form method="post" asp-page-handler="Pull" class="stack" data-schedule-pull-form>
-        <button type="submit" disabled="@(!Model.PluginOnline || Model.CurrentTask is not null)" data-schedule-pull-button>
-            @(Model.CurrentTask is null ? "立即向插件拉取课表" : "已有课表任务正在执行")
-        </button>
+<section class="panel schedule-pull-panel">
+    <form method="post" asp-page-handler="Pull" class="schedule-pull-layout" data-schedule-pull-form>
+        <div class="schedule-pull-copy"><h2>从插件拉取课表</h2><p class="muted">立即连接在线插件重新生成当前七日课表；拉取成功后会强制覆盖服务端缓存。</p></div>
+        <button type="submit" class="schedule-pull-button" disabled="@(!Model.PluginOnline || Model.CurrentTask is not null)" data-schedule-pull-button>@(Model.CurrentTask is null ? "立即拉取课表" : "已有课表任务正在执行")</button>
         @if (Model.CurrentTask is { } task)
         {
-            <div class="schedule-pull-progress" data-schedule-pull-progress aria-live="polite">
-                <progress></progress>
-                <span>@task.Message，请勿重复操作。</span>
-            </div>
+            <div class="schedule-pull-progress" data-schedule-pull-progress aria-live="polite"><progress></progress><span>@task.Message，请勿重复操作。</span></div>
         }
         else
         {
-            <div class="schedule-pull-progress" data-schedule-pull-progress hidden aria-live="polite">
-                <progress></progress>
-                <span>正在连接插件并拉取课表，请稍候…</span>
-            </div>
+            <div class="schedule-pull-progress" data-schedule-pull-progress hidden aria-live="polite"><progress></progress><span>正在连接插件并拉取课表，请稍候…</span></div>
         }
     </form>
 </section>
@@ -31,8 +22,59 @@
 }
 else
 {
-    <div class="schedule-grid">@foreach (var day in Model.Bundle.Days) { <section class="day-card"><header><strong>@day.Date</strong><span>@(day.Enabled ? day.ClassPlanName : "无课")</span></header>@foreach (var course in day.Courses) { <div class="course"><b>@course.Label</b><span>@course.Subject</span><small>@course.StartTime–@course.EndTime</small></div> }</section> }</div>
-    <section class="panel"><h2>提交修改</h2><form method="post" class="form-grid"><label>日期与原节次<select asp-for="Input.SourceSelection">@foreach (var day in Model.Bundle.Days.Where(x => x.Enabled)) { @foreach (var course in day.Courses) { <option value="@day.Date|@day.Revision|@course.Index">@day.Date · @course.Label · @course.Subject</option> } }</select></label><label>模式<select asp-for="Input.Mode" asp-items="Html.GetEnumSelectList<ScheduleChangeMode>()"></select></label><label>目标节次（交换，0 起）<input asp-for="Input.TargetIndex" type="number" min="0" /></label><label>替换科目<select asp-for="Input.ReplacementSubjectId"><option value="">不选择</option>@foreach (var subject in Model.Bundle.Subjects) { <option value="@subject.Id">@subject.Name</option> }</select></label><button type="submit" disabled="@(!Model.PluginOnline)">执行并等待真实回执</button></form></section>
+    var weekNames = new[] { "周日", "周一", "周二", "周三", "周四", "周五", "周六" };
+    var courseRows = Model.Bundle.Days
+        .SelectMany(day => day.Courses)
+        .GroupBy(course => course.Index)
+        .OrderBy(group => group.Key)
+        .ToList();
+    <div class="schedule-table-wrap">
+        <table class="schedule-table">
+            <thead><tr><th scope="col" class="schedule-period-heading">节次</th>@foreach (var day in Model.Bundle.Days) { var dayTitle = DateTime.TryParse(day.Date, out var parsedDate) ? weekNames[(int)parsedDate.DayOfWeek] : day.Date; <th scope="col"><strong>@dayTitle</strong><small>@day.Date</small></th> }</tr></thead>
+            <tbody>
+            @foreach (var row in courseRows)
+            {
+                var rowLabel = row.Select(course => course.Label).FirstOrDefault(label => !string.IsNullOrWhiteSpace(label)) ?? $"第 {row.Key + 1} 节";
+                <tr><th scope="row" class="schedule-period-cell">@rowLabel</th>@foreach (var day in Model.Bundle.Days) { var course = day.Courses.FirstOrDefault(item => item.Index == row.Key); <td>@if (day.Enabled && course is not null && course.Enabled) { <div class="schedule-course-name" title="@course.Subject">@course.Subject</div><div class="schedule-course-time" title="@($"{course.StartTime}–{course.EndTime}")">@course.StartTime–@course.EndTime</div> } else { <span class="schedule-empty">—</span> }</td> }</tr>
+            }
+            </tbody>
+        </table>
+    </div>
+    <section class="panel">
+        <h2>提交修改</h2>
+        <form method="post" class="form-grid schedule-change-form" data-schedule-change-form>
+            <label>日期与原节次
+                <select asp-for="Input.SourceSelection">
+                    @foreach (var day in Model.Bundle.Days.Where(x => x.Enabled))
+                    {
+                        @foreach (var course in day.Courses)
+                        {
+                            <option value="@day.Date|@day.Revision|@course.Index">@day.Date · @course.Label · @course.Subject</option>
+                        }
+                    }
+                </select>
+            </label>
+            <label>模式
+                <select asp-for="Input.Mode" data-schedule-mode>
+                    <option value="Exchange">交换</option>
+                    <option value="Replace">替换</option>
+                </select>
+            </label>
+            <label data-exchange-field>目标节次（从 0 开始）
+                <input asp-for="Input.TargetIndex" type="number" min="0" />
+            </label>
+            <label data-replace-field hidden>替换科目
+                <select asp-for="Input.ReplacementSubjectId" disabled>
+                    <option value="">不选择</option>
+                    @foreach (var subject in Model.Bundle.Subjects)
+                    {
+                        <option value="@subject.Id">@subject.Name</option>
+                    }
+                </select>
+            </label>
+            <button type="submit" class="schedule-submit-button" disabled="@(!Model.PluginOnline)">执行并等待真实回执</button>
+        </form>
+    </section>
 }
 <section class="panel">
     <h2>自动拉取课表</h2>

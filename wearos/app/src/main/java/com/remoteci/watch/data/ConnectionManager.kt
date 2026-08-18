@@ -320,6 +320,13 @@ object ConnectionManager {
         armSchedulePullTimeout("请求已发送，正在等待插件返回最新课表…")
     }
 
+    fun teacherComing() {
+        sendCommand(
+            CommandMessage(command = Protocol.CMD_TEACHER_COMING),
+            Protocol.PERMISSION_TEACHER_COMING,
+        )
+    }
+
     fun sendNotification(
         title: String,
         message: String,

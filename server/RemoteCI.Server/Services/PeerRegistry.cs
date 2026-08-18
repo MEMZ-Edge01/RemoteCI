@@ -8,7 +8,10 @@ using RemoteCI.Shared.Models;
 namespace RemoteCI.Server.Services;
 
 /// <summary>连接注册表，同时负责命令的定向回执与权限变更后的在线连接刷新。</summary>
-public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<PeerRegistry> logger)
+public sealed class PeerRegistry(
+    IServiceScopeFactory scopeFactory,
+    TimeProvider timeProvider,
+    ILogger<PeerRegistry> logger)
 {
     private static readonly TimeSpan WatchCommandTimeout = TimeSpan.FromSeconds(15);
     private readonly ConcurrentDictionary<Guid, WsPeer> _pluginPeers = new();
@@ -27,6 +30,36 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
         return id;
     }
 
+    /// <summary>读取握手或后台刷新后缓存的连接身份，不访问数据库。</summary>
+    public AuthPrincipal? GetPrincipal(Guid connectionId)
+    {
+        var peer = _pluginPeers.TryGetValue(connectionId, out var plugin) ? plugin
+            : _watchPeers.TryGetValue(connectionId, out var watch) ? watch
+            : null;
+        return peer is not null && IsLocallyAuthorized(peer) ? peer.Principal : null;
+    }
+
+    /// <summary>凭据吊销后主动关闭对应插件连接，不等待下一条状态消息。</summary>
+    public async Task DisconnectAllAsync(CancellationToken ct = default)
+    {
+        foreach (var peer in _pluginPeers.Values.Concat(_watchPeers.Values).ToList())
+        {
+            ct.ThrowIfCancellationRequested();
+            await UnregisterAsync(peer.Id, WebSocketCloseStatus.EndpointUnavailable);
+        }
+    }
+
+    public async Task DisconnectPluginCredentialAsync(Guid credentialId, CancellationToken ct = default)
+    {
+        foreach (var peer in _pluginPeers.Values
+                     .Where(peer => peer.Principal.PluginCredentialId == credentialId)
+                     .ToList())
+        {
+            ct.ThrowIfCancellationRequested();
+            await UnregisterAsync(peer.Id, WebSocketCloseStatus.PolicyViolation);
+        }
+    }
+
     public async Task UnregisterAsync(Guid connectionId, WebSocketCloseStatus? status = null)
     {
         var peer = _pluginPeers.TryRemove(connectionId, out var plugin) ? plugin
@@ -40,13 +73,16 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
                 removed.Completion?.TrySetResult(CommandResult.Failure(CommandResultCodes.Unauthorized, "连接已断开"));
         }
 
+        var sendLockHeld = false;
         try
         {
+            using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await peer.SendLock.WaitAsync(closeCts.Token);
+            sendLockHeld = true;
             if (peer.Socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
-                // 对端无响应时 CloseAsync 会永远等待关闭握手；5 秒超时后强制中止。
-                using var closeCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await peer.Socket.CloseAsync(
+                // 主动失效只发送关闭帧，不等待客户端回握，避免管理接口被远端阻塞。
+                await peer.Socket.CloseOutputAsync(
                     status ?? WebSocketCloseStatus.NormalClosure, "closed", closeCts.Token);
             }
         }
@@ -68,7 +104,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
         }
         finally
         {
-            peer.SendLock.Dispose();
+            if (sendLockHeld) peer.SendLock.Release();
         }
     }
 
@@ -106,7 +142,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
     {
         foreach (var peer in _watchPeers.Values)
         {
-            if (await RefreshAsync(peer, ct) is null || !await TrySendAsync(peer, envelope, ct))
+            if (!IsLocallyAuthorized(peer) || !await TrySendAsync(peer, envelope, ct))
                 await UnregisterAsync(peer.Id, WebSocketCloseStatus.PolicyViolation);
         }
     }
@@ -117,7 +153,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
         var sent = false;
         foreach (var peer in _pluginPeers.Values)
         {
-            if (await RefreshAsync(peer, ct) is not null && await TrySendAsync(peer, envelope, ct))
+            if (IsLocallyAuthorized(peer) && await TrySendAsync(peer, envelope, ct))
             {
                 sent = true;
                 continue;
@@ -138,7 +174,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
         // 按注册时间排序才是真正的“最早接入优先”；Guid 顺序与接入时间无关。
         foreach (var peer in _pluginPeers.Values.OrderBy(x => x.RegisteredAt))
         {
-            if (await RefreshAsync(peer, ct) is not null && await TrySendAsync(peer, envelope, ct))
+            if (IsLocallyAuthorized(peer) && await TrySendAsync(peer, envelope, ct))
                 return true;
             await UnregisterAsync(peer.Id, WebSocketCloseStatus.PolicyViolation);
         }
@@ -159,14 +195,14 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
     public async Task<bool> RequestSchedulePullFromAsync(
         Guid connectionId, ScheduleSyncRequest request, CancellationToken ct = default)
     {
-        if (_pluginPeers.TryGetValue(connectionId, out var peer) && await RefreshAsync(peer, ct) is not null)
+        if (_pluginPeers.TryGetValue(connectionId, out var peer) && IsLocallyAuthorized(peer))
             return await TrySendAsync(peer, Envelope.SchedulePull(request), ct);
         return false;
     }
 
     public async Task SendToWatchAsync(Guid connectionId, Envelope envelope, CancellationToken ct = default)
     {
-        if (_watchPeers.TryGetValue(connectionId, out var peer) && await RefreshAsync(peer, ct) is not null)
+        if (_watchPeers.TryGetValue(connectionId, out var peer) && IsLocallyAuthorized(peer))
             await TrySendAsync(peer, envelope, ct);
     }
 
@@ -231,6 +267,18 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
         return true;
     }
 
+    /// <summary>低频复查全部在线连接；正常消息收发不调用数据库。</summary>
+    public async Task RefreshAllAuthorizationsAsync(CancellationToken ct = default)
+    {
+        foreach (var peer in _pluginPeers.Values.ToList())
+        {
+            if (await RefreshAsync(peer, ct) is null)
+                await UnregisterAsync(peer.Id, WebSocketCloseStatus.PolicyViolation);
+        }
+
+        await RefreshWatchAuthorizationsAsync(ct);
+    }
+
     public async Task RefreshWatchAuthorizationsAsync(CancellationToken ct = default)
     {
         foreach (var peer in _watchPeers.Values)
@@ -256,22 +304,31 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
 
     private async Task<AuthPrincipal?> RefreshAsync(WsPeer peer, CancellationToken ct)
     {
+        await peer.RefreshLock.WaitAsync(ct);
         try
         {
             using var scope = scopeFactory.CreateScope();
             var identities = scope.ServiceProvider.GetRequiredService<IdentityCoordinator>();
-            var principal = await identities.ValidateAnyTokenAsync(peer.Token, ct);
+            var principal = peer.Principal.IsPlugin
+                ? await identities.ValidatePluginTokenAsync(peer.Token, ct)
+                : await identities.ValidateAccessTokenAsync(peer.Token, ct);
             if (principal is not null) peer.Principal = principal;
             return principal;
         }
         catch (SqliteException ex) when (!ct.IsCancellationRequested)
         {
-            // SQLite 瞬时锁/IO 错误不应击穿健康的 WS 连接：沿用上次验证通过的身份，
-            // 权限若真有变更，后续 RefreshWatchAuthorizationsAsync 会补上踢下线。
-            logger.LogWarning("令牌校验瞬时失败，沿用上次身份 ({Id}): {Message}", peer.Id, ex.Message);
-            return peer.Principal;
+            // 瞬时锁或 IO 错误不能误踢健康连接；已在内存中过期的手表身份仍不得继续使用。
+            logger.LogWarning("令牌校验瞬时失败，沿用未过期身份 ({Id}): {Message}", peer.Id, ex.Message);
+            return IsLocallyAuthorized(peer) ? peer.Principal : null;
+        }
+        finally
+        {
+            peer.RefreshLock.Release();
         }
     }
+
+    private bool IsLocallyAuthorized(WsPeer peer) =>
+        peer.Principal.ValidUntil is not { } validUntil || timeProvider.GetUtcNow() < validUntil;
 
     private ConcurrentDictionary<Guid, WsPeer> TableFor(PeerRole role) =>
         role == PeerRole.Plugin ? _pluginPeers : _watchPeers;
@@ -320,6 +377,7 @@ public sealed class PeerRegistry(IServiceScopeFactory scopeFactory, ILogger<Peer
         public AuthPrincipal Principal { get; set; } = principal;
         public WebSocket Socket { get; } = socket;
         public SemaphoreSlim SendLock { get; } = new(1, 1);
+        public SemaphoreSlim RefreshLock { get; } = new(1, 1);
         /// <summary>接入时刻（UtcNow Ticks），用于“最早接入优先”的投递排序。</summary>
         public long RegisteredAt { get; } = DateTime.UtcNow.Ticks;
     }

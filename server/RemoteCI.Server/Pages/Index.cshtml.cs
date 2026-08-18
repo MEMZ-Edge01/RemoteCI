@@ -40,7 +40,8 @@ public sealed class IndexModel(UserManager<AppUser> users, PeerRegistry peers, I
         try
         {
             await identities.RevokePluginCredentialAsync(id, ct);
-            TempData["Message"] = "插件凭据已吊销，对应插件将被断开，需用新配对码重新配对。";
+            await peers.DisconnectPluginCredentialAsync(id, ct);
+            TempData["Message"] = "插件凭据已吊销，对应插件已断开，需用新配对码重新配对。";
         }
         catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
         return RedirectToPage();

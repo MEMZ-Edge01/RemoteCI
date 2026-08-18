@@ -27,8 +27,8 @@ public sealed class NotificationsModel(
     public async Task<IActionResult> OnGetAsync()
     {
         if (await RequireAsync(UserPermissions.SendNotifications) is { } denied) return denied;
-        ForceSenderInTitle = await identities.GetForceSenderInTitleAsync();
-        return Page();
+        // 保留旧地址兼容书签，实际表单已经合并到控制页。
+        return LocalRedirect($"{Url.Page("/Control")}#send-notification");
     }
 
     public async Task<IActionResult> OnPostAsync(CancellationToken ct)

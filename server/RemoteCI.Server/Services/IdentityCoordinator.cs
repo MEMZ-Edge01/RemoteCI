@@ -41,6 +41,22 @@ public sealed partial class IdentityCoordinator(
         await db.Database.MigrateAsync(ct);
         await db.Database.ExecuteSqlRawAsync(
             "INSERT OR IGNORE INTO SystemMetadata (Id, AccountVersion) VALUES (1, 0);", ct);
+        var now = DateTimeOffset.UtcNow;
+        if (!await db.AccountRoles.AnyAsync(ct))
+        {
+            db.AccountRoles.AddRange(
+                new AccountRole { Id = AccountRole.StudentId, Name = "Student", NormalizedName = "STUDENT", Kind = AccountRoleKind.Student, DefaultPermissions = UserPermissions.None, CreatedAt = now, UpdatedAt = now },
+                new AccountRole { Id = AccountRole.AdministratorId, Name = "Administrator", NormalizedName = "ADMINISTRATOR", Kind = AccountRoleKind.Administrator, DefaultPermissions = UserPermissions.All, CreatedAt = now, UpdatedAt = now });
+        }
+        if (!await db.BackupConfigurations.AnyAsync(ct)) db.BackupConfigurations.Add(new BackupConfiguration());
+        await db.SaveChangesAsync(ct);
+        await db.AccountRoles.Where(x => x.Id == AccountRole.StudentId).ExecuteUpdateAsync(setters => setters
+            .SetProperty(x => x.Name, "学生")
+            .SetProperty(x => x.NormalizedName, "学生"), ct);
+        await db.AccountRoles.Where(x => x.Id == AccountRole.AdministratorId).ExecuteUpdateAsync(setters => setters
+            .SetProperty(x => x.Name, "管理员")
+            .SetProperty(x => x.NormalizedName, "管理员")
+            .SetProperty(x => x.DefaultPermissions, UserPermissions.All), ct);
 
         // 启动时清理过期超过 30 天的会话行，避免 DeviceSessions 表长期无界增长。
         // SQLite 不支持 DateTimeOffset 比较的 SQL 翻译，先投影再在内存过滤。
@@ -66,6 +82,7 @@ public sealed partial class IdentityCoordinator(
                 UserName = _options.BootstrapAdminUsername,
                 DisplayName = "系统管理员",
                 Role = UserRole.Admin,
+                RoleDefinitionId = AccountRole.AdministratorId,
                 GrantedPermissions = UserPermissions.None,
                 Enabled = true,
                 UpdatedAt = DateTimeOffset.UtcNow,
@@ -133,7 +150,7 @@ public sealed partial class IdentityCoordinator(
     public async Task<AuthResponse> RefreshAsync(RefreshSessionRequest request, CancellationToken ct = default)
     {
         var verifier = Hash(request.DeviceSecret);
-        var session = await db.DeviceSessions.Include(x => x.User)
+        var session = await db.DeviceSessions.Include(x => x.User).ThenInclude(x => x.RoleDefinition)
             .SingleOrDefaultAsync(x => x.Id == request.DeviceSessionId, ct);
         if (session is null || session.RevokedAt is not null || session.ExpiresAt <= DateTimeOffset.UtcNow ||
             !session.User.Enabled || !FixedEquals(session.VerifierHash, verifier))
@@ -146,7 +163,7 @@ public sealed partial class IdentityCoordinator(
     {
         if (string.IsNullOrWhiteSpace(token)) return null;
         var hash = Hash(token);
-        var session = await db.DeviceSessions.Include(x => x.User)
+        var session = await db.DeviceSessions.Include(x => x.User).ThenInclude(x => x.RoleDefinition)
             .SingleOrDefaultAsync(x => x.AccessTokenHash == hash, ct);
         if (session is null || session.RevokedAt is not null || session.AccessExpiresAt <= DateTimeOffset.UtcNow ||
             session.ExpiresAt <= DateTimeOffset.UtcNow || !session.User.Enabled)
@@ -159,7 +176,12 @@ public sealed partial class IdentityCoordinator(
             session.LastSeenAt = now;
             await db.SaveChangesAsync(ct);
         }
-        return new AuthPrincipal(PeerRole.Watch, ToProfile(session.User), session.Id);
+        return new AuthPrincipal(
+            PeerRole.Watch,
+            await ToProfileAsync(session.User, ct),
+            session.Id,
+            PluginCredentialId: null,
+            ValidUntil: session.AccessExpiresAt < session.ExpiresAt ? session.AccessExpiresAt : session.ExpiresAt);
     }
 
     public async Task<AuthPrincipal?> ValidatePluginTokenAsync(string token, CancellationToken ct = default)
@@ -174,7 +196,12 @@ public sealed partial class IdentityCoordinator(
             credential.LastSeenAt = now;
             await db.SaveChangesAsync(ct);
         }
-        return new AuthPrincipal(PeerRole.Plugin, null, null);
+        return new AuthPrincipal(
+            PeerRole.Plugin,
+            User: null,
+            DeviceSessionId: null,
+            PluginCredentialId: credential.Id,
+            ValidUntil: null);
     }
 
     public async Task<AuthPrincipal?> ValidateAnyTokenAsync(string token, CancellationToken ct = default) =>
@@ -196,7 +223,7 @@ public sealed partial class IdentityCoordinator(
             }).ToList();
     }
 
-    /// <summary>吊销插件长期凭据；其在线 WebSocket 会在下一条消息的令牌校验时被断开。</summary>
+    /// <summary>吊销插件长期凭据；调用方随后按凭据 ID 主动断开在线连接。</summary>
     public async Task RevokePluginCredentialAsync(Guid id, CancellationToken ct = default)
     {
         var credential = await db.PluginCredentials.SingleOrDefaultAsync(x => x.Id == id, ct)
@@ -246,7 +273,7 @@ public sealed partial class IdentityCoordinator(
     public async Task<UserProfile?> GetProfileAsync(Guid id, CancellationToken ct = default)
     {
         var user = await users.FindByIdAsync(id.ToString());
-        return user is null || !user.Enabled ? null : ToProfile(user);
+        return user is null || !user.Enabled ? null : await ToProfileAsync(user, ct);
     }
 
     /// <summary>
@@ -260,17 +287,19 @@ public sealed partial class IdentityCoordinator(
     }
 
     public async Task<IReadOnlyList<UserListItem>> ListUsersAsync(CancellationToken ct = default) =>
-        await users.Users.OrderByDescending(x => x.Role).ThenBy(x => x.UserName)
+        await users.Users.Include(x => x.RoleDefinition).OrderByDescending(x => x.Role).ThenBy(x => x.UserName)
             .Select(x => new UserListItem
             {
                 Id = x.Id,
                 Username = x.UserName!,
                 DisplayName = x.DisplayName,
                 Role = x.Role,
+                RoleId = x.RoleDefinitionId,
+                RoleName = x.RoleDefinition.Name,
                 GrantedPermissions = x.GrantedPermissions,
                 EffectivePermissions = x.Role == UserRole.Admin
                     ? UserPermissions.All
-                    : UserPermissions.ViewCurrentCourse | x.GrantedPermissions,
+                    : UserPermissions.ViewCurrentCourse | x.RoleDefinition.DefaultPermissions | x.GrantedPermissions,
                 Enabled = x.Enabled,
                 UpdatedAt = x.UpdatedAt,
             }).ToListAsync(ct);
@@ -278,19 +307,22 @@ public sealed partial class IdentityCoordinator(
     public async Task<UserListItem> CreateUserAsync(CreateUserRequest request, CancellationToken ct = default)
     {
         ValidateUserInput(request.Username, request.DisplayName, request.Password, request.Role);
+        var role = await ResolveRoleAsync(request.RoleId, request.Role, ct);
+        var protocolRole = role.Kind == AccountRoleKind.Administrator ? UserRole.Admin : UserRole.User;
         var user = new AppUser
         {
             Id = Guid.NewGuid(),
             UserName = request.Username.Trim(),
             DisplayName = request.DisplayName.Trim(),
-            Role = request.Role,
-            GrantedPermissions = NormalizeGrants(request.Role, request.GrantedPermissions),
+            Role = protocolRole,
+            RoleDefinitionId = role.Id,
+            GrantedPermissions = NormalizeGrants(protocolRole, request.GrantedPermissions),
             Enabled = true,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
         user.Version = await NextVersionAsync(ct);
         EnsureIdentitySucceeded(await users.CreateAsync(user, request.Password));
-        return ToListItem(user);
+        return await ToListItemAsync(user, ct);
     }
 
     public async Task<UserListItem> UpdateUserAsync(Guid id, UpdateUserRequest request, CancellationToken ct = default)
@@ -301,19 +333,22 @@ public sealed partial class IdentityCoordinator(
         try
         {
             var user = await RequireUserAsync(id);
-            if (user.Role == UserRole.Admin && user.Enabled && (request.Role != UserRole.Admin || !request.Enabled))
+            var targetRole = await ResolveRoleAsync(request.RoleId, request.Role, ct);
+            var targetProtocolRole = targetRole.Kind == AccountRoleKind.Administrator ? UserRole.Admin : UserRole.User;
+            if (user.Role == UserRole.Admin && user.Enabled && (targetProtocolRole != UserRole.Admin || !request.Enabled))
                 await GuardLastAdminAsync(user.Id, ct);
 
             var mustRevoke = user.Enabled && !request.Enabled;
             user.DisplayName = request.DisplayName.Trim();
-            user.Role = request.Role;
-            user.GrantedPermissions = NormalizeGrants(request.Role, request.GrantedPermissions);
+            user.Role = targetProtocolRole;
+            user.RoleDefinitionId = targetRole.Id;
+            user.GrantedPermissions = NormalizeGrants(targetProtocolRole, request.GrantedPermissions);
             user.Enabled = request.Enabled;
             user.UpdatedAt = DateTimeOffset.UtcNow;
             user.Version = await NextVersionAsync(ct);
             EnsureIdentitySucceeded(await users.UpdateAsync(user));
             if (mustRevoke) await RevokeAllSessionsAsync(user.Id, ct);
-            return ToListItem(user);
+            return await ToListItemAsync(user, ct);
         }
         finally
         {
@@ -390,20 +425,22 @@ public sealed partial class IdentityCoordinator(
     {
         var now = DateTimeOffset.UtcNow;
         var accountVersion = await db.SystemMetadata.Where(x => x.Id == 1).Select(x => x.AccountVersion).SingleAsync(ct);
-        var accounts = await users.Users.Select(x => new SyncedAccount
+        var accounts = await users.Users.Include(x => x.RoleDefinition).Select(x => new SyncedAccount
         {
             Id = x.Id,
             Username = x.UserName!,
             DisplayName = x.DisplayName,
             Role = x.Role,
+            RoleId = x.RoleDefinitionId,
+            RoleName = x.RoleDefinition.Name,
             GrantedPermissions = x.GrantedPermissions,
             EffectivePermissions = x.Role == UserRole.Admin
                 ? UserPermissions.All
-                : UserPermissions.ViewCurrentCourse | x.GrantedPermissions,
+                : UserPermissions.ViewCurrentCourse | x.RoleDefinition.DefaultPermissions | x.GrantedPermissions,
             Enabled = x.Enabled,
             Version = x.Version,
         }).ToListAsync(ct);
-        var activeSessions = await db.DeviceSessions.Include(x => x.User)
+        var activeSessions = await db.DeviceSessions.Include(x => x.User).ThenInclude(x => x.RoleDefinition)
             .Where(x => x.RevokedAt == null).ToListAsync(ct);
         var sessions = activeSessions.Where(x => x.ExpiresAt > now && x.User.Enabled)
             .Select(x => new SyncedDeviceSession
@@ -467,7 +504,7 @@ public sealed partial class IdentityCoordinator(
             DeviceSessionId = session.Id,
             DeviceSecret = deviceSecret,
             DeviceExpiresAt = session.ExpiresAt,
-            User = ToProfile(user),
+            User = await ToProfileAsync(user, ct),
         };
     }
 
@@ -538,33 +575,53 @@ public sealed partial class IdentityCoordinator(
         }
     }
 
-    private static UserProfile ToProfile(AppUser user) => new()
+    private async Task<UserProfile> ToProfileAsync(AppUser user, CancellationToken ct)
     {
-        Id = user.Id,
-        Username = user.UserName!,
-        DisplayName = user.DisplayName,
-        Role = user.Role,
-        GrantedPermissions = user.GrantedPermissions,
-        Permissions = RolePermissions.Effective(user.Role, user.GrantedPermissions),
-        Version = user.Version,
-    };
+        var role = user.RoleDefinition ?? await db.AccountRoles.AsNoTracking().SingleAsync(x => x.Id == user.RoleDefinitionId, ct);
+        return new UserProfile
+        {
+            Id = user.Id,
+            Username = user.UserName!,
+            DisplayName = user.DisplayName,
+            Role = user.Role,
+            RoleId = role.Id,
+            RoleName = role.Name,
+            GrantedPermissions = user.GrantedPermissions,
+            Permissions = user.Role == UserRole.Admin ? UserPermissions.All : UserPermissions.ViewCurrentCourse | role.DefaultPermissions | user.GrantedPermissions,
+            Version = user.Version,
+        };
+    }
 
-    private static UserListItem ToListItem(AppUser user) => new()
+    private async Task<UserListItem> ToListItemAsync(AppUser user, CancellationToken ct)
     {
-        Id = user.Id,
-        Username = user.UserName!,
-        DisplayName = user.DisplayName,
-        Role = user.Role,
-        GrantedPermissions = user.GrantedPermissions,
-        EffectivePermissions = RolePermissions.Effective(user.Role, user.GrantedPermissions),
-        Enabled = user.Enabled,
-        UpdatedAt = user.UpdatedAt,
-    };
+        var role = await db.AccountRoles.AsNoTracking().SingleAsync(x => x.Id == user.RoleDefinitionId, ct);
+        return new UserListItem
+        {
+            Id = user.Id,
+            Username = user.UserName!,
+            DisplayName = user.DisplayName,
+            Role = user.Role,
+            RoleId = role.Id,
+            RoleName = role.Name,
+            GrantedPermissions = user.GrantedPermissions,
+            EffectivePermissions = user.Role == UserRole.Admin ? UserPermissions.All : UserPermissions.ViewCurrentCourse | role.DefaultPermissions | user.GrantedPermissions,
+            Enabled = user.Enabled,
+            UpdatedAt = user.UpdatedAt,
+        };
+    }
+
+    private async Task<AccountRole> ResolveRoleAsync(Guid? roleId, UserRole legacyRole, CancellationToken ct)
+    {
+        var id = roleId ?? (legacyRole == UserRole.Admin ? AccountRole.AdministratorId : AccountRole.StudentId);
+        return await db.AccountRoles.SingleOrDefaultAsync(x => x.Id == id, ct)
+            ?? throw new IdentityOperationException(ApiErrorCodes.InvalidRequest, "Role not found");
+    }
 
     private static UserPermissions NormalizeGrants(UserRole role, UserPermissions grants) => role == UserRole.Admin
         ? UserPermissions.None
         : grants & (UserPermissions.AccessWebUi | UserPermissions.ManageUsers |
-            UserPermissions.SendNotifications | UserPermissions.ManageSchedule | UserPermissions.SystemControl);
+            UserPermissions.SendNotifications | UserPermissions.ManageSchedule | UserPermissions.SystemControl |
+            UserPermissions.TeacherComing);
 
     private static string NormalizeDeviceName(string value) => string.IsNullOrWhiteSpace(value)
         ? "Wear OS"
@@ -630,7 +687,12 @@ public sealed partial class IdentityCoordinator(
     private static partial Regex UsernameRegex();
 }
 
-public sealed record AuthPrincipal(PeerRole PeerRole, UserProfile? User, Guid? DeviceSessionId)
+public sealed record AuthPrincipal(
+    PeerRole PeerRole,
+    UserProfile? User,
+    Guid? DeviceSessionId,
+    Guid? PluginCredentialId,
+    DateTimeOffset? ValidUntil)
 {
     public bool IsPlugin => PeerRole == PeerRole.Plugin;
     public bool IsAdmin => User?.Role == UserRole.Admin;

@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Server.Tests;
@@ -14,28 +15,39 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>
     private readonly SemaphoreSlim _pluginGate = new(1, 1);
     private string? _pluginToken;
 
-    public TestWebApplicationFactory() : this(null, null) { }
+    public TestWebApplicationFactory() : this(null, null, null) { }
 
     private TestWebApplicationFactory(
         string? databasePath,
-        IReadOnlyDictionary<string, string?>? extraConfiguration)
+        IReadOnlyDictionary<string, string?>? extraConfiguration,
+        ILoggerProvider? loggerProvider)
     {
         DatabasePath = databasePath ?? Path.Combine(
             Path.GetTempPath(), "RemoteCI.Tests", Guid.NewGuid().ToString("N"), "remoteci.db");
         ExtraConfiguration = extraConfiguration;
+        LoggerProvider = loggerProvider;
     }
 
     public string DatabasePath { get; }
     private IReadOnlyDictionary<string, string?>? ExtraConfiguration { get; }
+    private ILoggerProvider? LoggerProvider { get; }
 
     public static TestWebApplicationFactory ForDatabase(
         string databasePath,
         IReadOnlyDictionary<string, string?>? extraConfiguration = null) =>
-        new(databasePath, extraConfiguration);
+        new(databasePath, extraConfiguration, null);
+
+    public static TestWebApplicationFactory ForDatabaseAndLogger(
+        string databasePath,
+        ILoggerProvider loggerProvider,
+        IReadOnlyDictionary<string, string?>? extraConfiguration = null) =>
+        new(databasePath, extraConfiguration, loggerProvider);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+        if (LoggerProvider is not null)
+            builder.ConfigureLogging(logging => logging.AddProvider(LoggerProvider));
         builder.ConfigureAppConfiguration((_, config) =>
         {
             var values = new Dictionary<string, string?>

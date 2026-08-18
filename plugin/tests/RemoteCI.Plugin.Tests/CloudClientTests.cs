@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using RemoteCI.Plugin.Services;
 using RemoteCI.Plugin.Settings;
@@ -31,6 +33,7 @@ public sealed class CloudClientTests
         public Exception? ReceiveError { get; set; }
         public Exception? SendError { get; set; }
         public TimeSpan SendDelay { get; set; }
+        public ConcurrentQueue<byte[]> SentMessages { get; } = new();
 
         public Task ConnectAsync(Uri uri, CancellationToken ct)
         {
@@ -42,6 +45,7 @@ public sealed class CloudClientTests
         {
             if (SendError is not null) throw SendError;
             if (SendDelay > TimeSpan.Zero) await Task.Delay(SendDelay, ct);
+            SentMessages.Enqueue(buffer.ToArray());
         }
 
         public async Task<WebSocketReceiveResult> ReceiveAsync(byte[] buffer, CancellationToken ct)
@@ -99,6 +103,27 @@ public sealed class CloudClientTests
             await Task.Delay(10);
         }
         Assert.Fail("条件在超时前未满足");
+    }
+
+    [Fact]
+    public async Task ConnectedHook_RepublishesExtensionSnapshotAfterSocketIsReady()
+    {
+        var socket = new FakeSocket();
+        var (client, _) = Create(preSeeded: socket);
+        client.Connected += (_, _) => _ = client.SendExtensionsAsync(
+        [
+            new ExtensionDefinition { Id = "demo.connected", DisplayName = "Connected extension" },
+        ]);
+        try
+        {
+            _ = client.StartAsync();
+            await WaitUntilAsync(() => socket.SentMessages.Any(bytes =>
+                JsonSerializer.Deserialize<Envelope>(bytes, JsonDefaults.Options)?.Type == Protocol.MessageTypeExtensionsSync), 2000);
+        }
+        finally
+        {
+            client.Dispose();
+        }
     }
 
     [Fact]

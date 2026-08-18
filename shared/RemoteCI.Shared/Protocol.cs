@@ -54,14 +54,20 @@ public enum UserPermissions
     SendNotifications = 1 << 3,
     ManageSchedule = 1 << 4,
     SystemControl = 1 << 5,
-    All = ViewCurrentCourse | AccessWebUi | ManageUsers | SendNotifications | ManageSchedule | SystemControl,
+    TeacherComing = 1 << 6,
+    All = ViewCurrentCourse | AccessWebUi | ManageUsers | SendNotifications | ManageSchedule | SystemControl | TeacherComing,
 }
 
 public static class RolePermissions
 {
-    public static UserPermissions Effective(UserRole role, UserPermissions granted) => role == UserRole.Admin
+    public static UserPermissions Effective(
+        UserRole role,
+        UserPermissions granted,
+        UserPermissions roleDefaults = UserPermissions.None) => role == UserRole.Admin
         ? UserPermissions.All
-        : UserPermissions.ViewCurrentCourse | (granted & ~UserPermissions.ViewCurrentCourse);
+        : UserPermissions.ViewCurrentCourse |
+          (roleDefaults & ~UserPermissions.ViewCurrentCourse) |
+          (granted & ~UserPermissions.ViewCurrentCourse);
 
     public static bool Has(UserProfileLike user, UserPermissions permission) =>
         (Effective(user.Role, user.GrantedPermissions) & permission) == permission;
@@ -104,6 +110,8 @@ public enum CommandKind
     Volume = 6,
     /// <summary>执行其他 ClassIsland 插件通过 RemoteCI 注册的自定义远程功能。</summary>
     RunExtension = 7,
+    /// <summary>显示“老师来了”强调提醒，等待 1 秒后由插件自动清除。</summary>
+    TeacherComing = 8,
 }
 
 public enum PowerActionKind
@@ -120,6 +128,7 @@ public static class CommandPermissions
     {
         CommandKind.ChangeSchedule => UserPermissions.ManageSchedule,
         CommandKind.SendNotification or CommandKind.ClearNotifications => UserPermissions.SendNotifications,
+        CommandKind.TeacherComing => UserPermissions.TeacherComing,
         CommandKind.SetMainMenuVisibility or CommandKind.Power or CommandKind.Volume => UserPermissions.SystemControl,
         _ => UserPermissions.None,
     };

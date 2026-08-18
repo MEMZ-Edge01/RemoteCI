@@ -62,6 +62,14 @@ public sealed class UserProfile : UserProfileLike
     [JsonPropertyName("role")]
     public UserRole Role { get; set; }
 
+    [JsonPropertyName("roleId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleId { get; set; }
+
+    [JsonPropertyName("roleName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RoleName { get; set; }
+
     [JsonPropertyName("grantedPermissions")]
     public UserPermissions GrantedPermissions { get; set; }
 
@@ -164,6 +172,14 @@ public sealed class SyncedAccount
     [JsonPropertyName("role")]
     public UserRole Role { get; set; }
 
+    [JsonPropertyName("roleId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleId { get; set; }
+
+    [JsonPropertyName("roleName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RoleName { get; set; }
+
     [JsonPropertyName("grantedPermissions")]
     public UserPermissions GrantedPermissions { get; set; }
 
@@ -239,6 +255,10 @@ public sealed class CreateUserRequest
     [JsonPropertyName("role")]
     public UserRole Role { get; set; } = UserRole.User;
 
+    [JsonPropertyName("roleId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleId { get; set; }
+
     [JsonPropertyName("grantedPermissions")]
     public UserPermissions GrantedPermissions { get; set; }
 }
@@ -250,6 +270,14 @@ public sealed class UpdateUserRequest
 
     [JsonPropertyName("role")]
     public UserRole Role { get; set; }
+
+    [JsonPropertyName("roleId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleId { get; set; }
+
+    [JsonPropertyName("roleName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RoleName { get; set; }
 
     [JsonPropertyName("grantedPermissions")]
     public UserPermissions GrantedPermissions { get; set; }
@@ -287,6 +315,14 @@ public sealed class UserListItem
     [JsonPropertyName("role")]
     public UserRole Role { get; set; }
 
+    [JsonPropertyName("roleId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? RoleId { get; set; }
+
+    [JsonPropertyName("roleName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RoleName { get; set; }
+
     [JsonPropertyName("grantedPermissions")]
     public UserPermissions GrantedPermissions { get; set; }
 
@@ -298,4 +334,34 @@ public sealed class UserListItem
 
     [JsonPropertyName("updatedAt")]
     public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed class AccountRoleInfo
+{
+    [JsonPropertyName("id")]
+    public Guid Id { get; set; }
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("kind")]
+    public string Kind { get; set; } = string.Empty;
+    [JsonPropertyName("defaultPermissions")]
+    public UserPermissions DefaultPermissions { get; set; }
+    [JsonPropertyName("userCount")]
+    public int UserCount { get; set; }
+}
+
+public sealed class CreateAccountRoleRequest
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("defaultPermissions")]
+    public UserPermissions DefaultPermissions { get; set; }
+}
+
+public sealed class UpdateAccountRoleRequest
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("defaultPermissions")]
+    public UserPermissions DefaultPermissions { get; set; }
 }
