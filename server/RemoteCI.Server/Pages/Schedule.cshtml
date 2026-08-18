@@ -2,7 +2,8 @@
 @model ScheduleModel
 @{ ViewData["Title"] = "七日课表"; }
 <div class="page-head"><div><p class="eyebrow">指定日期临时课表</p><h1>未来七日换课</h1></div><span class="status @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "可执行" : "插件离线")</span></div>
-<section class="panel schedule-pull-panel">
+<div class="layout-card-grid schedule-layout-grid" data-layout-group="schedule-main">
+<section class="panel schedule-pull-panel" id="schedule-pull" data-layout-card="schedule-pull" data-layout-default-span="3">
     <form method="post" asp-page-handler="Pull" class="schedule-pull-layout" data-schedule-pull-form>
         <div class="schedule-pull-copy"><h2>从插件拉取课表</h2><p class="muted">立即连接在线插件重新生成当前七日课表；拉取成功后会强制覆盖服务端缓存。</p></div>
         <button type="submit" class="schedule-pull-button" disabled="@(!Model.PluginOnline || Model.CurrentTask is not null)" data-schedule-pull-button>@(Model.CurrentTask is null ? "立即拉取课表" : "已有课表任务正在执行")</button>
@@ -18,7 +19,7 @@
 </section>
 @if (Model.Bundle is null)
 {
-    <div class="notice warning">插件尚未同步七日课表。</div>
+    <div class="notice warning layout-static-full">插件尚未同步七日课表。</div>
 }
 else
 {
@@ -28,7 +29,7 @@ else
         .GroupBy(course => course.Index)
         .OrderBy(group => group.Key)
         .ToList();
-    <div class="schedule-table-wrap">
+    <div class="schedule-table-wrap" id="schedule-table" data-layout-card="schedule-table" data-layout-default-span="3">
         <table class="schedule-table">
             <thead><tr><th scope="col" class="schedule-period-heading">节次</th>@foreach (var day in Model.Bundle.Days) { var dayTitle = DateTime.TryParse(day.Date, out var parsedDate) ? weekNames[(int)parsedDate.DayOfWeek] : day.Date; <th scope="col"><strong>@dayTitle</strong><small>@day.Date</small></th> }</tr></thead>
             <tbody>
@@ -40,7 +41,7 @@ else
             </tbody>
         </table>
     </div>
-    <section class="panel">
+    <section class="panel" id="schedule-change" data-layout-card="schedule-change" data-layout-default-span="2">
         <h2>提交修改</h2>
         <form method="post" class="form-grid schedule-change-form" data-schedule-change-form>
             <label>日期与原节次
@@ -76,7 +77,7 @@ else
         </form>
     </section>
 }
-<section class="panel">
+<section class="panel" id="schedule-auto-pull" data-layout-card="schedule-auto-pull" data-layout-default-span="1">
     <h2>自动拉取课表</h2>
     <p class="muted">插件每次连接时都会自动拉取；这里可额外设置在线期间的刷新周期。</p>
     <form method="post" asp-page-handler="PullInterval" class="form-grid">
@@ -92,3 +93,4 @@ else
         <button type="submit">保存间隔</button>
     </form>
 </section>
+</div>

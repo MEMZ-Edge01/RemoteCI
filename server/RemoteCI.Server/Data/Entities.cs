@@ -87,3 +87,13 @@ public sealed class BackupConfiguration
     public DateTimeOffset? LastSucceededAt { get; set; }
     public string? LastError { get; set; }
 }
+
+
+public sealed class UserCardLayout
+{
+    public Guid UserId { get; set; }
+    public AppUser User { get; set; } = null!;
+    public string PageKey { get; set; } = string.Empty;
+    public string LayoutJson { get; set; } = string.Empty;
+    public DateTimeOffset UpdatedAt { get; set; }
+}

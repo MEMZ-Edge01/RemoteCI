@@ -885,6 +885,100 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task RazorWebUi_CardLayoutPersistsAcrossSessionsAndIsAccountScoped()
+    {
+        using var firstBrowser = CreateBrowserClient();
+        await LoginWebUiAsync(firstBrowser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var accountHtml = await firstBrowser.GetStringAsync("/Account");
+        const string layoutJson = """{"version":1,"items":[{"cardId":"account-sessions","groupId":"account-main","order":0,"span":2},{"cardId":"account-password","groupId":"account-main","order":1,"span":1}]}""";
+        var saved = await PostRazorFormAsync(
+            firstBrowser,
+            "/Layout?handler=Save",
+            accountHtml,
+            new Dictionary<string, string> { ["pageKey"] = "account", ["layoutJson"] = layoutJson });
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+
+        using var secondBrowser = CreateBrowserClient();
+        await LoginWebUiAsync(secondBrowser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var loaded = await secondBrowser.GetStringAsync("/Layout?handler=Get&pageKey=account");
+        Assert.Contains("account-sessions", loaded);
+        Assert.True(loaded.IndexOf("account-sessions", StringComparison.Ordinal) < loaded.IndexOf("account-password", StringComparison.Ordinal));
+
+        var admin = await _factory.LoginAsync();
+        var create = await _client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "layout.isolated",
+                DisplayName = "Layout isolated",
+                Password = "Layout-Isolated-Password-2026",
+            }));
+        create.EnsureSuccessStatusCode();
+        using var otherBrowser = CreateBrowserClient();
+        await LoginWebUiAsync(otherBrowser, "layout.isolated", "Layout-Isolated-Password-2026");
+        Assert.DoesNotContain("account-sessions", await otherBrowser.GetStringAsync("/Layout?handler=Get&pageKey=account"));
+
+        var secondAccountHtml = await secondBrowser.GetStringAsync("/Account");
+        var reset = await PostRazorFormAsync(
+            secondBrowser,
+            "/Layout?handler=Reset",
+            secondAccountHtml,
+            new Dictionary<string, string> { ["pageKey"] = "account" });
+        Assert.Equal(HttpStatusCode.OK, reset.StatusCode);
+        Assert.DoesNotContain("account-sessions", await firstBrowser.GetStringAsync("/Layout?handler=Get&pageKey=account"));
+
+        var missingToken = await firstBrowser.PostAsync(
+            "/Layout?handler=Save",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["pageKey"] = "account",
+                ["layoutJson"] = layoutJson,
+            }));
+        Assert.Equal(HttpStatusCode.BadRequest, missingToken.StatusCode);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_CardLayoutEditorIsAvailableOnAllMajorPages()
+    {
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        foreach (var (path, key) in new[]
+        {
+            ("/", "index"), ("/Control", "control"), ("/Schedule", "schedule"),
+            ("/Users", "users"), ("/SystemConfig", "system-config"), ("/Account", "account"),
+        })
+        {
+            var html = WebUtility.HtmlDecode(await browser.GetStringAsync(path));
+            Assert.Contains($"data-layout-page=\"{key}\"", html);
+            Assert.Contains("data-layout-edit", html);
+            Assert.Contains("data-layout-group", html);
+            Assert.Contains("data-layout-card", html);
+            Assert.Contains("data-layout-reset", html);
+        }
+
+        var css = await browser.GetStringAsync("/app.css");
+        Assert.Contains("grid-template-columns: repeat(3,minmax(0,1fr))", css);
+        Assert.Contains("@media (max-width: 1100px)", css);
+        Assert.Contains("grid-template-columns: repeat(2,minmax(0,1fr))", css);
+        Assert.Contains("@media (max-width: 700px)", css);
+        Assert.Contains("grid-template-columns: 1fr", css);
+        var script = await browser.GetStringAsync("/layout-editor.js");
+        Assert.Contains("data-layout-move", script);
+        Assert.Contains("data-layout-span", script);
+        Assert.Contains("postLayout(\"Save\"", script);
+        Assert.Contains("postLayout(\"Reset\"", script);
+        Assert.Contains("orderedCards.push(...currentCards.filter", script);
+        Assert.Contains("ArrowLeft", script);
+        Assert.Contains("ArrowRight", script);
+        Assert.Contains("""<option value="1">1 \u5217</option>""", script);
+        Assert.Contains("""<option value="2">2 \u5217</option>""", script);
+        Assert.Contains("""<option value="3">\u6574\u884c</option>""", script);
+        Assert.DoesNotContain("data-layout-hide", script);
+    }
+
+    [Fact]
     public async Task RazorWebUi_OrdinaryUserOnlyGetsPersonalPages()
     {
         var admin = await _factory.LoginAsync();

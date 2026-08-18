@@ -13,6 +13,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<SystemMetadata> SystemMetadata => Set<SystemMetadata>();
     public DbSet<AccountRole> AccountRoles => Set<AccountRole>();
     public DbSet<BackupConfiguration> BackupConfigurations => Set<BackupConfiguration>();
+    public DbSet<UserCardLayout> UserCardLayouts => Set<UserCardLayout>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -33,6 +34,13 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         builder.Entity<BackupConfiguration>(entity =>
         {
             entity.Property(x => x.LastError).HasMaxLength(1000);
+        });
+        builder.Entity<UserCardLayout>(entity =>
+        {
+            entity.HasKey(x => new { x.UserId, x.PageKey });
+            entity.Property(x => x.PageKey).HasMaxLength(64);
+            entity.Property(x => x.LayoutJson).HasMaxLength(32_768);
+            entity.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<DeviceSession>(entity =>
         {

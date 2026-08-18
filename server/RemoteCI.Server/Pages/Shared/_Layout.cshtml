@@ -15,6 +15,16 @@
         ? UserPermissions.None
         : RolePermissions.Effective(current.Role, current.GrantedPermissions, roleDefaults);
     var currentPage = ViewContext.RouteData.Values["page"]?.ToString();
+    var layoutPageKey = currentPage switch
+    {
+        "/Index" => "index",
+        "/Control" => "control",
+        "/Schedule" => "schedule",
+        "/Users" => "users",
+        "/SystemConfig" => "system-config",
+        "/Account" => "account",
+        _ => null,
+    };
     string NavClass(string page) => currentPage == page ? "nav-link active" : "nav-link";
     string? CurrentPage(string page) => currentPage == page ? "page" : null;
     var userInitial = string.IsNullOrWhiteSpace(current?.DisplayName) ? "R" : current.DisplayName.Trim()[0].ToString().ToUpperInvariant();
@@ -83,13 +93,29 @@
                     <span class="search-feedback" data-search-feedback aria-live="polite"></span>
                 </div>
                 <div class="topbar-actions">
+                    @if (layoutPageKey is not null)
+                    {
+                        <button class="topbar-button" type="button" data-layout-edit aria-label="编辑卡片排版" title="编辑卡片排版"><i class="bi bi-grid-3x3-gap" aria-hidden="true"></i></button>
+                    }
                     <button class="topbar-button" type="button" data-theme-toggle aria-label="切换明暗主题" title="切换明暗主题"><i class="bi bi-circle-half" aria-hidden="true"></i></button>
                     <button class="topbar-button" type="button" data-page-refresh aria-label="刷新当前页面" title="刷新当前页面"><i class="bi bi-arrow-clockwise" aria-hidden="true"></i></button>
                     <a class="topbar-button" asp-page="/Account" aria-label="打开个人账号" title="个人账号"><i class="bi bi-gear" aria-hidden="true"></i></a>
                     <a class="user-avatar" asp-page="/Account" aria-label="打开 @current.DisplayName 的个人账号" title="@current.DisplayName">@userInitial</a>
                 </div>
             </header>
-            <main class="shell">
+            <main class="shell" data-layout-page="@layoutPageKey">
+                @if (layoutPageKey is not null)
+                {
+                    <div class="layout-editor-toolbar" data-layout-toolbar hidden aria-live="polite">
+                        <div><strong>卡片排版</strong><span data-layout-status>拖动卡片调整顺序，并选择卡片宽度。</span></div>
+                        <div class="layout-toolbar-actions">
+                            <button type="button" class="ghost" data-layout-reset>恢复默认</button>
+                            <button type="button" class="ghost" data-layout-cancel>取消</button>
+                            <button type="button" data-layout-save>保存排版</button>
+                        </div>
+                    </div>
+                    <form method="post" asp-page="/Layout" data-layout-antiforgery hidden>@Html.AntiForgeryToken()</form>
+                }
                 @if (TempData["Message"] is string message) { <div class="flash">@message</div> }
                 @if (TempData["Error"] is string error) { <div class="flash error">@error</div> }
                 @RenderBody()
@@ -105,5 +131,6 @@
         </main>
     }
     <script src="~/app.js" asp-append-version="true" defer></script>
+    <script src="~/layout-editor.js" asp-append-version="true" defer></script>
 </body>
 </html>

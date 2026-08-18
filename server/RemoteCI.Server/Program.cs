@@ -79,6 +79,7 @@ builder.Services.AddRazorPages(options => options.Conventions.AllowAnonymousToPa
 builder.Services.AddScoped<IdentityCoordinator>();
 builder.Services.AddScoped<AccountRoleService>();
 builder.Services.AddScoped<ConfigurationArchiveService>();
+builder.Services.AddScoped<UserCardLayoutService>();
 builder.Services.AddScoped<SchedulePullSettings>();
 builder.Services.AddSingleton<IStateStore, StateStore>();
 builder.Services.AddSingleton<PeerRegistry>();

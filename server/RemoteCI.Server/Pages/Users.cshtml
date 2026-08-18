@@ -11,9 +11,10 @@
     </div>
 </div>
 
+<div class="layout-card-grid" data-layout-group="users-main">
 @if (Model.CurrentUser.Role == UserRole.Admin)
 {
-<section class="panel">
+<section class="panel" id="role-management" data-layout-card="role-management" data-layout-default-span="3">
     <div class="panel-heading">
         <div><h2>角色配置</h2><p class="muted">角色默认权限会统一应用到所有同角色账号。</p></div>
         <button type="button" data-user-edit-open="role-create-dialog" aria-controls="role-create-dialog">创建角色</button>
@@ -57,7 +58,7 @@
 </section>
 }
 
-<section class="panel">
+<section class="panel" id="account-create" data-layout-card="account-create" data-layout-default-span="1">
     <h2>新建账号</h2>
     <form method="post" asp-page-handler="Create" class="form-grid" data-async-user-create data-role-form>
         <div class="form-error error" data-create-user-error role="alert" hidden></div>
@@ -86,7 +87,7 @@
     </form>
 </section>
 
-<section class="panel">
+<section class="panel" id="account-list" data-layout-card="account-list" data-layout-default-span="2">
     <h2>现有账号</h2>
     <div class="user-account-table-wrap">
         <table class="user-account-table">
@@ -191,3 +192,4 @@
         </dialog>
     }
 </section>
+</div>

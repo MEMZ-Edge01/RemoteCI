@@ -425,3 +425,46 @@ textarea { resize: vertical; }
 .account-row-actions form { display: inline-flex; margin: 0; }
 .account-row-actions .user-delete-button, .account-row-actions .user-edit-button { min-height: 36px; padding: 6px 14px; }
 @media (max-width: 700px) { .account-row-actions { width: 100%; } .account-row-actions form, .account-row-actions button { flex: 1; } }
+
+
+/* 卡片自定义排版 */
+.layout-card-grid { display: grid !important; grid-template-columns: repeat(3,minmax(0,1fr)) !important; align-items: start; gap: 16px; }
+.layout-card-grid > [data-layout-card] { min-width: 0; margin-bottom: 0; position: relative; }
+.layout-card-grid > [data-layout-card][data-card-span="1"],
+.layout-card-grid > [data-layout-card]:not([data-card-span])[data-layout-default-span="1"] { grid-column: span 1 !important; }
+.layout-card-grid > [data-layout-card][data-card-span="2"],
+.layout-card-grid > [data-layout-card]:not([data-card-span])[data-layout-default-span="2"] { grid-column: span 2 !important; }
+.layout-card-grid > [data-layout-card][data-card-span="3"],
+.layout-card-grid > [data-layout-card]:not([data-card-span])[data-layout-default-span="3"] { grid-column: 1/-1 !important; }
+.layout-editor-toolbar { position: sticky; top: 82px; z-index: 25; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 16px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: 11px; background: color-mix(in srgb,var(--surface) 94%,transparent); box-shadow: var(--shadow); backdrop-filter: blur(12px); }
+.layout-editor-toolbar[hidden] { display: none; }
+.layout-editor-toolbar > div:first-child { display: grid; min-width: 0; }
+.layout-editor-toolbar span { color: var(--muted); font-size: 12px; }
+.layout-toolbar-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+.layout-card-controls { display: none; min-height: 42px; align-items: center; gap: 7px; margin: -10px -10px 14px; padding: 6px 8px; border: 1px dashed var(--accent); border-radius: 8px; background: var(--accent-faint); }
+.layout-editing .layout-card-controls { display: flex; }
+.layout-card-controls button { width: 34px; min-height: 32px; padding: 0; }
+.layout-card-controls label { display: flex; margin-left: auto; align-items: center; gap: 7px; }
+.layout-card-controls select { width: auto; min-width: 92px; min-height: 32px; padding-block: 3px; }
+.layout-drag-handle { border-color: var(--accent); background: var(--accent); cursor: grab; }
+.layout-editing [data-layout-card] { outline: 2px dashed color-mix(in srgb,var(--accent) 65%,transparent); outline-offset: 3px; }
+.layout-card-dragging { opacity: .5; }
+
+@media (max-width: 1100px) {
+    .layout-card-grid { grid-template-columns: repeat(2,minmax(0,1fr)) !important; }
+    .layout-card-grid > [data-layout-card][data-card-span="2"],
+    .layout-card-grid > [data-layout-card][data-card-span="3"],
+    .layout-card-grid > [data-layout-card]:not([data-card-span])[data-layout-default-span="2"],
+    .layout-card-grid > [data-layout-card]:not([data-card-span])[data-layout-default-span="3"] { grid-column: 1/-1 !important; }
+}
+
+@media (max-width: 700px) {
+    .layout-card-grid { grid-template-columns: 1fr !important; }
+    .layout-card-grid > [data-layout-card] { grid-column: 1 !important; }
+    .layout-editor-toolbar { top: 78px; align-items: stretch; flex-direction: column; }
+    .layout-toolbar-actions { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
+    .layout-toolbar-actions button { width: 100%; }
+    .layout-card-controls { flex-wrap: wrap; }
+    .layout-card-controls label { width: 100%; margin-left: 0; }
+    .layout-card-controls select { flex: 1; }
+}

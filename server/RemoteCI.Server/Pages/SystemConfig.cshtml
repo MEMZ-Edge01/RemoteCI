@@ -8,7 +8,8 @@
         <p class="muted">管理 RemoteCI 服务端的全局配置与维护功能。</p>
     </div>
 </div>
-<section class="panel update-panel">
+<div class="layout-card-grid" data-layout-group="system-config-main">
+<section class="panel update-panel" id="system-update" data-layout-card="system-update" data-layout-default-span="2">
     <h2>系统更新@(Model.IsFnos ? "（飞牛 fnOS）" : "")</h2>
     @if (Model.IsFnos)
     {
@@ -63,7 +64,7 @@
     }
 </section>
 
-<section class="panel">
+<section class="panel" id="automatic-backup" data-layout-card="automatic-backup" data-layout-default-span="1">
     <h2>自动备份</h2>
     <p class="muted">默认每天 02:00 执行，备份文件保存在数据库目录下的 backups 文件夹。</p>
     <form method="post" asp-page-handler="SaveBackupSettings" class="form-grid" data-backup-settings-form>
@@ -76,12 +77,13 @@
     </form>
     <form method="post" asp-page-handler="BackupNow" class="inline-form"><button type="submit" class="ghost">立即备份</button></form>
 </section>
-<section class="panel">
+<section class="panel" id="local-backups" data-layout-card="local-backups" data-layout-default-span="3">
     <h2>本地备份</h2>
     @if (Model.Backups.Count == 0) { <p class="muted">尚无本地备份。</p> }
-    else { <div class="backup-list">@foreach (var backup in Model.Backups) { <article><div><strong>@backup.Name</strong><small>@backup.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ? @Math.Ceiling(backup.Size / 1024d) KB</small></div><div class="row-actions"><a class="button ghost" asp-page-handler="DownloadBackup" asp-route-name="@backup.Name">下载</a><form method="post" asp-page-handler="RestoreBackup" onsubmit="return confirm('恢复会替换当前配置并重启服务，确定继续？')"><input type="hidden" name="name" value="@backup.Name" /><button type="submit">恢复</button></form><form method="post" asp-page-handler="DeleteBackup" onsubmit="return confirm('确定删除此备份？')"><input type="hidden" name="name" value="@backup.Name" /><button type="submit" class="danger ghost">删除</button></form></div></article> }</div> }
+    else { <div class="backup-list">@foreach (var backup in Model.Backups) { <article><div><strong>@backup.Name</strong><small>@backup.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") · @Math.Ceiling(backup.Size / 1024d) KB</small></div><div class="row-actions"><a class="button ghost" asp-page-handler="DownloadBackup" asp-route-name="@backup.Name">下载</a><form method="post" asp-page-handler="RestoreBackup" onsubmit="return confirm('恢复会替换当前配置并重启服务，确定继续？')"><input type="hidden" name="name" value="@backup.Name" /><button type="submit">恢复</button></form><form method="post" asp-page-handler="DeleteBackup" onsubmit="return confirm('确定删除此备份？')"><input type="hidden" name="name" value="@backup.Name" /><button type="submit" class="danger ghost">删除</button></form></div></article> }</div> }
 </section>
-<section class="panel two-column">
+<section class="panel two-column" id="config-transfer" data-layout-card="config-transfer" data-layout-default-span="3">
     <div><h2>导出加密配置</h2><p class="muted">包含课程、账号密码哈希、角色权限、插件长期凭据和可修改系统设置。</p><form method="post" asp-page-handler="ExportConfig" class="stack"><label>导出密码<input asp-for="ExportOptions.Password" type="password" minlength="8" required /></label><label>确认密码<input asp-for="ExportOptions.ConfirmPassword" type="password" minlength="8" required /></label><button type="submit">导出配置包</button></form></div>
     <div><h2>导入加密配置</h2><p class="muted">导入前会自动备份当前配置，成功后清除设备会话、断开连接并重启服务。</p><form method="post" asp-page-handler="ImportConfig" enctype="multipart/form-data" class="stack" onsubmit="return confirm('导入将完整替换当前配置，确定继续？')"><label>配置包<input asp-for="ImportOptions.File" type="file" accept=".rcicfg" required /></label><label>配置包密码<input asp-for="ImportOptions.Password" type="password" minlength="8" required /></label><button type="submit" class="danger">导入并重启</button></form></div>
 </section>
+</div>

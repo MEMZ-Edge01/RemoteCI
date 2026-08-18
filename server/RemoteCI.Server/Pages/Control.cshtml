@@ -15,10 +15,10 @@
     <span class="status @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "插件在线" : "插件离线")</span>
 </div>
 
-<div class="control-grid">
+<div class="control-grid layout-card-grid" data-layout-group="control-main">
     @if (Model.CanTeacherComing)
     {
-        <section class="panel control-card" id="teacher-coming">
+        <section class="panel control-card" id="teacher-coming" data-layout-card="teacher-coming" data-layout-default-span="1">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi bi-mortarboard" aria-hidden="true"></i></span>
                 <div><h2>老师来了</h2><p class="muted">向插件发送单一指令，由插件显示强调提醒并在 1 秒后自动清除。</p></div>
@@ -31,7 +31,7 @@
 
     @if (Model.CanSendNotifications)
     {
-        <section class="panel control-card control-card-full" id="send-notification">
+        <section class="panel control-card control-card-full" id="send-notification" data-layout-card="send-notification" data-layout-default-span="3">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi bi-send" aria-hidden="true"></i></span>
                 <div><h2>发送通知</h2><p class="muted">向 ClassIsland 发送自定义通知，成功后广播给在线手表。</p></div>
@@ -52,7 +52,7 @@
             </div>
         </section>
 
-        <section class="panel control-card" id="clear-notifications">
+        <section class="panel control-card" id="clear-notifications" data-layout-card="clear-notifications" data-layout-default-span="1">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi bi-bell-slash" aria-hidden="true"></i></span>
                 <div><h2>清除通知</h2><p class="muted">清除 ClassIsland 当前正在显示的提醒。</p></div>
@@ -65,7 +65,7 @@
 
     @if (Model.CanControlSystem)
     {
-        <section class="panel control-card" id="main-menu">
+        <section class="panel control-card" id="main-menu" data-layout-card="main-menu" data-layout-default-span="1">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi @(mainMenuVisible ? "bi-eye-slash" : "bi-eye")" aria-hidden="true"></i></span>
                 <div><h2>主界面</h2><p class="muted">当前状态：@(mainMenuVisible ? "已显示" : "已隐藏")。</p></div>
@@ -76,7 +76,7 @@
             </form>
         </section>
 
-        <section class="panel control-card control-card-wide" id="volume">
+        <section class="panel control-card control-card-wide" id="volume" data-layout-card="volume" data-layout-default-span="2">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi @(snapshot?.IsMuted == true ? "bi-volume-mute" : "bi-volume-up")" aria-hidden="true" data-volume-icon></i></span>
                 <div><h2>音量</h2><p class="muted" data-volume-summary>当前音量 @(snapshot?.VolumePercent ?? 0)% · @(snapshot?.IsMuted == true ? "已静音" : "未静音")</p></div>
@@ -104,7 +104,7 @@
             }
         </section>
 
-        <section class="panel control-card control-card-wide" id="power">
+        <section class="panel control-card control-card-wide" id="power" data-layout-card="power" data-layout-default-span="2">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi bi-power" aria-hidden="true"></i></span>
                 <div><h2>电源</h2><p class="muted">直接控制运行 ClassIsland 的教室电脑，请在执行前确认。</p></div>
@@ -123,7 +123,7 @@
 
     @if (Model.VisibleExtensions.Count > 0)
     {
-        <section class="panel control-card control-card-full" id="extensions">
+        <section class="panel control-card control-card-full" id="extensions" data-layout-card="extensions" data-layout-default-span="3">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi bi-puzzle" aria-hidden="true"></i></span>
                 <div><h2>扩展功能</h2><p class="muted">由其他 ClassIsland 插件注册，并按当前账号权限显示。</p></div>

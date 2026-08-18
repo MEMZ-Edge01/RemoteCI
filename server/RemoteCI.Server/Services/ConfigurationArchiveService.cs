@@ -31,12 +31,15 @@ public sealed class ConfigurationArchiveService(
             x.Id, x.UserName!, x.NormalizedUserName!, x.DisplayName, x.PasswordHash!, x.SecurityStamp!, x.ConcurrencyStamp!,
             x.Role, x.RoleDefinitionId, x.GrantedPermissions, x.Enabled, x.Version, x.UpdatedAt)).ToListAsync(ct);
         var plugins = await db.PluginCredentials.AsNoTracking().Select(x => new PluginSnapshot(x.Id, x.Name, x.TokenHash, x.Enabled, x.CreatedAt, x.LastSeenAt)).ToListAsync(ct);
+        var layouts = await db.UserCardLayouts.AsNoTracking()
+            .Select(x => new CardLayoutSnapshot(x.UserId, x.PageKey, x.LayoutJson, x.UpdatedAt))
+            .ToListAsync(ct);
         var metadata = await db.SystemMetadata.AsNoTracking().SingleAsync(x => x.Id == 1, ct);
         var backup = await db.BackupConfigurations.AsNoTracking().SingleAsync(x => x.Id == 1, ct);
         return new ConfigurationSnapshot(1, DateTimeOffset.UtcNow, roles, users, plugins,
             new MetadataSnapshot(metadata.AccountVersion, metadata.ForceSenderInTitle, metadata.SchedulePullIntervalMinutes),
             new BackupSettingsSnapshot(backup.Enabled, backup.Cadence, backup.TimeOfDay, backup.DayOfWeek, backup.MaxBackups),
-            state.GetLatestSchedule());
+            state.GetLatestSchedule(), layouts);
     }
 
     public async Task<BackupFileInfo> CreateLocalBackupAsync(string source, CancellationToken ct = default)
@@ -92,6 +95,7 @@ public sealed class ConfigurationArchiveService(
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
         await db.DeviceSessions.ExecuteDeleteAsync(ct);
         await db.PluginPairingCodes.ExecuteDeleteAsync(ct);
+        await db.UserCardLayouts.ExecuteDeleteAsync(ct);
         await db.Users.ExecuteDeleteAsync(ct);
         await db.AccountRoles.ExecuteDeleteAsync(ct);
         await db.PluginCredentials.ExecuteDeleteAsync(ct);
@@ -100,6 +104,7 @@ public sealed class ConfigurationArchiveService(
         await db.SaveChangesAsync(ct);
         db.Users.AddRange(snapshot.Users.Select(x => new AppUser { Id=x.Id, UserName=x.Username, NormalizedUserName=x.NormalizedUsername, DisplayName=x.DisplayName, PasswordHash=x.PasswordHash, SecurityStamp=x.SecurityStamp, ConcurrencyStamp=x.ConcurrencyStamp, Role=x.Role, RoleDefinitionId=x.RoleId, GrantedPermissions=x.GrantedPermissions, Enabled=x.Enabled, Version=x.Version, UpdatedAt=x.UpdatedAt, EmailConfirmed=false, PhoneNumberConfirmed=false, TwoFactorEnabled=false, LockoutEnabled=true }));
         db.PluginCredentials.AddRange(snapshot.Plugins.Select(x => new PluginCredential { Id=x.Id, Name=x.Name, TokenHash=x.TokenHash, Enabled=x.Enabled, CreatedAt=x.CreatedAt, LastSeenAt=x.LastSeenAt }));
+        db.UserCardLayouts.AddRange((snapshot.Layouts ?? []).Select(x => new UserCardLayout { UserId=x.UserId, PageKey=x.PageKey, LayoutJson=x.LayoutJson, UpdatedAt=x.UpdatedAt }));
         var metadata = await db.SystemMetadata.SingleAsync(x => x.Id == 1, ct);
         metadata.AccountVersion = snapshot.Metadata.AccountVersion + 1; metadata.ForceSenderInTitle=snapshot.Metadata.ForceSenderInTitle; metadata.SchedulePullIntervalMinutes=snapshot.Metadata.SchedulePullIntervalMinutes;
         var backup = await db.BackupConfigurations.SingleAsync(x => x.Id == 1, ct);
@@ -120,13 +125,44 @@ public sealed class ConfigurationArchiveService(
     private static ConfigurationSnapshot Decompress(byte[] bytes) { using var input=new MemoryStream(bytes); using var gzip=new GZipStream(input,CompressionMode.Decompress); return JsonSerializer.Deserialize<ConfigurationSnapshot>(gzip,JsonDefaults.Options) ?? throw new InvalidDataException("Invalid backup"); }
     private static BackupFileInfo ToInfo(FileInfo file) => new(file.Name,file.CreationTimeUtc,file.Length,file.Name.Contains("preimport",StringComparison.OrdinalIgnoreCase)?"Import":"Backup");
     private static void ValidatePassword(string value) { if (value.Length < 8) throw new InvalidDataException("Export password must contain at least 8 characters"); }
-    private static void Validate(ConfigurationSnapshot value) { if(value.Version!=1 || value.Roles.Count==0 || value.Users.Count==0) throw new InvalidDataException("Invalid backup schema"); var roleIds=value.Roles.Select(x=>x.Id).ToHashSet(); if(value.Users.Any(x=>!roleIds.Contains(x.RoleId))) throw new InvalidDataException("Unknown role reference"); if(!value.Users.Any(x=>x.Enabled && x.Role==UserRole.Admin)) throw new InvalidDataException("At least one enabled administrator is required"); if(value.Users.Select(x=>x.Username.ToUpperInvariant()).Distinct().Count()!=value.Users.Count) throw new InvalidDataException("Duplicate account ID"); }
+    private static void Validate(ConfigurationSnapshot value)
+    {
+        if (value.Version != 1 || value.Roles.Count == 0 || value.Users.Count == 0)
+            throw new InvalidDataException("Invalid backup schema");
+        var roleIds = value.Roles.Select(role => role.Id).ToHashSet();
+        if (value.Users.Any(user => !roleIds.Contains(user.RoleId)))
+            throw new InvalidDataException("Unknown role reference");
+        if (!value.Users.Any(user => user.Enabled && user.Role == UserRole.Admin))
+            throw new InvalidDataException("At least one enabled administrator is required");
+        if (value.Users.Select(user => user.Username.ToUpperInvariant()).Distinct().Count() != value.Users.Count)
+            throw new InvalidDataException("Duplicate account ID");
+
+        var userIds = value.Users.Select(user => user.Id).ToHashSet();
+        var layoutKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var layout in value.Layouts ?? [])
+        {
+            if (!userIds.Contains(layout.UserId))
+                throw new InvalidDataException("Unknown layout account reference");
+            if (!layoutKeys.Add($"{layout.UserId:N}\n{layout.PageKey}"))
+                throw new InvalidDataException("Duplicate card layout");
+            try
+            {
+                UserCardLayoutService.ValidateStoredLayout(layout.PageKey, layout.LayoutJson);
+            }
+            catch (IdentityOperationException ex)
+            {
+                throw new InvalidDataException("Invalid card layout", ex);
+            }
+        }
+    }
 }
 
 public sealed record BackupFileInfo(string Name, DateTimeOffset CreatedAt, long Size, string Source);
-public sealed record ConfigurationSnapshot(int Version, DateTimeOffset CreatedAt, List<RoleSnapshot> Roles, List<UserSnapshot> Users, List<PluginSnapshot> Plugins, MetadataSnapshot Metadata, BackupSettingsSnapshot Backup, ScheduleBundle? Schedule);
+public sealed record ConfigurationSnapshot(int Version, DateTimeOffset CreatedAt, List<RoleSnapshot> Roles, List<UserSnapshot> Users, List<PluginSnapshot> Plugins, MetadataSnapshot Metadata, BackupSettingsSnapshot Backup, ScheduleBundle? Schedule, List<CardLayoutSnapshot>? Layouts = null);
 public sealed record RoleSnapshot(Guid Id,string Name,AccountRoleKind Kind,UserPermissions DefaultPermissions,DateTimeOffset CreatedAt,DateTimeOffset UpdatedAt);
 public sealed record UserSnapshot(Guid Id,string Username,string NormalizedUsername,string DisplayName,string PasswordHash,string SecurityStamp,string ConcurrencyStamp,UserRole Role,Guid RoleId,UserPermissions GrantedPermissions,bool Enabled,long Version,DateTimeOffset UpdatedAt);
 public sealed record PluginSnapshot(Guid Id,string Name,string TokenHash,bool Enabled,DateTimeOffset CreatedAt,DateTimeOffset LastSeenAt);
 public sealed record MetadataSnapshot(long AccountVersion,bool ForceSenderInTitle,int SchedulePullIntervalMinutes);
 public sealed record BackupSettingsSnapshot(bool Enabled,BackupCadence Cadence,TimeSpan TimeOfDay,DayOfWeek DayOfWeek,int MaxBackups);
+
+public sealed record CardLayoutSnapshot(Guid UserId,string PageKey,string LayoutJson,DateTimeOffset UpdatedAt);

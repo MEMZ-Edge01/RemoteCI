@@ -27,29 +27,29 @@
     </div>
 }
 
-<section class="metric-grid" aria-label="关键状态">
-    <article class="metric-card metric-card-primary">
+<section class="metric-grid layout-card-grid" data-layout-group="index-metrics" aria-label="关键状态">
+    <article class="metric-card metric-card-primary" data-layout-card="metric-current-course" data-layout-default-span="1">
         <span class="metric-label">当前课程</span>
         <strong class="metric-value metric-value-text">@(Model.Snapshot?.CurrentSubject ?? "暂无课程")</strong>
         <span class="metric-chip @(Model.Snapshot is null ? "neutral" : "positive")"><i class="bi bi-book" aria-hidden="true"></i>@(Model.Snapshot is null ? "等待状态" : "状态已同步")</span>
     </article>
-    <article class="metric-card">
+    <article class="metric-card" data-layout-card="metric-plugin" data-layout-default-span="1">
         <span class="metric-label">插件连接</span>
         <strong class="metric-value">@(Model.PluginOnline ? "在线" : "离线")</strong>
         <span class="metric-chip @(Model.PluginOnline ? "positive" : "danger")"><i class="bi @(Model.PluginOnline ? "bi-arrow-up" : "bi-exclamation")" aria-hidden="true"></i>@(Model.PluginOnline ? "可执行操作" : "需要检查")</span>
     </article>
-    <article class="metric-card">
+    <article class="metric-card" data-layout-card="metric-watches" data-layout-default-span="1">
         <span class="metric-label">在线手表</span><strong class="metric-value">@Model.WatchConnections</strong>
         <span class="metric-chip neutral"><i class="bi bi-smartwatch" aria-hidden="true"></i>已连接设备</span>
     </article>
-    <article class="metric-card">
+    <article class="metric-card" data-layout-card="metric-accounts" data-layout-default-span="1">
         <span class="metric-label">系统账号</span><strong class="metric-value">@Model.AccountCount</strong>
         <span class="metric-chip neutral"><i class="bi bi-people" aria-hidden="true"></i>权限内账号</span>
     </article>
 </section>
 
-<div class="dashboard-grid">
-    <section class="dashboard-panel classroom-panel">
+<div class="dashboard-grid layout-card-grid" data-layout-group="index-overview">
+    <section class="dashboard-panel classroom-panel" data-layout-card="classroom-status" data-layout-default-span="2">
         <header class="panel-heading">
             <div><p class="eyebrow">CLASSROOM STATUS</p><h2>实时课堂状态</h2></div>
             <span class="status-pill @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "在线刷新" : "连接中断")</span>
@@ -66,7 +66,7 @@
         </dl>
     </section>
 
-    <section class="dashboard-panel activity-panel">
+    <section class="dashboard-panel activity-panel" data-layout-card="activity-signals" data-layout-default-span="1">
         <header class="panel-heading">
             <div><p class="eyebrow">LIVE SIGNALS</p><h2>运行信号</h2></div><span class="status-pill">自动汇总</span>
         </header>
@@ -93,7 +93,8 @@
 
 @if (Model.Permissions.HasFlag(UserPermissions.ManageSchedule) || Model.Permissions.HasFlag(UserPermissions.SendNotifications))
 {
-    <section class="dashboard-panel execution-panel">
+    <div class="layout-card-grid" data-layout-group="index-tasks">
+    <section class="dashboard-panel execution-panel" data-layout-card="execution-board" data-layout-default-span="3">
         <header class="panel-heading execution-heading"><div><p class="eyebrow">EXECUTION BOARD</p><h2>常用任务</h2></div><span class="muted">根据当前账号权限显示</span></header>
         <div class="task-table">
             @if (Model.Permissions.HasFlag(UserPermissions.ManageSchedule))
@@ -123,10 +124,11 @@
             }
         </div>
     </section>
+    </div>
 }
 
-<div class="dashboard-grid lower-grid">
-    <section class="dashboard-panel system-panel">
+<div class="dashboard-grid lower-grid layout-card-grid" data-layout-group="index-system">
+    <section class="dashboard-panel system-panel" data-layout-card="system-info" data-layout-default-span="2">
         <header class="panel-heading"><div><p class="eyebrow">SYSTEM</p><h2>系统信息</h2></div></header>
         <dl class="system-table">
             <div><dt>服务端版本</dt><dd>v@(Model.ServerVersion)</dd></div><div><dt>协议版本</dt><dd>v@(Protocol.Version)</dd></div>
@@ -137,7 +139,7 @@
 
     @if (Model.IsAdmin)
     {
-        <section class="dashboard-panel credential-panel">
+        <section class="dashboard-panel credential-panel" data-layout-card="plugin-credentials" data-layout-default-span="1">
             <header class="panel-heading"><div><p class="eyebrow">CREDENTIALS</p><h2>插件凭据</h2></div><span class="status-pill">@Model.PluginCredentials.Count 项</span></header>
             @if (Model.PluginCredentials.Count == 0)
             {
