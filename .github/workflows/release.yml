@@ -169,17 +169,25 @@ jobs:
             ghcr.io/memz-edge01/remoteci:${{ steps.meta.outputs.version }}
             ghcr.io/memz-edge01/remoteci:latest
       - name: 确保 GHCR 镜像包公开
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 首次推送后镜像包默认为私有，fnOS 拉取需要公开可见。
-          # 失败必须让发布中断：若吞掉错误继续打包，fpk 会引用私有镜像，fnOS 安装将静默失败。
-          gh api --method PATCH /user/packages/container/remoteci -f visibility=public
-          visibility="$(gh api /user/packages/container/remoteci --jq .visibility)"
-          test "$visibility" = "public" || {
-            echo "::error::GHCR 镜像包可见性仍为 $visibility，fnOS 将无法拉取，拒绝继续发布"
+          # 仓库 GITHUB_TOKEN 无权访问用户级 Packages API，不能据此读写可见性。
+          # 改用匿名拉取令牌验证公开性；私有镜像取不到令牌或 manifest，发布会直接失败。
+          version="${{ steps.meta.outputs.version }}"
+          token="$(curl -fsSL \
+            'https://ghcr.io/token?service=ghcr.io&scope=repository%3Amemz-edge01%2Fremoteci%3Apull' \
+            | python3 -c 'import json, sys; print(json.load(sys.stdin).get("token", ""))')"
+          test -n "$token" || {
+            echo "::error::无法匿名获取 GHCR 拉取令牌，镜像可能不是公开包"
             exit 1
           }
+          curl -fsSL \
+            -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            "https://ghcr.io/v2/memz-edge01/remoteci/manifests/$version" \
+            >/dev/null || {
+              echo "::error::GHCR 镜像 $version 无法匿名拉取，fnOS 将无法安装"
+              exit 1
+            }
       - name: 下载 fnpack 并打包 fpk
         run: |
           mkdir -p .tools
