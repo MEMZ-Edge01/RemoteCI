@@ -22,6 +22,7 @@ public sealed class LanServer : IDisposable
     private readonly Func<ScheduleBundle?> _scheduleProvider;
     private readonly ILogger<LanServer> _logger;
     private readonly ConcurrentDictionary<Guid, LanClient> _clients = new();
+    private IReadOnlyList<ExtensionDefinition> _latestExtensions = [];
     private WebSocketServer? _server;
     private LanDiscoveryResponder? _discovery;
 
@@ -84,7 +85,13 @@ public sealed class LanServer : IDisposable
     public bool BroadcastSchedule(ScheduleBundle value) => Broadcast(Envelope.ScheduleSync(value));
     public bool BroadcastScheduleSyncStatus(ScheduleSyncStatus value) => Broadcast(Envelope.ScheduleSyncStatus(value));
     public void BroadcastEvent(ClassEvent value) => Broadcast(Envelope.EventNotify(value));
-    public void BroadcastExtensions(IReadOnlyList<ExtensionDefinition> value) => Broadcast(Envelope.ExtensionsSync(value));
+    public void BroadcastExtensions(IReadOnlyList<ExtensionDefinition> value)
+    {
+        // 扩展通常早于手表接入完成注册；缓存快照供后续局域网连接认证成功时补发。
+        var snapshot = value.ToArray();
+        Volatile.Write(ref _latestExtensions, snapshot);
+        Broadcast(Envelope.ExtensionsSync(snapshot));
+    }
 
     private bool Broadcast(Envelope envelope)
     {
@@ -275,6 +282,7 @@ public sealed class LanServer : IDisposable
         SendAuthenticatedState(client, user);
         if (_snapshotProvider() is { } snapshot) Send(client.Socket, Envelope.StatePush(snapshot));
         if (_scheduleProvider() is { } schedule) Send(client.Socket, Envelope.ScheduleSync(schedule));
+        Send(client.Socket, Envelope.ExtensionsSync(Volatile.Read(ref _latestExtensions)));
         _logger.LogInformation("局域网设备会话已认证：{Username}/{Role}", user.Username, user.Role);
         return Task.CompletedTask;
     }

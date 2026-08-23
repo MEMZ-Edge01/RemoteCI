@@ -99,6 +99,39 @@ public sealed class LanServerTests
     }
 
     [Fact]
+    public async Task Authenticate_ValidProofPushesExtensionsRegisteredBeforeConnection()
+    {
+        var (mirror, sessionId, secret) = CreateFreshMirror();
+        var server = CreateServer(mirror);
+        server.BroadcastExtensions(
+        [
+            new ExtensionDefinition
+            {
+                Id = "demo.registered",
+                DisplayName = "已注册扩展",
+                RequiredPermission = UserPermissions.ViewCurrentCourse,
+            },
+        ]);
+        var socket = new FakeSocket();
+        server.OnOpened(socket);
+        var challenge = ConvertPayload<AuthChallenge>(ParseEnvelope(socket.Sent[0]).Payload);
+
+        await server.OnMessageAsync(socket, SerializeEnvelope(new Envelope
+        {
+            Type = Protocol.MessageTypeAuthProof,
+            MessageId = Guid.NewGuid().ToString("N"),
+            Payload = BuildValidProof(challenge, sessionId, secret),
+        }));
+
+        var pushed = socket.Sent
+            .Select(ParseEnvelope)
+            .Single(envelope => envelope.Type == Protocol.MessageTypeExtensionsSync);
+        var extension = Assert.Single(ConvertPayload<List<ExtensionDefinition>>(pushed.Payload));
+        Assert.Equal("demo.registered", extension.Id);
+        Assert.Equal("已注册扩展", extension.DisplayName);
+    }
+
+    [Fact]
     public async Task Command_ExpiredMirrorIsDeniedWithoutInvokingHandler()
     {
         var (mirror, sessionId, secret) = CreateFreshMirror(generatedAt: DateTimeOffset.UtcNow.AddHours(-25));

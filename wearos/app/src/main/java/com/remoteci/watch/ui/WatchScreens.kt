@@ -776,7 +776,7 @@ internal fun NotificationScreen(
     item { Toggle(stringResource(R.string.notice_effect_toggle), effectEnabled, onEffectEnabledChange) }
     item { Toggle(stringResource(R.string.notice_sound_toggle), soundEnabled, onSoundEnabledChange) }
     item { Toggle(stringResource(R.string.notice_speech_toggle), speechEnabled, onSpeechEnabledChange) }
-    // 标题与正文均可留空，插件会为留空项兜底为默认标题/原标题。
+    // 标题留空时由插件使用默认标题；正文可留空，此时 ClassIsland 只显示标题。
     item { ActionButton(stringResource(R.string.notice_send_button), Icons.Rounded.EditNotifications, true, onSend) }
     if (!resultText.isNullOrBlank()) item { Hint(resultText) }
     item { BackButton(onBack) }

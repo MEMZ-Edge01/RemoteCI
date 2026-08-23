@@ -112,14 +112,11 @@ public sealed class CommandHandler
     {
         if (request is null)
             return CommandResult.Failure(CommandResultCodes.InvalidRequest, "缺少通知内容");
-        var message = request.Message.Trim();
+        var message = NormalizeNotificationMessage(request.Message);
         if (message.Length > 500)
             return CommandResult.Failure(CommandResultCodes.InvalidRequest, "通知正文不能超过 500 个字符");
         // 服务端会按全局设置注入 ForceSenderInTitle；null 按旧行为视为开启。
         var title = BuildNotificationTitle(senderName, request.Title, request.ForceSenderInTitle != false);
-        // 标题与正文均可留空；正文留空时以原标题兜底，避免 ClassIsland 显示空白正文。
-        if (string.IsNullOrWhiteSpace(message)) message = NormalizeNotificationTitle(request.Title);
-
         await _notifications.ShowRemoteNotificationAsync(
             title,
             message,
@@ -226,6 +223,9 @@ public sealed class CommandHandler
         var title = requestedTitle?.Trim();
         return string.IsNullOrWhiteSpace(title) ? "RemoteCI 通知" : title[..Math.Min(title.Length, 60)];
     }
+
+    /// <summary>ClassIsland 支持只有标题的通知，因此空正文保持为空，仅清理首尾空白。</summary>
+    internal static string NormalizeNotificationMessage(string? message) => message?.Trim() ?? string.Empty;
 
     private static bool TryParseDate(string value, out DateTime date) => DateTime.TryParseExact(
         value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out date);

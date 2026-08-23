@@ -61,11 +61,29 @@ public sealed class ScheduleModel(
     public async Task<IActionResult> OnPostAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageSchedule) is { } denied) return denied;
-        var selection = Input.SourceSelection.Split('|');
-        if (selection.Length != 3 || !int.TryParse(selection[2], out var sourceIndex))
+        var sourceDay = state.GetLatestSchedule()?.Days.FirstOrDefault(day =>
+            day.Enabled &&
+            string.Equals(day.Date, Input.Date, StringComparison.Ordinal) &&
+            string.Equals(day.Revision, Input.ExpectedRevision, StringComparison.Ordinal));
+        var sourceCourse = sourceDay?.Courses.FirstOrDefault(course =>
+            course.Enabled && course.Index == Input.SourceIndex);
+        if (sourceDay is null || sourceCourse is null)
         {
             TempData["Error"] = "请选择有效的日期和原节次。";
             return RedirectToPage();
+        }
+
+        int? targetIndex = null;
+        if (Input.Mode == ScheduleChangeMode.Exchange)
+        {
+            var targetCourse = sourceDay.Courses.FirstOrDefault(course =>
+                course.Enabled && course.Index == Input.TargetIndex);
+            if (targetCourse is null || targetCourse.Index == sourceCourse.Index)
+            {
+                TempData["Error"] = "请选择与原节次同一天的其他目标节次。";
+                return RedirectToPage();
+            }
+            targetIndex = targetCourse.Index;
         }
         var result = await peers.SendCommandAndWaitAsync(new CommandMessage
         {
@@ -82,12 +100,12 @@ public sealed class ScheduleModel(
             },
             ScheduleChange = new ScheduleChangeRequest
             {
-                Date = selection[0],
+                Date = sourceDay.Date,
                 Mode = Input.Mode,
-                SourceIndex = sourceIndex,
-                TargetIndex = Input.Mode == ScheduleChangeMode.Exchange ? Input.TargetIndex : null,
+                SourceIndex = sourceCourse.Index,
+                TargetIndex = targetIndex,
                 ReplacementSubjectId = Input.Mode == ScheduleChangeMode.Replace ? Input.ReplacementSubjectId : null,
-                ExpectedRevision = selection[1],
+                ExpectedRevision = sourceDay.Revision,
             },
         }, TimeSpan.FromSeconds(15), ct);
         TempData[result.Success ? "Message" : "Error"] = result.Message;
@@ -96,7 +114,9 @@ public sealed class ScheduleModel(
 
     public sealed class ScheduleInput
     {
-        public string SourceSelection { get; set; } = string.Empty;
+        public string Date { get; set; } = string.Empty;
+        public string ExpectedRevision { get; set; } = string.Empty;
+        public int? SourceIndex { get; set; }
         public ScheduleChangeMode Mode { get; set; } = ScheduleChangeMode.Exchange;
         public int? TargetIndex { get; set; }
         public Guid? ReplacementSubjectId { get; set; }

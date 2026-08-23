@@ -450,6 +450,8 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         Assert.Contains(@"id=""send-notification""", html);
         Assert.Contains("发送并等待回执", html);
         Assert.Contains("老师来了", html);
+        Assert.DoesNotContain("向插件发送单一指令，由插件显示强调提醒并在 1 秒后自动清除。", html);
+        Assert.DoesNotContain("正文留空时显示原标题", html);
         Assert.Contains("清除当前提醒", html);
         Assert.Contains("显示主菜单", html);
         Assert.Matches(@"name=""visible""\s+value=""true""", html);
@@ -518,6 +520,16 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
                                 EndTime = "08:45",
                                 Enabled = true,
                             },
+                            new CourseEntry
+                            {
+                                Index = 1,
+                                Label = "第二节",
+                                SubjectId = Guid.NewGuid(),
+                                Subject = "体育",
+                                StartTime = "08:55",
+                                EndTime = "09:40",
+                                Enabled = true,
+                            },
                         ],
                     },
                 ],
@@ -556,6 +568,17 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         Assert.DoesNotContain(">Exchange</option>", scheduleHtml);
         Assert.DoesNotContain(">Replace</option>", scheduleHtml);
         Assert.Contains("data-schedule-change-form", scheduleHtml);
+        Assert.Contains("data-schedule-source", scheduleHtml);
+        Assert.Contains("data-schedule-target", scheduleHtml);
+        Assert.Contains("日期与目标节次", scheduleHtml);
+        Assert.Contains("2026-08-17 · 第二节 · 体育", scheduleHtml);
+        Assert.DoesNotContain("目标节次（从 0 开始）", scheduleHtml);
+        Assert.Contains("name=\"Input.Date\"", scheduleHtml);
+        Assert.Contains("name=\"Input.ExpectedRevision\"", scheduleHtml);
+        Assert.Contains("name=\"Input.SourceIndex\"", scheduleHtml);
+        Assert.Contains("name=\"Input.TargetIndex\"", scheduleHtml);
+        Assert.Contains("data-date=\"2026-08-17\"", scheduleHtml);
+        Assert.DoesNotMatch("value=\"[^\"]*\\|", scheduleHtml);
         Assert.Contains("data-exchange-field", scheduleHtml);
         Assert.Contains("data-replace-field hidden", scheduleHtml);
         Assert.Matches(@"data-replace-field hidden[\s\S]*?<select[^>]+disabled", scheduleHtml);
@@ -570,6 +593,40 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         using var scope = _factory.Services.CreateScope();
         var settings = scope.ServiceProvider.GetRequiredService<SchedulePullSettings>();
         Assert.Equal(SchedulePullInterval.Hourly, await settings.GetIntervalAsync());
+
+        var refreshedHtml = await browser.GetStringAsync("/Schedule");
+        var invalidTarget = await PostRazorFormAsync(
+            browser,
+            "/Schedule",
+            refreshedHtml,
+            new Dictionary<string, string>
+            {
+                ["Input.Date"] = "2026-08-17",
+                ["Input.ExpectedRevision"] = "revision-1",
+                ["Input.SourceIndex"] = "0",
+                ["Input.Mode"] = "Exchange",
+                ["Input.TargetIndex"] = "2",
+            });
+        Assert.Equal(HttpStatusCode.Redirect, invalidTarget.StatusCode);
+        var invalidTargetHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Schedule"));
+        Assert.Contains("请选择与原节次同一天的其他目标节次。", invalidTargetHtml);
+
+        var validHtml = await browser.GetStringAsync("/Schedule");
+        var validTarget = await PostRazorFormAsync(
+            browser,
+            "/Schedule",
+            validHtml,
+            new Dictionary<string, string>
+            {
+                ["Input.Date"] = "2026-08-17",
+                ["Input.ExpectedRevision"] = "revision-1",
+                ["Input.SourceIndex"] = "0",
+                ["Input.Mode"] = "Exchange",
+                ["Input.TargetIndex"] = "1",
+            });
+        Assert.Equal(HttpStatusCode.Redirect, validTarget.StatusCode);
+        var validTargetHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Schedule"));
+        Assert.Contains("插件未在线，操作未执行", validTargetHtml);
     }
 
     [Fact]
@@ -589,6 +646,9 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var script = await browser.GetStringAsync("/app.js");
         Assert.Contains("[data-backup-settings-form]", script);
         Assert.Contains("weekdayField.hidden = !weekly", script);
+        Assert.Contains("[data-schedule-target]", script);
+        Assert.Contains("option.dataset.date === selectedSource?.dataset.date", script);
+        Assert.DoesNotContain("source.value.split", script);
     }
 
     [Fact]
@@ -673,6 +733,34 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var responseHtml = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
         Assert.Contains("<li>The CurrentPassword field is required.</li>", responseHtml);
         Assert.Contains("<li>The NewPassword field is required.</li>", responseHtml);
+        Assert.Contains("<li>请再次输入新密码。</li>", responseHtml);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_PasswordHandlerRejectsMismatchedConfirmation()
+    {
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var accountHtml = await browser.GetStringAsync("/Account");
+        Assert.Contains("name=\"Password.NewPassword\"", accountHtml);
+        Assert.Contains("name=\"Password.ConfirmNewPassword\"", accountHtml);
+        Assert.Contains("data-password-confirmation", accountHtml);
+
+        var response = await PostRazorFormAsync(
+            browser,
+            "/Account?handler=Password",
+            accountHtml,
+            new Dictionary<string, string>
+            {
+                ["Password.CurrentPassword"] = TestWebApplicationFactory.AdminPassword,
+                ["Password.NewPassword"] = "Changed-Password-2026",
+                ["Password.ConfirmNewPassword"] = "Different-Password-2026",
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var responseHtml = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
+        Assert.Contains("<li>两次输入的新密码不一致。</li>", responseHtml);
+        Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync("/Account")).StatusCode);
     }
 
     [Theory]
@@ -777,9 +865,74 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         var studentDialog = html[studentDialogStart..(studentDialogEnd + "</dialog>".Length)];
         Assert.Contains("data-role-permissions", studentDialog);
         Assert.DoesNotContain("handler=Delete", studentDialog);
+        Assert.Contains("data-password-confirmation", studentDialog);
+        Assert.Contains("name=\"confirmPassword\"", studentDialog);
         var studentPermission = Regex.Match(studentDialog, "<input[^>]*name=\\\"Edit.AccessWebUi\\\"[^>]*>");
         Assert.True(studentPermission.Success);
         Assert.DoesNotContain("disabled", studentPermission.Value, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_ResetPasswordRequiresMatchingConfirmation()
+    {
+        var admin = await _factory.LoginAsync();
+        const string originalPassword = "Reset-Original-Password-2026";
+        var create = await _client.SendAsync(TestWebApplicationFactory.Bearer(
+            HttpMethod.Post,
+            "/api/users",
+            admin.AccessToken,
+            new CreateUserRequest
+            {
+                Username = "reset.confirmation",
+                DisplayName = "重置确认测试账号",
+                Password = originalPassword,
+            }));
+        create.EnsureSuccessStatusCode();
+        var created = (await create.Content.ReadFromJsonAsync<UserProfile>())!;
+
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var usersHtml = await browser.GetStringAsync("/Users");
+        var response = await PostRazorFormAsync(
+            browser,
+            "/Users?handler=ResetPassword",
+            usersHtml,
+            new Dictionary<string, string>
+            {
+                ["id"] = created.Id.ToString(),
+                ["password"] = "Reset-New-Password-2026",
+                ["confirmPassword"] = "Reset-Different-Password-2026",
+            });
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        var responseHtml = WebUtility.HtmlDecode(await browser.GetStringAsync("/Users"));
+        Assert.Contains("两次输入的新密码不一致。", responseHtml);
+        var oldPasswordLogin = await _client.PostAsJsonAsync("/api/auth/login", new LoginRequest
+        {
+            Username = created.Username,
+            Password = originalPassword,
+        });
+        Assert.Equal(HttpStatusCode.OK, oldPasswordLogin.StatusCode);
+
+        const string newPassword = "Reset-New-Password-2026";
+        var matchingHtml = await browser.GetStringAsync("/Users");
+        var matchingResponse = await PostRazorFormAsync(
+            browser,
+            "/Users?handler=ResetPassword",
+            matchingHtml,
+            new Dictionary<string, string>
+            {
+                ["id"] = created.Id.ToString(),
+                ["password"] = newPassword,
+                ["confirmPassword"] = newPassword,
+            });
+        Assert.Equal(HttpStatusCode.Redirect, matchingResponse.StatusCode);
+        var newPasswordLogin = await _client.PostAsJsonAsync("/api/auth/login", new LoginRequest
+        {
+            Username = created.Username,
+            Password = newPassword,
+        });
+        Assert.Equal(HttpStatusCode.OK, newPasswordLogin.StatusCode);
     }
 
     [Fact]

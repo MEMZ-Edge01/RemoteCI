@@ -63,4 +63,12 @@ public sealed class NotificationTitleTests
         Assert.Equal("临时调课", CommandHandler.NormalizeNotificationTitle("  临时调课  "));
         Assert.Equal(new string('长', 60), CommandHandler.NormalizeNotificationTitle(new string('长', 80)));
     }
+
+    [Fact]
+    public void NormalizeMessageKeepsBlankBodyEmpty()
+    {
+        Assert.Equal(string.Empty, CommandHandler.NormalizeNotificationMessage(null));
+        Assert.Equal(string.Empty, CommandHandler.NormalizeNotificationMessage("   "));
+        Assert.Equal("正文", CommandHandler.NormalizeNotificationMessage("  正文  "));
+    }
 }

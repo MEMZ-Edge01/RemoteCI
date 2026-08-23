@@ -220,11 +220,36 @@ document.querySelectorAll("[data-volume-form]").forEach(form => {
 
 document.querySelectorAll("[data-schedule-change-form]").forEach(form => {
     const mode = form.querySelector("[data-schedule-mode]");
+    const source = form.querySelector("[data-schedule-source]");
+    const target = form.querySelector("[data-schedule-target]");
+    const sourceDate = form.querySelector("[data-schedule-source-date]");
+    const sourceRevision = form.querySelector("[data-schedule-source-revision]");
+    const sourceIndex = form.querySelector("[data-schedule-source-index]");
     const exchangeField = form.querySelector("[data-exchange-field]");
     const replaceField = form.querySelector("[data-replace-field]");
     const targetInput = exchangeField?.querySelector("input, select");
     const replacementInput = replaceField?.querySelector("input, select");
     if (!mode) return;
+
+    const syncSourceFields = () => {
+        const selected = source?.selectedOptions[0];
+        if (sourceDate) sourceDate.value = selected?.dataset.date ?? "";
+        if (sourceRevision) sourceRevision.value = selected?.dataset.revision ?? "";
+        if (sourceIndex) sourceIndex.value = selected?.dataset.index ?? "";
+    };
+
+    const syncTargetOptions = () => {
+        if (!source || !target) return;
+        const selectedSource = source.selectedOptions[0];
+        [...target.options].forEach(option => {
+            if (!option.value) return;
+            const available = option.dataset.date === selectedSource?.dataset.date &&
+                option.dataset.index !== selectedSource?.dataset.index;
+            option.hidden = !available;
+            option.disabled = !available;
+        });
+        if (target.selectedOptions[0]?.disabled) target.value = "";
+    };
 
     const syncModeFields = () => {
         const exchange = mode.value === "Exchange" || mode.value === "1";
@@ -232,9 +257,16 @@ document.querySelectorAll("[data-schedule-change-form]").forEach(form => {
         if (replaceField) replaceField.hidden = exchange;
         if (targetInput) targetInput.disabled = !exchange;
         if (replacementInput) replacementInput.disabled = exchange;
+        if (exchange) syncTargetOptions();
     };
 
     mode.addEventListener("change", syncModeFields);
+    source?.addEventListener("change", () => {
+        syncSourceFields();
+        if (target) target.value = "";
+        syncTargetOptions();
+    });
+    syncSourceFields();
     syncModeFields();
 });
 
@@ -243,6 +275,25 @@ document.querySelectorAll("[data-role-form]").forEach(form => {
     const roleSelect = form.querySelector("[data-role-select]");
     roleSelect?.addEventListener("change", () => syncRolePermissions(form));
     syncRolePermissions(form);
+});
+
+document.querySelectorAll("[data-password-confirmation]").forEach(form => {
+    const newPassword = form.querySelector("[data-new-password]");
+    const confirmation = form.querySelector("[data-confirm-password]");
+    if (!newPassword || !confirmation) return;
+
+    // 浏览器即时提示用于减少误操作，服务端仍有不可绕过的一致性校验。
+    const validateMatch = () => confirmation.setCustomValidity(
+        confirmation.value === newPassword.value ? "" : "两次输入的新密码不一致。",
+    );
+    newPassword.addEventListener("input", validateMatch);
+    confirmation.addEventListener("input", validateMatch);
+    form.addEventListener("submit", event => {
+        validateMatch();
+        if (form.checkValidity()) return;
+        event.preventDefault();
+        form.reportValidity();
+    });
 });
 
 

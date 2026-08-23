@@ -28,6 +28,18 @@ else
         .GroupBy(course => course.Index)
         .OrderBy(group => group.Key)
         .ToList();
+    var courseOptions = Model.Bundle.Days
+        .Where(day => day.Enabled)
+        .SelectMany(day => day.Courses
+            .Where(course => course.Enabled)
+            .Select(course => new
+            {
+                day.Date,
+                day.Revision,
+                course.Index,
+                Label = $"{day.Date} · {course.Label} · {course.Subject}",
+            }))
+        .ToList();
     <div class="schedule-table-wrap">
         <table class="schedule-table">
             <thead><tr><th scope="col" class="schedule-period-heading">节次</th>@foreach (var day in Model.Bundle.Days) { var dayTitle = DateTime.TryParse(day.Date, out var parsedDate) ? weekNames[(int)parsedDate.DayOfWeek] : day.Date; <th scope="col"><strong>@dayTitle</strong><small>@day.Date</small></th> }</tr></thead>
@@ -44,15 +56,17 @@ else
         <h2>提交修改</h2>
         <form method="post" class="form-grid schedule-change-form" data-schedule-change-form>
             <label>日期与原节次
-                <select asp-for="Input.SourceSelection">
-                    @foreach (var day in Model.Bundle.Days.Where(x => x.Enabled))
+                <select data-schedule-source required>
+                    @{ var sourceOptionIndex = 0; }
+                    @foreach (var option in courseOptions)
                     {
-                        @foreach (var course in day.Courses)
-                        {
-                            <option value="@day.Date|@day.Revision|@course.Index">@day.Date · @course.Label · @course.Subject</option>
-                        }
+                        <option value="@sourceOptionIndex" data-date="@option.Date" data-revision="@option.Revision" data-index="@option.Index">@option.Label</option>
+                        sourceOptionIndex++;
                     }
                 </select>
+                <input asp-for="Input.Date" type="hidden" data-schedule-source-date />
+                <input asp-for="Input.ExpectedRevision" type="hidden" data-schedule-source-revision />
+                <input asp-for="Input.SourceIndex" type="hidden" data-schedule-source-index />
             </label>
             <label>模式
                 <select asp-for="Input.Mode" data-schedule-mode>
@@ -60,8 +74,14 @@ else
                     <option value="Replace">替换</option>
                 </select>
             </label>
-            <label data-exchange-field>目标节次（从 0 开始）
-                <input asp-for="Input.TargetIndex" type="number" min="0" />
+            <label data-exchange-field>日期与目标节次
+                <select asp-for="Input.TargetIndex" data-schedule-target required>
+                    <option value="">请选择目标日期与节次</option>
+                    @foreach (var option in courseOptions)
+                    {
+                        <option value="@option.Index" data-date="@option.Date" data-index="@option.Index">@option.Label</option>
+                    }
+                </select>
             </label>
             <label data-replace-field hidden>替换科目
                 <select asp-for="Input.ReplacementSubjectId" disabled>

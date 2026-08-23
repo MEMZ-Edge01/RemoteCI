@@ -77,5 +77,9 @@ public sealed class AccountModel(
 
         [Required, StringLength(128, MinimumLength = 8)]
         public string NewPassword { get; set; } = string.Empty;
+
+        [Required(ErrorMessage = "请再次输入新密码。")]
+        [Compare(nameof(NewPassword), ErrorMessage = "两次输入的新密码不一致。")]
+        public string ConfirmNewPassword { get; set; } = string.Empty;
     }
 }

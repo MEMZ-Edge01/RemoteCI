@@ -94,9 +94,18 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         return RedirectToPage();
     }
 
-    public async Task<IActionResult> OnPostResetPasswordAsync(Guid id, string password, CancellationToken ct)
+    public async Task<IActionResult> OnPostResetPasswordAsync(
+        Guid id,
+        string password,
+        string confirmPassword,
+        CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
+        if (!string.Equals(password, confirmPassword, StringComparison.Ordinal))
+        {
+            TempData["Error"] = "两次输入的新密码不一致。";
+            return RedirectToPage();
+        }
         // 重置管理员密码等于接管管理员账号，仅管理员可执行（含禁用状态的管理员）。
         if (CurrentUser.Role != UserRole.Admin &&
             await identities.GetRoleAsync(id, ct) == UserRole.Admin)

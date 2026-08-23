@@ -21,7 +21,7 @@
         <section class="panel control-card" id="teacher-coming">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi bi-mortarboard" aria-hidden="true"></i></span>
-                <div><h2>老师来了</h2><p class="muted">向插件发送单一指令，由插件显示强调提醒并在 1 秒后自动清除。</p></div>
+                <div><h2>老师来了</h2></div>
             </div>
             <form method="post" asp-page-handler="TeacherComing">
                 <button type="submit" disabled="@(!Model.PluginOnline)"><i class="bi bi-bell" aria-hidden="true"></i>发送快捷提醒</button>
@@ -39,7 +39,6 @@
             <div class="notification-control-grid">
                 <form method="post" asp-page-handler="Notification" class="stack">
                     <label>标题<input asp-for="Input.Title" maxlength="60" placeholder="RemoteCI 通知" /></label>
-                    <p class="muted">标题留空时显示“RemoteCI 通知”，正文留空时显示原标题。</p>
                     <label>正文<textarea asp-for="Input.Message" maxlength="500" rows="5"></textarea></label>
                     <button type="submit" disabled="@(!Model.PluginOnline)">发送并等待回执</button>
                 </form>
