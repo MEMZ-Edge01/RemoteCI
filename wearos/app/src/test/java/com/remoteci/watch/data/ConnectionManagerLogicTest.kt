@@ -28,8 +28,8 @@ class ConnectionManagerLogicTest {
         assertEquals("AAECAwQFBgcICQoLDA0ODxAREhMUFRYX", proof.clientNonce)
         assertEquals("c1", proof.challengeId)
         assertEquals("ABCDEF12-3456-7890-ABCD-EF1234567890", proof.deviceSessionId)
-        // canonical = "2|c1|n1|<clientNonce>|<无横线小写 sessionId>"，密钥 = SHA-256(deviceSecret)
-        assertEquals("sGFipx5IiJ8kLwJ0tNkqFTPtOzMdiJvvtHt1s8mriDc=", proof.proof)
+        // canonical = "3|c1|n1|<clientNonce>|<无横线小写 sessionId>"，密钥 = SHA-256(deviceSecret)
+        assertEquals("7PhyfRLbHDrbGDrVbAWSkP4GbqgO4QCY7k9JxILypjM=", proof.proof)
     }
 
     @Test

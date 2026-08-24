@@ -20,13 +20,14 @@ public sealed class ScheduleModel(
     public ScheduleInput Input { get; set; } = new();
     public ScheduleBundle? Bundle { get; private set; }
     public bool PluginOnline => peers.HasPlugin;
+    public bool CanManageSchedule => Permissions.HasFlag(UserPermissions.ManageSchedule);
     public ScheduleSyncStatus? CurrentTask => scheduleSync.Current;
     [BindProperty]
     public SchedulePullInterval PullInterval { get; set; }
 
     public async Task<IActionResult> OnGetAsync()
     {
-        if (await RequireAsync(UserPermissions.ManageSchedule) is { } denied) return denied;
+        if (await RequireAsync() is { } denied) return denied;
         Bundle = state.GetLatestSchedule();
         PullInterval = await pullSettings.GetIntervalAsync();
         return Page();
@@ -34,7 +35,7 @@ public sealed class ScheduleModel(
 
     public async Task<IActionResult> OnPostPullAsync(CancellationToken ct)
     {
-        if (await RequireAsync(UserPermissions.ManageSchedule) is { } denied) return denied;
+        if (await RequireAsync() is { } denied) return denied;
         var status = await scheduleSync.StartAndWaitAsync(ScheduleSyncSource.WebUi, ct);
         if (status.State == ScheduleSyncTaskState.Completed)
             TempData["Message"] = "已从插件拉取最新课表，并强制覆盖服务端缓存。";

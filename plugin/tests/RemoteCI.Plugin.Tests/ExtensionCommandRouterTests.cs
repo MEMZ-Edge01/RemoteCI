@@ -37,7 +37,7 @@ public sealed class ExtensionCommandRouterTests
                 });
             }));
 
-        var user = User(userPermissions: UserPermissions.SendNotifications);
+        var user = User(userPermissions: UserPermissions.RunExtensions);
         var result = await _router.RunAsync(new CommandMessage
         {
             Command = CommandKind.RunExtension,
@@ -67,7 +67,7 @@ public sealed class ExtensionCommandRouterTests
     }
 
     [Fact]
-    public async Task RunExtension_RejectsInsufficientPermission()
+    public async Task RunExtension_RejectsMissingExtensionPermission()
     {
         _registry.Register(new ExtensionRegistryTests.FakeExtension(
             "demo.power",
@@ -79,6 +79,27 @@ public sealed class ExtensionCommandRouterTests
             Command = CommandKind.RunExtension,
             ExtensionId = "demo.power",
             RequestedBy = User(userPermissions: UserPermissions.SendNotifications),
+        });
+
+        Assert.False(result.Success);
+        Assert.Equal(CommandResultCodes.Forbidden, result.Code);
+    }
+
+    [Fact]
+    public async Task RunExtension_RejectsExtensionDisabledByServerPolicy()
+    {
+        _registry.Register(new ExtensionRegistryTests.FakeExtension(
+            "demo.policy",
+            "策略扩展",
+            permission: UserPermissions.SendNotifications));
+        var user = User(UserPermissions.RunExtensions);
+        user.AllowedExtensionIds = [];
+
+        var result = await _router.RunAsync(new CommandMessage
+        {
+            Command = CommandKind.RunExtension,
+            ExtensionId = "demo.policy",
+            RequestedBy = user,
         });
 
         Assert.False(result.Success);

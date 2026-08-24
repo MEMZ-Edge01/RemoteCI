@@ -16,6 +16,8 @@ public static class WebSocketHub
         IdentityCoordinator identities,
         PeerRegistry registry,
         IStateStore store,
+        ExtensionPolicyService extensionPolicies,
+        AuthorizationSyncService authorizationSync,
         ScheduleSyncService scheduleSync,
         ILogger logger)
     {
@@ -36,7 +38,7 @@ public static class WebSocketHub
         using var socket = await context.WebSockets.AcceptWebSocketAsync();
         var connectionId = registry.Register(socket, token, principal);
         var session = new ConnectionSession(
-            context, identities, registry, store, scheduleSync, logger, socket, connectionId, principal);
+            context, identities, registry, store, extensionPolicies, authorizationSync, scheduleSync, logger, socket, connectionId, principal);
         logger.LogInformation(
             "WebSocket connected: {Role}/{User} ({Id})",
             principal.PeerRole,
@@ -259,7 +261,10 @@ public static class WebSocketHub
             case Protocol.MessageTypeExtensionsSync:
                 if (ConvertPayload<List<ExtensionDefinition>>(envelope.Payload) is { } extensions)
                 {
+                    var accessChanged = await session.ExtensionPolicies.EnsureRegisteredAsync(extensions, ct);
                     session.Store.SaveExtensions(extensions);
+                    if (accessChanged)
+                        await session.AuthorizationSync.SyncAsync(ct);
                     await session.Registry.SendExtensionsToWatchesAsync(extensions, ct);
                 }
                 return true;
@@ -394,9 +399,11 @@ public static class WebSocketHub
 
         var definition = store.GetLatestExtensions()?.FirstOrDefault(
             extension => extension.Id == command.ExtensionId);
-        return definition is not null && !user.Permissions.HasFlag(definition.RequiredPermission)
-            ? new CommandError(CommandResultCodes.Forbidden, "权限不足")
-            : null;
+        if (definition is null)
+            return new CommandError(CommandResultCodes.InvalidRequest, "扩展功能不存在或尚未同步");
+        return ExtensionAccess.CanInvoke(user, definition)
+            ? null
+            : new CommandError(CommandResultCodes.Forbidden, "权限不足或扩展未开放");
     }
 
     private static async Task ForwardValidatedCommandAsync(
@@ -432,6 +439,8 @@ public static class WebSocketHub
         IdentityCoordinator identities,
         PeerRegistry registry,
         IStateStore store,
+        ExtensionPolicyService extensionPolicies,
+        AuthorizationSyncService authorizationSync,
         ScheduleSyncService scheduleSync,
         ILogger logger,
         WebSocket socket,
@@ -442,6 +451,8 @@ public static class WebSocketHub
         public IdentityCoordinator Identities { get; } = identities;
         public PeerRegistry Registry { get; } = registry;
         public IStateStore Store { get; } = store;
+        public ExtensionPolicyService ExtensionPolicies { get; } = extensionPolicies;
+        public AuthorizationSyncService AuthorizationSync { get; } = authorizationSync;
         public ScheduleSyncService ScheduleSync { get; } = scheduleSync;
         public ILogger Logger { get; } = logger;
         public WebSocket Socket { get; } = socket;

@@ -46,7 +46,7 @@ public sealed class CommandHandler
 
     public async Task<CommandResult> HandleAsync(CommandMessage command)
     {
-        // 扩展命令的权限随注册项动态声明，不走静态权限表。
+        // 扩展命令同时使用独立扩展权限、服务端策略和注册项动态权限，不走静态命令表。
         if (command.Command == CommandKind.RunExtension)
             return await _extensionRouter.RunAsync(command);
 

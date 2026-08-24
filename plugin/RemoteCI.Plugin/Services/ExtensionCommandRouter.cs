@@ -7,7 +7,7 @@ using RemoteCI.Shared.Models;
 namespace RemoteCI.Plugin.Services;
 
 /// <summary>
-/// RunExtension 命令的执行路由：按扩展声明的最小权限动态校验，
+/// RunExtension 命令的执行路由：先校验独立扩展权限和服务端开放策略，再校验扩展声明的最小权限，
 /// 再调用注册方回调，并把异常统一转换为 CommandResult。
 /// </summary>
 internal sealed class ExtensionCommandRouter
@@ -42,8 +42,11 @@ internal sealed class ExtensionCommandRouter
             .FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.Ordinal));
         if (extension is null)
             return CommandResult.Failure(CommandResultCodes.InvalidRequest, $"扩展功能不存在：{id}");
-        if (!command.RequestedBy.Permissions.HasFlag(extension.RequiredPermission))
-            return CommandResult.Failure(CommandResultCodes.Forbidden, "权限不足");
+        if (!ExtensionAccess.CanInvoke(command.RequestedBy, new ExtensionDefinition
+            {
+                Id = extension.Id,
+            }))
+            return CommandResult.Failure(CommandResultCodes.Forbidden, "权限不足或扩展未开放");
 
         var args = command.ExtensionArgs ?? new Dictionary<string, string?>();
         var missing = extension.Parameters

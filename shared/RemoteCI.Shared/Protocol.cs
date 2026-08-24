@@ -1,9 +1,9 @@
 namespace RemoteCI.Shared;
 
-/// <summary>三端共同使用的 v2 协议常量。</summary>
+/// <summary>三端共同使用的 v3 协议常量。</summary>
 public static class Protocol
 {
-    public const int Version = 2;
+    public const int Version = 3;
 
     public const string MessageTypeStatePush = "state_push";
     public const string MessageTypeScheduleSync = "schedule_sync";
@@ -22,7 +22,7 @@ public static class Protocol
     public const string MessageTypeConnectionBootstrap = "connection_bootstrap";
 
     public const int LanDiscoveryPort = 48765;
-    public const string LanDiscoveryRequest = "REMOTECI_DISCOVER_V2";
+    public const string LanDiscoveryRequest = "REMOTECI_DISCOVER_V3";
 
     public const string QueryToken = "token";
     public const string HeaderAuthorization = "Authorization";
@@ -53,13 +53,23 @@ public enum UserPermissions
     ManageUsers = 1 << 2,
     SendNotifications = 1 << 3,
     ManageSchedule = 1 << 4,
-    SystemControl = 1 << 5,
+    PowerControl = 1 << 5,
+    // 保留旧名称供现有第三方扩展源码兼容；新代码应使用 PowerControl。
+    SystemControl = PowerControl,
     TeacherComing = 1 << 6,
-    All = ViewCurrentCourse | AccessWebUi | ManageUsers | SendNotifications | ManageSchedule | SystemControl | TeacherComing,
+    RunExtensions = 1 << 7,
+    MainMenuControl = 1 << 8,
+    All = ViewCurrentCourse | AccessWebUi | ManageUsers | SendNotifications | ManageSchedule |
+          PowerControl | TeacherComing | RunExtensions | MainMenuControl,
 }
 
 public static class RolePermissions
 {
+    /// <summary>可授予普通账号或自定义角色的权限集合。</summary>
+    public const UserPermissions Assignable = UserPermissions.AccessWebUi | UserPermissions.ManageUsers |
+        UserPermissions.SendNotifications | UserPermissions.ManageSchedule | UserPermissions.PowerControl |
+        UserPermissions.TeacherComing | UserPermissions.RunExtensions | UserPermissions.MainMenuControl;
+
     public static UserPermissions Effective(
         UserRole role,
         UserPermissions granted,
@@ -129,7 +139,8 @@ public static class CommandPermissions
         CommandKind.ChangeSchedule => UserPermissions.ManageSchedule,
         CommandKind.SendNotification or CommandKind.ClearNotifications => UserPermissions.SendNotifications,
         CommandKind.TeacherComing => UserPermissions.TeacherComing,
-        CommandKind.SetMainMenuVisibility or CommandKind.Power or CommandKind.Volume => UserPermissions.SystemControl,
+        CommandKind.SetMainMenuVisibility => UserPermissions.MainMenuControl,
+        CommandKind.Power or CommandKind.Volume => UserPermissions.PowerControl,
         _ => UserPermissions.None,
     };
 }

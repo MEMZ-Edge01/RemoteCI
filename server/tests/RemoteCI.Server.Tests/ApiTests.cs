@@ -466,6 +466,11 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         Assert.Contains("休眠", html);
         Assert.Contains("锁定教室", html);
         Assert.Contains(@"name=""ExtensionInputs[0].Value""", html);
+        Assert.Contains("扩展设置", html);
+        Assert.Contains("启用扩展功能", html);
+        Assert.Contains("对非管理员用户开放", html);
+        Assert.Contains("在我自己的手表上展示", html);
+        Assert.Contains("extension-control-row", html);
     }
 
     [Theory]
@@ -1013,6 +1018,58 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task RazorWebUi_NonAdminCanEditOnlyOwnExtensionWatchVisibility()
+    {
+        var definition = new ExtensionDefinition
+        {
+            Id = "demo.personal.visibility",
+            DisplayName = "个人展示扩展",
+            RequiredPermission = UserPermissions.SendNotifications,
+        };
+        Guid userId;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var identities = scope.ServiceProvider.GetRequiredService<IdentityCoordinator>();
+            var policies = scope.ServiceProvider.GetRequiredService<ExtensionPolicyService>();
+            scope.ServiceProvider.GetRequiredService<IStateStore>().SaveExtensions([definition]);
+            await policies.EnsureRegisteredAsync([definition]);
+            var admin = (await identities.ListUsersAsync()).Single(x => x.Role == UserRole.Admin);
+            await policies.UpdateAdminAsync(admin.Id, definition.Id, enabled: true, allowNonAdmin: true, showOnWatch: true);
+            userId = (await identities.CreateUserAsync(new CreateUserRequest
+            {
+                Username = "extension.personal.web",
+                DisplayName = "扩展个人设置",
+                Password = "Extension-Personal-Web-2026",
+                GrantedPermissions = UserPermissions.RunExtensions,
+            })).Id;
+        }
+
+        using var browser = CreateBrowserClient();
+        await LoginWebUiAsync(browser, "extension.personal.web", "Extension-Personal-Web-2026");
+        var html = WebUtility.HtmlDecode(await browser.GetStringAsync("/Control"));
+        Assert.Contains("个人展示扩展", html);
+        Assert.Contains("执行", html);
+        Assert.Contains("编辑", html);
+        Assert.Contains("在我自己的手表上展示", html);
+        Assert.DoesNotContain("启用扩展功能", html);
+        Assert.DoesNotContain("对非管理员用户开放", html);
+        Assert.DoesNotContain(@"id=""main-menu""", html);
+        Assert.DoesNotContain(@"id=""volume""", html);
+        Assert.DoesNotContain(@"id=""power""", html);
+
+        var response = await PostRazorFormAsync(
+            browser,
+            "/Control?handler=ExtensionPreference",
+            html,
+            new Dictionary<string, string> { ["extensionId"] = definition.Id });
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        using var verificationScope = _factory.Services.CreateScope();
+        var profile = await verificationScope.ServiceProvider
+            .GetRequiredService<IdentityCoordinator>().GetProfileAsync(userId);
+        Assert.DoesNotContain(definition.Id, profile!.VisibleExtensionIds!);
+    }
+
+    [Fact]
     public async Task RazorWebUi_RoleDefaultsDriveControlNavigation()
     {
         using (var scope = _factory.Services.CreateScope())
@@ -1056,7 +1113,20 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
         using var browser = CreateBrowserClient();
         await LoginWebUiAsync(browser, "web.student", "Web-Student-Password-2026");
         Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync("/Account")).StatusCode);
-        foreach (var path in new[] { "/", "/Users", "/Schedule", "/Control", "/Notifications", "/SystemConfig" })
+        var schedule = await browser.GetAsync("/Schedule");
+        Assert.Equal(HttpStatusCode.OK, schedule.StatusCode);
+        var scheduleHtml = WebUtility.HtmlDecode(await schedule.Content.ReadAsStringAsync());
+        Assert.Contains("未来七日课表", scheduleHtml);
+        Assert.Contains("立即拉取课表", scheduleHtml);
+        Assert.DoesNotContain("提交修改", scheduleHtml);
+        Assert.DoesNotContain("自动拉取课表", scheduleHtml);
+        var pull = await PostRazorFormAsync(
+            browser,
+            "/Schedule?handler=Pull",
+            scheduleHtml,
+            new Dictionary<string, string>());
+        Assert.Equal(HttpStatusCode.Redirect, pull.StatusCode);
+        foreach (var path in new[] { "/", "/Users", "/Control", "/Notifications", "/SystemConfig" })
         {
             var response = await browser.GetAsync(path);
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);

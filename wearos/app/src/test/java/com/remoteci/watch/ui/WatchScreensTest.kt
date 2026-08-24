@@ -224,6 +224,27 @@ class WatchScreensTest {
     }
 
     @Test
+    fun `idle home next lesson action selects the next lesson as source`() {
+        val day = ScheduleDay(
+            date = "2026-08-12",
+            revision = "r1",
+            courses = listOf(
+                CourseEntry(index = 0, label = "第 1 节", subjectId = "a", subject = "语文", startTime = "16:30", endTime = "17:10"),
+                CourseEntry(index = 1, label = "第 2 节", subjectId = "b", subject = "晚自习", startTime = "17:20", endTime = "18:00"),
+            ),
+        )
+        val snapshot = ClassStateSnapshot(
+            currentState = Protocol.STATE_NONE,
+            nextClassSubject = "晚自习",
+            nextClassTimeLayoutItem = "17:20-18:00 晚自习",
+        )
+
+        assertTrue(shouldHighlightNextLessonAction(snapshot))
+        assertEquals(1, nextQuickSwapLessonIndex(day, snapshot))
+        assertFalse(shouldHighlightNextLessonAction(snapshot.copy(currentSubject = "自习")))
+    }
+
+    @Test
     fun `pluginLocalNow aligns progress with plugin timezone`() {
         // 插件在 UTC+8，快照生成于 08:46:55Z，本地应为 16:46:55。
         val atSnapshot = pluginLocalNow("2026-08-12T08:46:55.0573662+00:00", 480, 1_000L, 1_000L)
@@ -306,7 +327,7 @@ class WatchScreensTest {
 
     @Test
     fun `home actions follow effective permissions`() {
-        assertEquals(listOf("设置"), homeActionLabels(UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)))
+        assertEquals(listOf("课表", "设置"), homeActionLabels(UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)))
         assertEquals(
             listOf("课表", "换课", "设置"),
             homeActionLabels(
@@ -320,7 +341,7 @@ class WatchScreensTest {
             homeActionLabels(UserProfile(permissions = 31)),
         )
         assertEquals(
-            listOf("控制", "设置"),
+            listOf("课表", "控制", "设置"),
             homeActionLabels(
                 UserProfile(
                     permissions = Protocol.PERMISSION_VIEW_CURRENT or Protocol.PERMISSION_SYSTEM_CONTROL,
@@ -328,7 +349,7 @@ class WatchScreensTest {
             ),
         )
         assertEquals(
-            listOf("控制", "设置"),
+            listOf("课表", "控制", "设置"),
             homeActionLabels(
                 UserProfile(
                     permissions = Protocol.PERMISSION_VIEW_CURRENT or Protocol.PERMISSION_TEACHER_COMING,
@@ -354,15 +375,9 @@ class WatchScreensTest {
     }
 
     @Test
-    fun `only schedule managers can see next class details`() {
-        assertFalse(canViewExtendedSchedule(UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)))
-        assertTrue(
-            canViewExtendedSchedule(
-                UserProfile(
-                    permissions = Protocol.PERMISSION_VIEW_CURRENT or Protocol.PERMISSION_MANAGE_SCHEDULE,
-                ),
-            ),
-        )
+    fun `every authenticated user can see next class details`() {
+        assertFalse(canViewExtendedSchedule(null))
+        assertTrue(canViewExtendedSchedule(UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)))
     }
 
     @Test
@@ -404,16 +419,22 @@ class WatchScreensTest {
     }
 
     @Test
-    fun `extension visibility follows declared permission`() {
+    fun `extension visibility follows independent permission server policy and personal preference`() {
         val extension = ExtensionDefinition(
             id = "demo.lock",
             displayName = "锁屏",
-            requiredPermission = Protocol.PERMISSION_SYSTEM_CONTROL,
+            requiredPermission = Protocol.PERMISSION_POWER_CONTROL,
         )
-        val admin = UserProfile(permissions = 127)
+        val admin = UserProfile(
+            permissions = Protocol.PERMISSION_VIEW_CURRENT or Protocol.PERMISSION_RUN_EXTENSIONS,
+            allowedExtensionIds = listOf(extension.id),
+            visibleExtensionIds = listOf(extension.id),
+        )
+        val hidden = admin.copy(visibleExtensionIds = emptyList())
         val student = UserProfile(permissions = Protocol.PERMISSION_VIEW_CURRENT)
 
         assertEquals(listOf(extension), visibleExtensionsFor(admin, listOf(extension)))
+        assertTrue(visibleExtensionsFor(hidden, listOf(extension)).isEmpty())
         assertTrue(visibleExtensionsFor(student, listOf(extension)).isEmpty())
         assertTrue(visibleExtensionsFor(null, listOf(extension)).isEmpty())
     }

@@ -1,7 +1,7 @@
 @page
 @model ScheduleModel
 @{ ViewData["Title"] = "七日课表"; }
-<div class="page-head"><div><p class="eyebrow">指定日期临时课表</p><h1>未来七日换课</h1></div><span class="status @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "可执行" : "插件离线")</span></div>
+<div class="page-head"><div><p class="eyebrow">指定日期课表</p><h1>未来七日课表</h1></div><span class="status @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "已连接" : "插件离线")</span></div>
 <section class="panel schedule-pull-panel">
     <form method="post" asp-page-handler="Pull" class="schedule-pull-layout" data-schedule-pull-form>
         <div class="schedule-pull-copy"><h2>从插件拉取课表</h2><p class="muted">立即连接在线插件重新生成当前七日课表；拉取成功后会强制覆盖服务端缓存。</p></div>
@@ -52,6 +52,8 @@ else
             </tbody>
         </table>
     </div>
+    @if (Model.CanManageSchedule)
+    {
     <section class="panel">
         <h2>提交修改</h2>
         <form method="post" class="form-grid schedule-change-form" data-schedule-change-form>
@@ -95,7 +97,10 @@ else
             <button type="submit" class="schedule-submit-button" disabled="@(!Model.PluginOnline)">执行并等待真实回执</button>
         </form>
     </section>
+    }
 }
+@if (Model.CanManageSchedule)
+{
 <section class="panel">
     <h2>自动拉取课表</h2>
     <p class="muted">插件每次连接时都会自动拉取；这里可额外设置在线期间的刷新周期。</p>
@@ -112,3 +117,4 @@ else
         <button type="submit">保存间隔</button>
     </form>
 </section>
+}

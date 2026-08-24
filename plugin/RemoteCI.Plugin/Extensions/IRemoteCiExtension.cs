@@ -9,13 +9,13 @@ namespace RemoteCI.Plugin.Extensions;
 /// </summary>
 public interface IRemoteCiExtension
 {
-    /// <summary>全局唯一扩展 Id（与已有注册项冲突时 Register 会抛出异常）。</summary>
+    /// <summary>全局唯一扩展 Id；必须非空、无首尾空白且不超过 200 个字符。</summary>
     string Id { get; }
 
     /// <summary>手表控制菜单展示的文案。</summary>
     string DisplayName { get; }
 
-    /// <summary>执行所需的最小权限；手表按当前用户权限过滤，插件执行端再次校验。</summary>
+    /// <summary>兼容旧扩展的声明字段；当前调用统一使用 RunExtensions 权限。</summary>
     UserPermissions RequiredPermission { get; }
 
     /// <summary>可选 Material 图标名；未知或缺失时手表回退为纯文字。</summary>

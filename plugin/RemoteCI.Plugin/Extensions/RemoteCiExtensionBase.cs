@@ -5,7 +5,7 @@ namespace RemoteCI.Plugin.Extensions;
 
 /// <summary>
 /// <see cref="IRemoteCiExtension"/> 的默认实现，只需实现 Id、DisplayName、
-/// RequiredPermission 与 ExecuteAsync，其余成员按无图标、无参数处理。
+/// 兼容字段 RequiredPermission 与 ExecuteAsync，其余成员按无图标、无参数处理。
 /// </summary>
 public abstract class RemoteCiExtensionBase : IRemoteCiExtension
 {

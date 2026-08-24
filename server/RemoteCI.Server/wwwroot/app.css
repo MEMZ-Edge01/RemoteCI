@@ -207,7 +207,8 @@ textarea { resize: vertical; }
 .user-danger-zone { display: grid; gap: 14px; padding: 20px 22px 22px; border-top: 1px solid var(--line); background: var(--danger-soft); }
 .user-danger-zone h3, .user-danger-zone p { margin: 0; }
 .user-danger-zone p { color: var(--muted); font-size: 12px; }
-.reset-password-form { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: end; gap: 10px; }
+.reset-password-form { display: grid; grid-template-columns: minmax(0,1fr); align-items: end; gap: 10px; }
+.reset-password-form button { justify-self: start; }
 .delete-user-form { display: flex; justify-content: flex-end; }
 .release-notes { margin: 14px 0; }
 .release-notes pre { max-height: 260px; overflow: auto; padding: 13px; border-radius: 8px; background: var(--surface-soft); white-space: pre-wrap; }
@@ -324,19 +325,22 @@ textarea { resize: vertical; }
 .power-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .power-actions form { margin: 0; }
 .extension-list { display: grid; gap: 12px; }
-.extension-control { display: grid; gap: 12px; padding-top: 14px; border-top: 1px solid var(--line); }
-.extension-control:first-child { padding-top: 0; border-top: 0; }
-.extension-control > div { display: grid; }
-.extension-control small { color: var(--muted); font-size: 12px; }
-.extension-form { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: end; gap: 12px; }
-.extension-form > button { justify-self: start; }
+.extension-control-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.extension-control-row:first-of-type { padding-top: 0; border-top: 0; }
+.extension-identity { display: grid; min-width: 0; }
+.extension-identity strong, .extension-identity small { overflow-wrap: anywhere; }
+.extension-identity small { color: var(--muted); font-size: 12px; }
+.extension-row-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+.extension-row-actions form { margin: 0; }
+.extension-dialog-form { padding: 22px; }
 
 @media (max-width: 620px) {
     .control-grid { grid-template-columns: 1fr; }
     .control-card-wide, .control-card-full { grid-column: auto; }
-    .volume-form, .extension-form { grid-template-columns: 1fr; }
+    .volume-form { grid-template-columns: 1fr; }
     .control-actions, .control-actions form, .power-actions, .power-actions form { width: 100%; }
-    .control-actions button, .power-actions button, .extension-form > button { width: 100%; }
+    .control-actions button, .power-actions button { width: 100%; }
+    .extension-control-row { align-items: flex-start; }
 }
 
 .notification-control-grid { display: grid; grid-template-columns: minmax(0,1.45fr) minmax(260px,.75fr); gap: 20px; }
@@ -362,9 +366,9 @@ textarea { resize: vertical; }
     .user-edit-dialog { width: calc(100vw - 20px); max-height: calc(100vh - 20px); }
     .user-edit-dialog-shell { max-height: calc(100vh - 20px); }
     .user-edit-dialog-header, .user-edit-form, .user-danger-zone { padding: 16px; }
-    .dialog-actions, .reset-password-form { grid-template-columns: 1fr; }
+    .dialog-actions { grid-template-columns: 1fr; }
     .dialog-actions { display: grid; }
-    .dialog-actions button, .reset-password-form button, .delete-user-form button { width: 100%; }
+    .dialog-actions button, .delete-user-form button { width: 100%; }
 }
 
 .role-config-list, .backup-list { display: grid; gap: 12px; margin-bottom: 16px; }

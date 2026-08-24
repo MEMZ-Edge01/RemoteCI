@@ -61,4 +61,34 @@ public sealed class RoleAndBackupTests : IClassFixture<TestWebApplicationFactory
         Assert.Contains(snapshot.Users, x => x.Username == TestWebApplicationFactory.AdminUsername);
         Assert.Throws<InvalidDataException>(() => archive.ReadEncrypted(encrypted, "wrong-password"));
     }
+
+    [Fact]
+    public async Task VersionOneBackupRestoresLegacySystemControlAsBothSplitPermissions()
+    {
+        await using var factory = new TestWebApplicationFactory();
+        _ = await factory.LoginAsync();
+        Guid userId;
+        ConfigurationSnapshot snapshot;
+        using (var scope = factory.Services.CreateScope())
+        {
+            var identities = scope.ServiceProvider.GetRequiredService<IdentityCoordinator>();
+            var user = await identities.CreateUserAsync(new CreateUserRequest
+            {
+                Username = "backup.v1.control",
+                DisplayName = "旧备份控制账号",
+                Password = "Backup-V1-Control-2026",
+                GrantedPermissions = UserPermissions.SystemControl,
+            });
+            userId = user.Id;
+            snapshot = (await scope.ServiceProvider.GetRequiredService<ConfigurationArchiveService>().CaptureAsync())
+                with { Version = 1 };
+            await scope.ServiceProvider.GetRequiredService<ConfigurationArchiveService>().ApplyAsync(snapshot);
+        }
+
+        using var verificationScope = factory.Services.CreateScope();
+        var restored = (await verificationScope.ServiceProvider.GetRequiredService<IdentityCoordinator>()
+            .ListUsersAsync()).Single(x => x.Id == userId);
+        Assert.True(restored.GrantedPermissions.HasFlag(UserPermissions.PowerControl));
+        Assert.True(restored.GrantedPermissions.HasFlag(UserPermissions.MainMenuControl));
+    }
 }

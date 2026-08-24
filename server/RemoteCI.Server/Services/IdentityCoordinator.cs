@@ -16,6 +16,7 @@ namespace RemoteCI.Server.Services;
 public sealed partial class IdentityCoordinator(
     AppDbContext db,
     UserManager<AppUser> users,
+    ExtensionPolicyService extensionPolicies,
     IOptions<ServerOptions> options,
     ILogger<IdentityCoordinator> logger)
 {
@@ -440,6 +441,24 @@ public sealed partial class IdentityCoordinator(
             Enabled = x.Enabled,
             Version = x.Version,
         }).ToListAsync(ct);
+        var extensionPolicyRows = await db.ExtensionPolicies.AsNoTracking()
+            .Where(x => x.Enabled).ToListAsync(ct);
+        var hiddenByUser = (await db.UserExtensionPreferences.AsNoTracking()
+                .Where(x => !x.ShowOnWatch)
+                .Select(x => new { x.UserId, x.ExtensionId })
+                .ToListAsync(ct))
+            .GroupBy(x => x.UserId)
+            .ToDictionary(group => group.Key, group => (IReadOnlyCollection<string>)group.Select(x => x.ExtensionId).ToArray());
+        foreach (var account in accounts)
+        {
+            var profile = account.ToProfile();
+            ExtensionPolicyService.ApplyAccess(
+                profile,
+                extensionPolicyRows,
+                hiddenByUser.GetValueOrDefault(account.Id, Array.Empty<string>()));
+            account.AllowedExtensionIds = profile.AllowedExtensionIds;
+            account.VisibleExtensionIds = profile.VisibleExtensionIds;
+        }
         var activeSessions = await db.DeviceSessions.Include(x => x.User).ThenInclude(x => x.RoleDefinition)
             .Where(x => x.RevokedAt == null).ToListAsync(ct);
         var sessions = activeSessions.Where(x => x.ExpiresAt > now && x.User.Enabled)
@@ -578,7 +597,7 @@ public sealed partial class IdentityCoordinator(
     private async Task<UserProfile> ToProfileAsync(AppUser user, CancellationToken ct)
     {
         var role = user.RoleDefinition ?? await db.AccountRoles.AsNoTracking().SingleAsync(x => x.Id == user.RoleDefinitionId, ct);
-        return new UserProfile
+        var profile = new UserProfile
         {
             Id = user.Id,
             Username = user.UserName!,
@@ -590,6 +609,8 @@ public sealed partial class IdentityCoordinator(
             Permissions = user.Role == UserRole.Admin ? UserPermissions.All : UserPermissions.ViewCurrentCourse | role.DefaultPermissions | user.GrantedPermissions,
             Version = user.Version,
         };
+        await extensionPolicies.ApplyAccessAsync(profile, ct);
+        return profile;
     }
 
     private async Task<UserListItem> ToListItemAsync(AppUser user, CancellationToken ct)
@@ -619,9 +640,7 @@ public sealed partial class IdentityCoordinator(
 
     private static UserPermissions NormalizeGrants(UserRole role, UserPermissions grants) => role == UserRole.Admin
         ? UserPermissions.None
-        : grants & (UserPermissions.AccessWebUi | UserPermissions.ManageUsers |
-            UserPermissions.SendNotifications | UserPermissions.ManageSchedule | UserPermissions.SystemControl |
-            UserPermissions.TeacherComing);
+        : grants & RolePermissions.Assignable;
 
     private static string NormalizeDeviceName(string value) => string.IsNullOrWhiteSpace(value)
         ? "Wear OS"

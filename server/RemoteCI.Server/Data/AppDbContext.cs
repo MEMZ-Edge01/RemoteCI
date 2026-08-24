@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Server.Data;
 
@@ -13,6 +14,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<SystemMetadata> SystemMetadata => Set<SystemMetadata>();
     public DbSet<AccountRole> AccountRoles => Set<AccountRole>();
     public DbSet<BackupConfiguration> BackupConfigurations => Set<BackupConfiguration>();
+    public DbSet<ExtensionPolicy> ExtensionPolicies => Set<ExtensionPolicy>();
+    public DbSet<UserExtensionPreference> UserExtensionPreferences => Set<UserExtensionPreference>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -33,6 +36,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options)
         builder.Entity<BackupConfiguration>(entity =>
         {
             entity.Property(x => x.LastError).HasMaxLength(1000);
+        });
+        builder.Entity<ExtensionPolicy>(entity =>
+        {
+            entity.HasKey(x => x.ExtensionId);
+            entity.Property(x => x.ExtensionId).HasMaxLength(ExtensionId.MaxLength);
+        });
+        builder.Entity<UserExtensionPreference>(entity =>
+        {
+            entity.HasKey(x => new { x.UserId, x.ExtensionId });
+            entity.Property(x => x.ExtensionId).HasMaxLength(ExtensionId.MaxLength);
+            entity.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<DeviceSession>(entity =>
         {

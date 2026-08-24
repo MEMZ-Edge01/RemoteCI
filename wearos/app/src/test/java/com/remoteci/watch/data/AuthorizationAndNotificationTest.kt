@@ -12,6 +12,12 @@ import kotlin.test.assertTrue
 
 class AuthorizationAndNotificationTest {
     @Test
+    fun `breaking permission model uses protocol version three`() {
+        assertEquals(3, Protocol.VERSION)
+        assertEquals("REMOTECI_DISCOVER_V3", Protocol.LAN_DISCOVERY_REQUEST)
+    }
+
+    @Test
     fun `selected lan plugin fills lan endpoint and reachable cloud url`() {
         val updated = mergeLanBootstrapInfo(
             WatchSettings(),

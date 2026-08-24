@@ -146,8 +146,6 @@ fun RemoteCiApp(context: Context) {
         if (user != null && screen == Screen.Login) screen = Screen.Home
         if (user != null && !user.has(Protocol.PERMISSION_MANAGE_SCHEDULE) &&
             screen in listOf(
-                Screen.ScheduleOverview,
-                Screen.ScheduleDatePicker,
                 Screen.DayPicker,
                 Screen.Swap,
                 Screen.LessonPicker,
@@ -156,15 +154,18 @@ fun RemoteCiApp(context: Context) {
         ) screen = Screen.Home
         if (user != null && !user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) && screen == Screen.Notification)
             screen = Screen.Home
-        if (user != null && !user.has(Protocol.PERMISSION_SYSTEM_CONTROL) &&
+        if (user != null && !user.has(Protocol.PERMISSION_POWER_CONTROL) &&
             screen in listOf(Screen.Power, Screen.Volume))
             screen = Screen.Home
         if (user != null && !user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) &&
-            !user.has(Protocol.PERMISSION_SYSTEM_CONTROL) && screen == Screen.Control)
+            !user.has(Protocol.PERMISSION_POWER_CONTROL) &&
+            !user.has(Protocol.PERMISSION_MAIN_MENU_CONTROL) &&
+            !user.has(Protocol.PERMISSION_TEACHER_COMING) &&
+            !user.has(Protocol.PERMISSION_RUN_EXTENSIONS) && screen == Screen.Control)
             screen = Screen.Home
         val active = activeExtension
         if (user != null && active != null &&
-            !user.has(active.requiredPermission) && screen == Screen.ExtensionForm)
+            !user.canInvoke(active) && screen == Screen.ExtensionForm)
             screen = Screen.Control
     }
     LaunchedEffect(selectedDay) {
@@ -229,40 +230,46 @@ fun RemoteCiApp(context: Context) {
                 },
             )
 
-            Screen.Home -> HomeScreen(
-                connectionState = connectionState,
-                snapshot = displayedSnapshot,
-                user = currentUser,
-                onOpenScheduleOverview = {
-                    selectedDate = initialScheduleDate(displayedSchedule, afterSchool, today)
-                    screen = Screen.ScheduleOverview
-                },
-                onOpenScheduleChange = {
-                    selectedDate = initialScheduleDate(displayedSchedule, afterSchool, today)
-                    screen = Screen.DayPicker
-                },
-                // 主界面课程按钮：有换课权限时直达换课页，并预选按钮当前显示的课程为源课。
-                onQuickSwapCourse = if (currentUser?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) {
-                    {
-                        val todayDate = displayedSnapshot?.scheduleDate ?: today.toString()
-                        val todayDay = displayedSchedule?.days?.firstOrNull { it.date == todayDate }
-                        val index = homeQuickSwapLessonIndex(todayDay, displayedSnapshot)
-                        if (todayDay != null && index != null) {
-                            selectedDate = todayDate
-                            sourceIndex = index
-                            quickSwapFromHome = true
-                            screen = Screen.Swap
-                        }
-                    }
-                } else {
-                    null
-                },
-                onOpenNotification = { screen = Screen.Control },
-                onOpenSettings = { screen = Screen.Settings },
-                onRetryConnection = {
-                    if (ConnectionManager.hasSavedSession()) ConnectionManager.connect(settings) else screen = Screen.Login
-                },
-            )
+            Screen.Home -> {
+                val scheduleDate = displayedSnapshot?.scheduleDate ?: today.toString()
+                val scheduleDay = displayedSchedule?.days?.firstOrNull { it.date == scheduleDate }
+                val canSwap = currentUser?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true
+                val displayedCourseIndex = if (canSwap) {
+                    homeQuickSwapLessonIndex(scheduleDay, displayedSnapshot)
+                } else null
+                val nextCourseIndex = if (canSwap) {
+                    nextQuickSwapLessonIndex(scheduleDay, displayedSnapshot)
+                } else null
+
+                // 两个首页入口共用同一跳转流程，但分别传入当前显示课程和下一节课的索引。
+                fun openQuickSwap(index: Int) {
+                    selectedDate = scheduleDate
+                    sourceIndex = index
+                    quickSwapFromHome = true
+                    screen = Screen.Swap
+                }
+
+                HomeScreen(
+                    connectionState = connectionState,
+                    snapshot = displayedSnapshot,
+                    user = currentUser,
+                    onOpenScheduleOverview = {
+                        selectedDate = initialScheduleDate(displayedSchedule, afterSchool, today)
+                        screen = Screen.ScheduleOverview
+                    },
+                    onOpenScheduleChange = {
+                        selectedDate = initialScheduleDate(displayedSchedule, afterSchool, today)
+                        screen = Screen.DayPicker
+                    },
+                    onQuickSwapCourse = displayedCourseIndex?.let { index -> { openQuickSwap(index) } },
+                    onQuickSwapNextCourse = nextCourseIndex?.let { index -> { openQuickSwap(index) } },
+                    onOpenNotification = { screen = Screen.Control },
+                    onOpenSettings = { screen = Screen.Settings },
+                    onRetryConnection = {
+                        if (ConnectionManager.hasSavedSession()) ConnectionManager.connect(settings) else screen = Screen.Login
+                    },
+                )
+            }
 
             Screen.ScheduleOverview -> ScheduleOverviewScreen(
                 day = selectedDay,

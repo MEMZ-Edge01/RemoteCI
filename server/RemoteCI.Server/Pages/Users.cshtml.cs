@@ -10,7 +10,7 @@ using RemoteCI.Shared.Models;
 namespace RemoteCI.Server.Pages;
 
 [Authorize]
-public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator identities, AccountRoleService roleService, PeerRegistry peers)
+public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator identities, AccountRoleService roleService, AuthorizationSyncService authorizationSync)
     : WebPageModel(users)
 {
     [BindProperty]
@@ -51,7 +51,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
                 RoleId = Create.RoleId,
                 GrantedPermissions = Create.Grants,
             }, ct);
-            await SyncAsync(ct);
+            await authorizationSync.SyncAsync(ct);
             TempData["Message"] = "账号已创建。";
             if (IsAjaxRequest()) return new JsonResult(new { redirectUrl = Url.Page("/Users") });
             return RedirectToPage();
@@ -87,7 +87,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
                 Enabled = Edit.Enabled,
                 GrantedPermissions = Edit.Grants,
             }, ct);
-            await SyncAsync(ct);
+            await authorizationSync.SyncAsync(ct);
             TempData["Message"] = "账号与权限已更新。";
         }
         catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
@@ -116,7 +116,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         try
         {
             await identities.ResetPasswordAsync(id, password, ct);
-            await SyncAsync(ct);
+            await authorizationSync.SyncAsync(ct);
             TempData["Message"] = "密码已重置，该用户的设备会话已全部撤销。";
         }
         catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
@@ -136,7 +136,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         try
         {
             await identities.DeleteUserAsync(id, ct);
-            await SyncAsync(ct);
+            await authorizationSync.SyncAsync(ct);
             TempData["Message"] = "账号已删除。";
         }
         catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
@@ -156,7 +156,7 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
     {
         if (await RequireAsync(UserPermissions.ManageUsers) is { } denied) return denied;
         if (CurrentUser.Role != UserRole.Admin) return RedirectToPage("/Denied");
-        try { await roleService.UpdateAsync(RoleEdit.Id, RoleEdit.Name, RoleEdit.Grants, ct); await SyncAsync(ct); TempData["Message"] = "Role updated."; }
+        try { await roleService.UpdateAsync(RoleEdit.Id, RoleEdit.Name, RoleEdit.Grants, ct); await authorizationSync.SyncAsync(ct); TempData["Message"] = "Role updated."; }
         catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }
         return RedirectToPage();
     }
@@ -176,12 +176,6 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         Accounts = await identities.ListUsersAsync(ct);
         RoleDefinitions = await roleService.ListAsync(ct);
         return Page();
-    }
-
-    private async Task SyncAsync(CancellationToken ct)
-    {
-        await peers.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(ct), ct);
-        await peers.RefreshWatchAuthorizationsAsync(ct);
     }
 
     private bool IsAjaxRequest() => string.Equals(
@@ -234,20 +228,33 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
             ModelState.Remove(key);
     }
 
-    public sealed class RoleInput
+    public abstract class PermissionInput
     {
-        public Guid Id { get; set; }
-        [Required, StringLength(40, MinimumLength = 1)] public string Name { get; set; } = string.Empty;
         public bool AccessWebUi { get; set; }
         public bool ManageUsers { get; set; }
         public bool SendNotifications { get; set; }
         public bool TeacherComing { get; set; }
         public bool ManageSchedule { get; set; }
-        public bool SystemControl { get; set; }
-        public UserPermissions Grants => (AccessWebUi ? UserPermissions.AccessWebUi : 0) | (ManageUsers ? UserPermissions.ManageUsers : 0) | (SendNotifications ? UserPermissions.SendNotifications : 0) | (TeacherComing ? UserPermissions.TeacherComing : 0) | (ManageSchedule ? UserPermissions.ManageSchedule : 0) | (SystemControl ? UserPermissions.SystemControl : 0);
+        public bool RunExtensions { get; set; }
+        public bool MainMenuControl { get; set; }
+        public bool PowerControl { get; set; }
+        public UserPermissions Grants => (AccessWebUi ? UserPermissions.AccessWebUi : 0) |
+            (ManageUsers ? UserPermissions.ManageUsers : 0) |
+            (SendNotifications ? UserPermissions.SendNotifications : 0) |
+            (TeacherComing ? UserPermissions.TeacherComing : 0) |
+            (ManageSchedule ? UserPermissions.ManageSchedule : 0) |
+            (RunExtensions ? UserPermissions.RunExtensions : 0) |
+            (MainMenuControl ? UserPermissions.MainMenuControl : 0) |
+            (PowerControl ? UserPermissions.PowerControl : 0);
     }
 
-    public sealed class UserInput
+    public sealed class RoleInput : PermissionInput
+    {
+        public Guid Id { get; set; }
+        [Required, StringLength(40, MinimumLength = 1)] public string Name { get; set; } = string.Empty;
+    }
+
+    public sealed class UserInput : PermissionInput
     {
         public Guid Id { get; set; }
         [Required(ErrorMessage = "请输入 ID。")]
@@ -263,18 +270,5 @@ public sealed class UsersModel(UserManager<AppUser> users, IdentityCoordinator i
         public UserRole Role { get; set; } = UserRole.User;
         public Guid? RoleId { get; set; } = AccountRole.StudentId;
         public bool Enabled { get; set; }
-        public bool AccessWebUi { get; set; }
-        public bool ManageUsers { get; set; }
-        public bool SendNotifications { get; set; }
-        public bool TeacherComing { get; set; }
-        public bool ManageSchedule { get; set; }
-        public bool SystemControl { get; set; }
-        public UserPermissions Grants =>
-            (AccessWebUi ? UserPermissions.AccessWebUi : 0) |
-            (ManageUsers ? UserPermissions.ManageUsers : 0) |
-            (SendNotifications ? UserPermissions.SendNotifications : 0) |
-            (TeacherComing ? UserPermissions.TeacherComing : 0) |
-            (ManageSchedule ? UserPermissions.ManageSchedule : 0) |
-            (SystemControl ? UserPermissions.SystemControl : 0);
     }
 }

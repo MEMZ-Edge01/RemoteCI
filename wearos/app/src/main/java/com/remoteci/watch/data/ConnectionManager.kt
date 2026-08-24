@@ -359,14 +359,14 @@ object ConnectionManager {
     fun setMainMenuVisible(visible: Boolean) {
         sendCommand(
             CommandMessage(command = Protocol.CMD_SET_MAIN_MENU_VISIBILITY, mainMenuVisible = visible),
-            Protocol.PERMISSION_SYSTEM_CONTROL,
+            Protocol.PERMISSION_MAIN_MENU_CONTROL,
         )
     }
 
     fun sendPowerAction(action: Int) {
         sendCommand(
             CommandMessage(command = Protocol.CMD_POWER, powerAction = action),
-            Protocol.PERMISSION_SYSTEM_CONTROL,
+            Protocol.PERMISSION_POWER_CONTROL,
         )
     }
 
@@ -380,7 +380,7 @@ object ConnectionManager {
                     command = Protocol.CMD_VOLUME,
                     volume = VolumeControlRequest(level = level.coerceIn(0, 100)),
                 ),
-                Protocol.PERMISSION_SYSTEM_CONTROL,
+                Protocol.PERMISSION_POWER_CONTROL,
             )
         }
     }
@@ -388,18 +388,22 @@ object ConnectionManager {
     fun setMuted(muted: Boolean) {
         sendCommand(
             CommandMessage(command = Protocol.CMD_VOLUME, volume = VolumeControlRequest(muted = muted)),
-            Protocol.PERMISSION_SYSTEM_CONTROL,
+            Protocol.PERMISSION_POWER_CONTROL,
         )
     }
 
     fun runExtension(extension: ExtensionDefinition, args: Map<String, String?> = emptyMap()) {
+        if (currentUser.value?.canInvoke(extension) != true) {
+            lastCommandResult.value = CommandResult(false, "FORBIDDEN", "权限不足或扩展未开放")
+            return
+        }
         sendCommand(
             CommandMessage(
                 command = Protocol.CMD_RUN_EXTENSION,
                 extensionId = extension.id,
                 extensionArgs = args,
             ),
-            extension.requiredPermission,
+            Protocol.PERMISSION_RUN_EXTENSIONS,
         )
     }
 

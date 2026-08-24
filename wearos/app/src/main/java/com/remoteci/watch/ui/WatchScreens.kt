@@ -221,6 +221,7 @@ internal fun HomeScreen(
     onOpenScheduleOverview: () -> Unit,
     onOpenScheduleChange: () -> Unit,
     onQuickSwapCourse: (() -> Unit)?,
+    onQuickSwapNextCourse: (() -> Unit)?,
     onOpenNotification: () -> Unit,
     onOpenSettings: () -> Unit,
     onRetryConnection: () -> Unit,
@@ -258,6 +259,7 @@ internal fun HomeScreen(
                         now = now,
                         diameter = diameter,
                         onQuickSwapCourse = onQuickSwapCourse,
+                        onQuickSwapNextCourse = onQuickSwapNextCourse,
                         onRetryConnection = onRetryConnection,
                     )
                 } else {
@@ -287,6 +289,7 @@ private fun HomeStatusPage(
     now: LocalTime,
     diameter: Dp,
     onQuickSwapCourse: (() -> Unit)?,
+    onQuickSwapNextCourse: (() -> Unit)?,
     onRetryConnection: () -> Unit,
 ) {
     // 下课和即将上课时，主页的主课程入口代表即将发生的下一节课；
@@ -355,14 +358,48 @@ private fun HomeStatusPage(
         }
         if (canViewExtendedSchedule(user) && shouldShowNextLessonSummary(snapshot?.currentState)) {
             Spacer(Modifier.height(diameter * .035f))
-            Text(
-                stringResource(R.string.home_next_lesson, snapshot?.nextClassSubject ?: stringResource(R.string.home_next_lesson_none)),
-                color = Color.Black,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            val nextSubject = snapshot?.nextClassSubject?.trim().orEmpty()
+            if (shouldHighlightNextLessonAction(snapshot) && onQuickSwapNextCourse != null) {
+                Row(
+                    modifier = Modifier.widthIn(max = diameter * .78f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center,
+                ) {
+                    Text(
+                        stringResource(R.string.home_next_lesson_prefix),
+                        color = Color.Black,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                    Text(
+                        nextSubject,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .clip(RoundedCornerShape(9.dp))
+                            .border(1.dp, palette.progressActive, RoundedCornerShape(9.dp))
+                            .clickable(onClick = onQuickSwapNextCourse)
+                            .padding(horizontal = 7.dp, vertical = 3.dp),
+                        color = Color.Black,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            } else {
+                Text(
+                    stringResource(
+                        R.string.home_next_lesson,
+                        snapshot?.nextClassSubject ?: stringResource(R.string.home_next_lesson_none),
+                    ),
+                    color = Color.Black,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }
@@ -560,7 +597,8 @@ internal fun ControlScreen(
 ) = WatchList(title = stringResource(R.string.control_title)) {
     val canTeacherComing = user?.has(Protocol.PERMISSION_TEACHER_COMING) == true
     val canNotify = user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true
-    val canControlSystem = user?.has(Protocol.PERMISSION_SYSTEM_CONTROL) == true
+    val canControlMainMenu = user?.has(Protocol.PERMISSION_MAIN_MENU_CONTROL) == true
+    val canControlPower = user?.has(Protocol.PERMISSION_POWER_CONTROL) == true
     item { ActionButton(stringResource(R.string.teacher_coming), Icons.Rounded.School, canTeacherComing, onTeacherComing) }
     item { ActionButton(stringResource(R.string.send_notification), Icons.Rounded.EditNotifications, canNotify, onOpenNotification) }
     if (shouldShowClearNotifications(snapshot)) item {
@@ -570,7 +608,7 @@ internal fun ControlScreen(
         ActionButton(
             mainMenuActionLabel(snapshot),
             if (snapshot?.isMainMenuVisible == false) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
-            canControlSystem,
+            canControlMainMenu,
             onToggleMainMenu,
         )
     }
@@ -578,12 +616,12 @@ internal fun ControlScreen(
         ActionButton(
             stringResource(R.string.volume_title),
             if (snapshot?.isMuted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-            canControlSystem && snapshot?.isVolumeControlAvailable == true,
+            canControlPower && snapshot?.isVolumeControlAvailable == true,
             onOpenVolume,
         )
     }
-    item { ActionButton(stringResource(R.string.power_title), Icons.Rounded.PowerSettingsNew, canControlSystem, onOpenPower) }
-    // 其他插件通过 RemoteCI 注册的扩展功能：按当前用户权限过滤后动态显示在控制菜单底部。
+    item { ActionButton(stringResource(R.string.power_title), Icons.Rounded.PowerSettingsNew, canControlPower, onOpenPower) }
+    // 扩展入口同时遵守独立扩展权限、服务端策略和账号自己的展示偏好。
     visibleExtensionsFor(user, extensions).forEach { extension ->
         item {
             ActionButton(
@@ -604,11 +642,11 @@ internal fun shouldShowClearNotifications(snapshot: ClassStateSnapshot?): Boolea
 internal fun mainMenuActionLabel(snapshot: ClassStateSnapshot?): String =
     if (snapshot?.isMainMenuVisible == false) "显示主菜单" else "隐藏主菜单"
 
-/** 扩展功能按当前用户有效权限过滤；隐藏按钮不构成安全控制，插件执行端会再次校验。 */
+/** 扩展功能按服务端策略和当前用户偏好过滤；隐藏按钮不构成安全控制，插件执行端会再次校验。 */
 internal fun visibleExtensionsFor(
     user: UserProfile?,
     extensions: List<ExtensionDefinition>,
-): List<ExtensionDefinition> = extensions.filter { user?.has(it.requiredPermission) == true }
+): List<ExtensionDefinition> = extensions.filter { user?.showsOnWatch(it) == true }
 
 /** Material 图标名白名单映射；未知或缺失时返回 null，界面回退为纯文字。 */
 internal fun extensionIcon(icon: String?): ImageVector? = when (icon?.trim()?.lowercase()) {
@@ -1149,16 +1187,18 @@ private fun ActionButton(
 private data class HomeAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
 internal fun homeActionLabels(user: UserProfile?): List<String> = buildList {
-    if (user?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) add("课表")
+    if (user != null) add("课表")
     if (user?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) add("换课")
     if (user?.has(Protocol.PERMISSION_TEACHER_COMING) == true ||
         user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true ||
-        user?.has(Protocol.PERMISSION_SYSTEM_CONTROL) == true) add("控制")
+        user?.has(Protocol.PERMISSION_POWER_CONTROL) == true ||
+        user?.has(Protocol.PERMISSION_MAIN_MENU_CONTROL) == true ||
+        user?.has(Protocol.PERMISSION_RUN_EXTENSIONS) == true) add("控制")
     add("设置")
 }
 
 internal fun canViewExtendedSchedule(user: UserProfile?): Boolean =
-    user?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true
+    user != null
 
 @Composable
 private fun HomeInfoChip(
@@ -1382,6 +1422,16 @@ internal fun shouldShowNextLessonSummary(currentState: Int?): Boolean =
 /** 快速换课预选项必须与主页按钮当前显示的课程一致。 */
 internal fun homeQuickSwapLessonIndex(day: ScheduleDay?, snapshot: ClassStateSnapshot?): Int? =
     currentLessonIndex(day, homeCourseContent(snapshot).timeLayoutItem)
+
+/** “暂无课程”状态下的下一节课入口始终按下一时间段匹配，不能回退到空的当前时间段。 */
+internal fun nextQuickSwapLessonIndex(day: ScheduleDay?, snapshot: ClassStateSnapshot?): Int? =
+    currentLessonIndex(day, snapshot?.nextClassTimeLayoutItem)
+
+/** 仅在截图所示的“当前无课、但有下一节课”状态展示下一节课描边操作入口。 */
+internal fun shouldHighlightNextLessonAction(snapshot: ClassStateSnapshot?): Boolean =
+    snapshot?.currentState == Protocol.STATE_NONE &&
+        !homeCourseContent(snapshot).isAvailable &&
+        !snapshot.nextClassSubject.isNullOrBlank()
 
 /** 只有具有明确起止时间的课程阶段才显示环状进度，避免放学等开放状态产生伪进度。 */
 internal fun shouldShowStateProgress(snapshot: ClassStateSnapshot?): Boolean =

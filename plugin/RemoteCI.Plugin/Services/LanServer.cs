@@ -90,7 +90,17 @@ public sealed class LanServer : IDisposable
         // 扩展通常早于手表接入完成注册；缓存快照供后续局域网连接认证成功时补发。
         var snapshot = value.ToArray();
         Volatile.Write(ref _latestExtensions, snapshot);
-        Broadcast(Envelope.ExtensionsSync(snapshot));
+        foreach (var client in AuthenticatedClients())
+        {
+            try
+            {
+                Send(client.Socket, Envelope.ExtensionsSync(VisibleExtensions(client.User!, snapshot)));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "向局域网客户端 {Id} 同步扩展清单失败", client.Socket.ConnectionInfo.Id);
+            }
+        }
     }
 
     private bool Broadcast(Envelope envelope)
@@ -282,7 +292,7 @@ public sealed class LanServer : IDisposable
         SendAuthenticatedState(client, user);
         if (_snapshotProvider() is { } snapshot) Send(client.Socket, Envelope.StatePush(snapshot));
         if (_scheduleProvider() is { } schedule) Send(client.Socket, Envelope.ScheduleSync(schedule));
-        Send(client.Socket, Envelope.ExtensionsSync(Volatile.Read(ref _latestExtensions)));
+        Send(client.Socket, Envelope.ExtensionsSync(VisibleExtensions(user, Volatile.Read(ref _latestExtensions))));
         _logger.LogInformation("局域网设备会话已认证：{Username}/{Role}", user.Username, user.Role);
         return Task.CompletedTask;
     }
@@ -305,6 +315,7 @@ public sealed class LanServer : IDisposable
             }
             client.User = refreshed;
             SendAuthenticatedState(client, refreshed);
+            Send(client.Socket, Envelope.ExtensionsSync(VisibleExtensions(refreshed, Volatile.Read(ref _latestExtensions))));
         }
     }
 
@@ -318,6 +329,11 @@ public sealed class LanServer : IDisposable
 
     private IEnumerable<LanClient> AuthenticatedClients() =>
         _clients.Values.Where(x => x.User is not null && x.Socket.IsAvailable);
+
+    private static IReadOnlyList<ExtensionDefinition> VisibleExtensions(
+        UserProfile user,
+        IReadOnlyList<ExtensionDefinition> extensions) =>
+        extensions.Where(extension => ExtensionAccess.IsVisibleOnWatch(user, extension)).ToArray();
 
     private static T? ConvertPayload<T>(object? payload) => JsonSerializer.Deserialize<T>(
         JsonSerializer.Serialize(payload), JsonDefaults.Options);

@@ -44,6 +44,25 @@ public sealed class ExtensionRegistryTests
         Assert.Throws<ArgumentException>(() => registry.Register(new FakeExtension(" ", "空白 Id")));
     }
 
+    [Theory]
+    [InlineData(" demo")]
+    [InlineData("demo ")]
+    public void RegisterIdWithOuterWhitespace_Throws(string id)
+    {
+        var registry = new RemoteCiExtensionRegistry();
+
+        Assert.Throws<ArgumentException>(() => registry.Register(new FakeExtension(id, "非法 Id")));
+    }
+
+    [Fact]
+    public void RegisterOverlongId_Throws()
+    {
+        var registry = new RemoteCiExtensionRegistry();
+
+        Assert.Throws<ArgumentException>(() => registry.Register(
+            new FakeExtension(new string('x', ExtensionId.MaxLength + 1), "超长 Id")));
+    }
+
     /// <summary>测试用扩展：默认成功返回，可注入参数与执行回调。</summary>
     internal sealed class FakeExtension(
         string id,

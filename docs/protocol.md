@@ -1,6 +1,6 @@
-# RemoteCI 协议 v2
+# RemoteCI 协议 v3
 
-协议 v2 是三端同时升级的破坏性版本。所有 WebSocket 信封都带 `protocolVersion: 2`、`type`、`messageId`、可选 `replyToMessageId`、时间和 `payload`。v1 客户端会收到 `PROTOCOL_VERSION_UNSUPPORTED`，共享配对码登录不再受理。
+协议 v3 是服务端、插件和手表必须同时升级的破坏性版本。所有 WebSocket 信封都带 `protocolVersion: 3`、`type`、`messageId`、可选 `replyToMessageId`、时间和 `payload`。v3 拆分了主界面与电源权限，并增加独立扩展权限和逐扩展策略；v1/v2 客户端会收到 `PROTOCOL_VERSION_UNSUPPORTED`，避免旧组件按旧权限语义继续执行命令。
 
 ## 身份与权限
 
@@ -13,10 +13,12 @@
 | 4 | `ManageUsers` |
 | 8 | `SendNotifications` |
 | 16 | `ManageSchedule` |
-| 32 | `SystemControl` |
+| 32 | `PowerControl`（旧名称 `SystemControl` 保留为别名） |
 | 64 | `TeacherComing` |
+| 128 | `RunExtensions` |
+| 256 | `MainMenuControl` |
 
-管理员的有效权限固定为 127。普通用户固定包含值 1，其余六项来自服务端授权。`TeacherComing` 单独保护“老师来了”快捷提醒；`SendNotifications` 只保护自定义通知与清除提醒，`SystemControl` 保护主界面显隐、音量和 Windows 电源操作。
+管理员的有效权限固定为 511。普通用户固定包含值 1，其余权限来自服务端授权。权限设置界面将值 2 显示为“概览”；七日课表查看和手动拉取只要求账号已登录，值 16 保护换课和自动拉取设置。`TeacherComing` 单独保护“老师来了”，`SendNotifications` 只保护自定义通知与清除提醒，`RunExtensions` 是所有插件扩展的独立权限，`MainMenuControl` 保护主界面显隐，`PowerControl` 保护音量和 Windows 电源操作。
 
 账号密码只出现在第一次 HTTPS `POST /api/auth/login` 的请求内。响应包含 1 小时 `accessToken`、30 天 `deviceSessionId/deviceSecret` 和用户有效权限。`POST /api/auth/refresh` 会同时轮换访问令牌和设备密钥；旧值立即失效。
 
@@ -62,7 +64,7 @@
 
 手表可以在登录页扫描同一局域网中的插件，无需手动填写电脑 IP：
 
-1. 手表向固定 UDP 端口 `48765` 发送广播串 `REMOTECI_DISCOVER_V2`；插件应答 JSON `{protocolVersion, instanceName, port}`，`protocolVersion` 为 `2`，`port` 是插件当前局域网 WebSocket 端口。
+1. 手表向固定 UDP 端口 `48765` 发送广播串 `REMOTECI_DISCOVER_V3`；插件应答 JSON `{protocolVersion, instanceName, port}`，`protocolVersion` 为 `3`，`port` 是插件当前局域网 WebSocket 端口。
 2. 用户选中应答条目后，手表连接 `ws://<应答来源地址>:<port>/bootstrap`，插件返回 `connection_bootstrap` 载荷 `{instanceName, cloudServerUrl}`。该端点未认证，只提供云端地址与实例名，密码和会话凭据始终只交给云服务器。
 3. 插件每次云端重连时重新发现本机网卡，通过 `plugin_network_info`（`{lanServerEnabled, addresses[], port}`）上报服务端；服务端归一化后广播给在线手表并缓存最新一份，新连接的手表在 `auth_state` 之后立即收到。手表据此更新局域网候选地址，地址或端口变化且当前走云端中转时自动重试直连。
 
@@ -80,7 +82,7 @@
 
 控制命令值 3 为清除当前 ClassIsland 提醒，值 4 通过 `mainMenuVisible` 设置主界面显隐，值 5 通过 `powerAction` 选择关机、重启、睡眠或休眠。值 6 通过 `volume.level` 设置 Windows 默认播放设备的 0-100 主音量，或通过 `volume.muted` 设置静音状态；WebUI 在静音状态下向高调节时会在同一命令中同时发送 `level` 与 `muted: false`。休眠入口只在插件状态报告 Windows 已启用休眠时显示。
 
-`extensions_sync` 的载荷是其他 ClassIsland 插件通过 RemoteCI 注册的扩展功能列表；云端服务端和插件局域网服务都会缓存最近一次清单，并在手表完成认证后主动补发。命令值 7 为 `RunExtension`，命令值 8 为 `TeacherComing`；后者由插件完成显示“老师来了”、等待 1 秒和清除提醒的完整流程。通过 `extensionId` 指定目标扩展，`extensionArgs` 携带参数字典（值统一为字符串）。扩展命令的所需权限由插件端按注册项动态校验，服务端只要求已认证用户；未注册、缺少必填参数或权限不足时分别返回 `INVALID_REQUEST` / `FORBIDDEN`，执行异常统一返回 `INTERNAL_ERROR`。
+`extensions_sync` 的载荷是其他 ClassIsland 插件通过 RemoteCI 注册的扩展功能列表；云端服务端和插件局域网服务都会缓存最近一次清单，并在手表完成认证后主动补发。命令值 7 为 `RunExtension`，命令值 8 为 `TeacherComing`；后者由插件完成显示“老师来了”、等待 1 秒和清除提醒的完整流程。通过 `extensionId` 指定目标扩展，`extensionArgs` 携带参数字典（值统一为字符串）。扩展调用必须同时通过独立的 `RunExtensions` 权限和管理员为该扩展设置的启用/普通账号开放策略；`RequiredPermission` 只作为旧扩展兼容字段传输，不再关联通知、电源等权限。账号的 `allowedExtensionIds` 与 `visibleExtensionIds` 随认证状态和 `account_sync` 下发，后者只控制自己的手表入口。未注册、缺少必填参数或权限不足时分别返回 `INVALID_REQUEST` / `FORBIDDEN`，执行异常统一返回 `INTERNAL_ERROR`。
 
 状态快照中的 `isVolumeControlAvailable`、`volumePercent` 和 `isMuted` 分别表示默认播放设备是否可控、当前主音量百分比和静音状态，手表必须以这些真实状态刷新音量页。
 
@@ -123,4 +125,4 @@ REST 手表请求使用 `Authorization: Bearer <accessToken>`。Razor WebUI 使�
 服务端自定义角色在现有协议中仍以 `UserRole.User` 传输，并通过 `roleId`、`roleName` 可选字段提供管理信息。插件与旧版手表可以忽略新增字段，授权仍以 `effectivePermissions` 为准。
 
 
-插件每次云端 WebSocket 首次连接或重连成功后，都会重新发送当前 `extensions_sync` 快照。这保证其他 ClassIsland 插件在云端连接建立前已注册的扩展功能，也能进入服务端缓存并显示在 WebUI 控制页。插件局域网服务同时缓存该快照，在手表稍后完成局域网认证时补发，避免扩展只显示在 WebUI 而不显示在安卓控制页。
+插件每次云端 WebSocket 首次连接或重连成功后，都会重新发送当前 `extensions_sync` 快照。这保证其他 ClassIsland 插件在云端连接建立前已注册的扩展功能，也能进入服务端缓存并显示在 WebUI 控制页。服务端首次发现扩展时默认启用但不向非管理员开放；管理员可在控制页逐项编辑。策略和个人手表展示偏好持久化到 SQLite 并进入授权镜像，插件局域网服务据此向每个已认证手表发送对应清单。

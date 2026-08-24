@@ -2,7 +2,6 @@
 @using Microsoft.EntityFrameworkCore
 @inject UserManager<AppUser> UserManager
 @inject AppDbContext Db
-@inject IStateStore StateStore
 @{
     var current = User.Identity?.IsAuthenticated == true ? await UserManager.GetUserAsync(User) : null;
     var roleDefaults = current is null
@@ -18,13 +17,12 @@
     string NavClass(string page) => currentPage == page ? "nav-link active" : "nav-link";
     string? CurrentPage(string page) => currentPage == page ? "page" : null;
     var userInitial = string.IsNullOrWhiteSpace(current?.DisplayName) ? "R" : current.DisplayName.Trim()[0].ToString().ToUpperInvariant();
-    var visibleControlExtensions = (StateStore.GetLatestExtensions() ?? [])
-        .Where(extension => permissions.HasFlag(extension.RequiredPermission))
-        .ToArray();
     var controlMenuActive = currentPage is "/Control" or "/Notifications";
     var showControlMenu = permissions.HasFlag(UserPermissions.TeacherComing) ||
         permissions.HasFlag(UserPermissions.SendNotifications) ||
-        permissions.HasFlag(UserPermissions.SystemControl) || visibleControlExtensions.Length > 0;
+        permissions.HasFlag(UserPermissions.PowerControl) ||
+        permissions.HasFlag(UserPermissions.MainMenuControl) ||
+        permissions.HasFlag(UserPermissions.RunExtensions);
 }
 <!doctype html>
 <html lang="zh-CN">
@@ -50,10 +48,7 @@
                 {
                     <a class="@NavClass("/Index")" aria-current="@CurrentPage("/Index")" asp-page="/Index" data-search-label="概览 仪表盘 课堂状态"><i class="bi bi-grid" aria-hidden="true"></i><span>概览</span></a>
                 }
-                @if (permissions.HasFlag(UserPermissions.ManageSchedule))
-                {
-                    <a class="@NavClass("/Schedule")" aria-current="@CurrentPage("/Schedule")" asp-page="/Schedule" data-search-label="七日课表 换课 课程安排"><i class="bi bi-calendar-week" aria-hidden="true"></i><span>课表</span></a>
-                }
+                <a class="@NavClass("/Schedule")" aria-current="@CurrentPage("/Schedule")" asp-page="/Schedule" data-search-label="七日课表 换课 课程安排"><i class="bi bi-calendar-week" aria-hidden="true"></i><span>课表</span></a>
                 @if (showControlMenu)
                 {
                     <a class="@(controlMenuActive ? "nav-link active" : "nav-link")" aria-current="@(controlMenuActive ? "page" : null)" asp-page="/Control" data-search-label="控制 老师来了 发送通知 清除通知 主界面 音量 电源 扩展"><i class="bi bi-toggles" aria-hidden="true"></i><span>控制</span></a>

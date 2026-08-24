@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 object Protocol {
-    const val VERSION = 2
+    const val VERSION = 3
     const val TYPE_STATE_PUSH = "state_push"
     const val TYPE_SCHEDULE_SYNC = "schedule_sync"
     const val TYPE_SCHEDULE_PULL = "schedule_pull"
@@ -21,7 +21,7 @@ object Protocol {
     const val TYPE_PLUGIN_NETWORK_INFO = "plugin_network_info"
     const val TYPE_CONNECTION_BOOTSTRAP = "connection_bootstrap"
     const val LAN_DISCOVERY_PORT = 48765
-    const val LAN_DISCOVERY_REQUEST = "REMOTECI_DISCOVER_V2"
+    const val LAN_DISCOVERY_REQUEST = "REMOTECI_DISCOVER_V3"
 
     const val STATE_NONE = 0
     const val STATE_CLASS = 1
@@ -64,8 +64,11 @@ object Protocol {
     const val PERMISSION_MANAGE_USERS = 4
     const val PERMISSION_SEND_NOTIFICATIONS = 8
     const val PERMISSION_MANAGE_SCHEDULE = 16
-    const val PERMISSION_SYSTEM_CONTROL = 32
+    const val PERMISSION_POWER_CONTROL = 32
+    const val PERMISSION_SYSTEM_CONTROL = PERMISSION_POWER_CONTROL
     const val PERMISSION_TEACHER_COMING = 64
+    const val PERMISSION_RUN_EXTENSIONS = 128
+    const val PERMISSION_MAIN_MENU_CONTROL = 256
 
     const val SCHEDULE_SOURCE_PLUGIN = 1
     const val SCHEDULE_SOURCE_WEB_UI = 2
@@ -277,10 +280,19 @@ data class UserProfile(
     val role: Int = Protocol.ROLE_USER,
     @SerialName("grantedPermissions") val grantedPermissions: Int = 0,
     val permissions: Int = Protocol.PERMISSION_VIEW_CURRENT,
+    @SerialName("allowedExtensionIds") val allowedExtensionIds: List<String>? = null,
+    @SerialName("visibleExtensionIds") val visibleExtensionIds: List<String>? = null,
     val version: Long = 0,
 ) {
     val isAdmin: Boolean get() = role == Protocol.ROLE_ADMIN
     fun has(permission: Int): Boolean = permissions and permission == permission
+    fun canInvoke(extension: ExtensionDefinition): Boolean =
+        has(Protocol.PERMISSION_RUN_EXTENSIONS) &&
+            (allowedExtensionIds == null || extension.id in allowedExtensionIds)
+
+    fun showsOnWatch(extension: ExtensionDefinition): Boolean =
+        canInvoke(extension) &&
+            (visibleExtensionIds == null || extension.id in visibleExtensionIds)
 }
 
 @Serializable

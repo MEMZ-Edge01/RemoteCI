@@ -1,4 +1,5 @@
 using RemoteCI.Plugin.Extensions;
+using RemoteCI.Shared.Models;
 
 namespace RemoteCI.Plugin.Services;
 
@@ -24,13 +25,12 @@ internal sealed class RemoteCiExtensionRegistry : IRemoteCiExtensionRegistry
     public void Register(IRemoteCiExtension extension)
     {
         ArgumentNullException.ThrowIfNull(extension);
-        if (string.IsNullOrWhiteSpace(extension.Id))
-            throw new ArgumentException("扩展 Id 不能为空", nameof(extension));
+        var id = ExtensionId.Parse(extension.Id, nameof(extension));
 
         lock (_lock)
         {
-            if (!_extensions.TryAdd(extension.Id, extension))
-                throw new InvalidOperationException($"扩展 Id 已存在：{extension.Id}");
+            if (!_extensions.TryAdd(id.Value, extension))
+                throw new InvalidOperationException($"扩展 Id 已存在：{id}");
         }
         ExtensionsChanged?.Invoke(this, EventArgs.Empty);
     }

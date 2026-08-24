@@ -12,7 +12,7 @@ namespace RemoteCI.Server.Pages;
 public sealed class AccountModel(
     UserManager<AppUser> users,
     IdentityCoordinator identities,
-    PeerRegistry peers,
+    AuthorizationSyncService authorizationSync,
     SignInManager<AppUser> signIn) : WebPageModel(users)
 {
     [BindProperty]
@@ -42,8 +42,7 @@ public sealed class AccountModel(
                 CurrentPassword = Password.CurrentPassword,
                 NewPassword = Password.NewPassword,
             }, ct);
-            await peers.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(ct), ct);
-            await peers.RefreshWatchAuthorizationsAsync(ct);
+            await authorizationSync.SyncAsync(ct);
             await signIn.SignOutAsync();
             TempData["Message"] = "密码已修改，所有设备会话已撤销，请重新登录。";
             return RedirectToPage("/Login");
@@ -62,8 +61,7 @@ public sealed class AccountModel(
         try
         {
             await identities.RevokeSessionAsync(CurrentUser.Id, id, ct);
-            await peers.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(ct), ct);
-            await peers.RefreshWatchAuthorizationsAsync(ct);
+            await authorizationSync.SyncAsync(ct);
             TempData["Message"] = "设备会话已撤销。";
         }
         catch (IdentityOperationException ex) { TempData["Error"] = ex.Message; }

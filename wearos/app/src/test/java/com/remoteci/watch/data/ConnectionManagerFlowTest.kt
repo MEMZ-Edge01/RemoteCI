@@ -180,9 +180,9 @@ class ConnectionManagerFlowTest {
                 val proof = json.decodeFromJsonElement(AuthProof.serializer(), envelope.payload!!)
                 assertEquals("c1", proof.challengeId)
                 assertEquals(SESSION_ID, proof.deviceSessionId)
-                // 服务端独立重算 HMAC：密钥 = SHA-256(deviceSecret)，消息 = 2|c1|n1|clientNonce|无横线小写 sessionId
+                // 服务端独立重算 HMAC：密钥 = SHA-256(deviceSecret)，消息 = 3|c1|n1|clientNonce|无横线小写 sessionId
                 val verifier = MessageDigest.getInstance("SHA-256").digest(DEVICE_SECRET.encodeToByteArray())
-                val canonical = "2|c1|n1|${proof.clientNonce}|${SESSION_ID.replace("-", "").lowercase()}"
+                val canonical = "3|c1|n1|${proof.clientNonce}|${SESSION_ID.replace("-", "").lowercase()}"
                 val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(verifier, "HmacSHA256")) }
                 assertEquals(
                     Base64.getEncoder().encodeToString(mac.doFinal(canonical.encodeToByteArray())),
@@ -233,7 +233,7 @@ class ConnectionManagerFlowTest {
         ConnectionManager.connect(mockServerSettings(), "correct-password")
 
         val error = awaitState({ it is ConnectionManager.State.Error })
-        assertEquals("协议版本不兼容，需要 v2", (error as ConnectionManager.State.Error).message)
+        assertEquals("协议版本不兼容，需要 v3", (error as ConnectionManager.State.Error).message)
     }
 
     @Test

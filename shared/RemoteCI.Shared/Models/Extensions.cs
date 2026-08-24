@@ -3,12 +3,38 @@ using System.Text.Json.Serialization;
 namespace RemoteCI.Shared.Models;
 
 /// <summary>
+/// 扩展 Id 的统一领域规则。Id 会跨插件注册表、协议和数据库作为精确匹配键，
+/// 因此禁止隐式裁剪或在不同端采用不同长度限制。
+/// </summary>
+public readonly record struct ExtensionId
+{
+    public const int MaxLength = 200;
+
+    private ExtensionId(string value) => Value = value;
+
+    public string Value { get; }
+
+    public static ExtensionId Parse(string? value, string? paramName = null)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException("扩展 Id 不能为空", paramName);
+        if (!string.Equals(value, value.Trim(), StringComparison.Ordinal))
+            throw new ArgumentException("扩展 Id 不能包含首尾空白", paramName);
+        if (value.Length > MaxLength)
+            throw new ArgumentException($"扩展 Id 不能超过 {MaxLength} 个字符", paramName);
+        return new ExtensionId(value);
+    }
+
+    public override string ToString() => Value;
+}
+
+/// <summary>
 /// 插件注册的自定义远程功能元数据，经 extensions_sync 同步给服务端与手表。
 /// 手表端据此在控制菜单底部渲染入口和参数表单。
 /// </summary>
 public sealed class ExtensionDefinition
 {
-    /// <summary>全局唯一扩展 Id，命令路由与去重都使用它。</summary>
+    /// <summary>全局唯一扩展 Id，命令路由与去重都使用它；格式由 <see cref="ExtensionId"/> 统一约束。</summary>
     [JsonPropertyName("id")]
     public string Id { get; set; } = string.Empty;
 
@@ -21,7 +47,7 @@ public sealed class ExtensionDefinition
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Icon { get; set; }
 
-    /// <summary>执行所需的最小权限；手表显示与插件执行端都会校验。</summary>
+    /// <summary>兼容旧扩展的声明字段；当前统一由 RunExtensions 和服务端扩展策略鉴权。</summary>
     [JsonPropertyName("requiredPermission")]
     public UserPermissions RequiredPermission { get; set; }
 
@@ -66,4 +92,18 @@ public enum ExtensionParameterType
     Number = 2,
     Switch = 3,
     Select = 4,
+}
+
+/// <summary>扩展调用权限的统一判定，供服务端、插件和客户端保持一致。</summary>
+public static class ExtensionAccess
+{
+    public static bool CanInvoke(UserProfile? user, ExtensionDefinition extension)
+    {
+        if (user is null || !user.Permissions.HasFlag(UserPermissions.RunExtensions)) return false;
+        return user.AllowedExtensionIds is null || user.AllowedExtensionIds.Contains(extension.Id, StringComparer.Ordinal);
+    }
+
+    public static bool IsVisibleOnWatch(UserProfile? user, ExtensionDefinition extension) =>
+        CanInvoke(user, extension) &&
+        (user!.VisibleExtensionIds is null || user.VisibleExtensionIds.Contains(extension.Id, StringComparer.Ordinal));
 }

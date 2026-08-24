@@ -78,6 +78,8 @@ builder.Services.AddAntiforgery(options => options.HeaderName = "X-CSRF-TOKEN");
 builder.Services.AddRazorPages(options => options.Conventions.AllowAnonymousToPage("/Login"));
 builder.Services.AddScoped<IdentityCoordinator>();
 builder.Services.AddScoped<AccountRoleService>();
+builder.Services.AddScoped<ExtensionPolicyService>();
+builder.Services.AddScoped<AuthorizationSyncService>();
 builder.Services.AddScoped<ConfigurationArchiveService>();
 builder.Services.AddScoped<SchedulePullSettings>();
 builder.Services.AddSingleton<IStateStore, StateStore>();
@@ -144,6 +146,8 @@ app.Map("/ws", async context =>
         context.RequestServices.GetRequiredService<IdentityCoordinator>(),
         context.RequestServices.GetRequiredService<PeerRegistry>(),
         context.RequestServices.GetRequiredService<IStateStore>(),
+        context.RequestServices.GetRequiredService<ExtensionPolicyService>(),
+        context.RequestServices.GetRequiredService<AuthorizationSyncService>(),
         context.RequestServices.GetRequiredService<ScheduleSyncService>(),
         logger);
 });
@@ -158,38 +162,38 @@ app.MapPost("/api/plugin/pair", async (PairRequest request, IdentityCoordinator 
 }).RequireRateLimiting("auth");
 
 app.MapPost("/api/auth/login", async (
-    LoginRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    LoginRequest request, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     if (MissingFields(request.Username, request.Password) is { } bad) return bad;
     try
     {
         var response = await identities.LoginAsync(request, ct);
-        await SyncAccountsAsync(identities, peers, ct);
+        await authorizationSync.SyncAsync(ct);
         return Results.Ok(response);
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
 }).RequireRateLimiting("auth");
 
 app.MapPost("/api/auth/refresh", async (
-    RefreshSessionRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    RefreshSessionRequest request, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     if (MissingFields(request.DeviceSecret) is { } bad) return bad;
     try
     {
         var response = await identities.RefreshAsync(request, ct);
-        await SyncAccountsAsync(identities, peers, ct);
+        await authorizationSync.SyncAsync(ct);
         return Results.Ok(response);
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
 }).RequireRateLimiting("auth");
 
 app.MapPost("/api/auth/logout", async (
-    HttpContext ctx, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    HttpContext ctx, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null || principal.DeviceSessionId is null) return Unauthorized();
     await identities.RevokeSessionAsync(principal.User.Id, principal.DeviceSessionId.Value, ct);
-    await SyncAccountsAsync(identities, peers, ct);
+    await authorizationSync.SyncAsync(ct);
     return Results.NoContent();
 });
 
@@ -199,7 +203,7 @@ app.MapGet("/api/me", async (HttpContext ctx, IdentityCoordinator identities, Ca
         : Unauthorized());
 
 app.MapPost("/api/me/password", async (
-    HttpContext ctx, ChangePasswordRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    HttpContext ctx, ChangePasswordRequest request, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
@@ -207,7 +211,7 @@ app.MapPost("/api/me/password", async (
     try
     {
         await identities.ChangePasswordAsync(principal.User.Id, request, ct);
-        await SyncAccountsAsync(identities, peers, ct);
+        await authorizationSync.SyncAsync(ct);
         return Results.NoContent();
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
@@ -222,14 +226,14 @@ app.MapGet("/api/me/sessions", async (HttpContext ctx, IdentityCoordinator ident
 });
 
 app.MapDelete("/api/me/sessions/{id:guid}", async (
-    Guid id, HttpContext ctx, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    Guid id, HttpContext ctx, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
     try
     {
         await identities.RevokeSessionAsync(principal.User.Id, id, ct);
-        await SyncAccountsAsync(identities, peers, ct);
+        await authorizationSync.SyncAsync(ct);
         return Results.NoContent();
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
@@ -258,12 +262,13 @@ app.MapPost("/api/commands", async (
     if (principal?.User is null) return Unauthorized();
     if (command.Command == CommandKind.RunExtension)
     {
-        // 与 WS 路径一致：服务端用扩展注册表预检 RequiredPermission；注册表未同步时放行，由插件复核。
+        // 与 WS 路径一致：独立扩展权限和管理员逐扩展策略必须同时通过。
         if (string.IsNullOrEmpty(command.ExtensionId))
             return Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "缺少扩展 Id"));
         var definition = store.GetLatestExtensions()?.FirstOrDefault(x => x.Id == command.ExtensionId);
-        if (definition is not null && !principal.User.Permissions.HasFlag(definition.RequiredPermission))
-            return Forbidden();
+        if (definition is null)
+            return Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "扩展功能不存在或尚未同步"));
+        if (!ExtensionAccess.CanInvoke(principal.User, definition)) return Forbidden();
     }
     else
     {
@@ -286,7 +291,7 @@ usersApi.MapGet("/", async (HttpContext ctx, IdentityCoordinator identities, Can
         : Forbidden();
 });
 usersApi.MapPost("/", async (
-    HttpContext ctx, CreateUserRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    HttpContext ctx, CreateUserRequest request, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
@@ -297,13 +302,13 @@ usersApi.MapPost("/", async (
     try
     {
         var created = await identities.CreateUserAsync(request, ct);
-        await SyncAccountsAsync(identities, peers, ct);
+        await authorizationSync.SyncAsync(ct);
         return Results.Created($"/api/users/{created.Id}", created);
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
 });
 usersApi.MapPut("/{id:guid}", async (
-    Guid id, HttpContext ctx, UpdateUserRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    Guid id, HttpContext ctx, UpdateUserRequest request, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
@@ -316,13 +321,13 @@ usersApi.MapPut("/{id:guid}", async (
     try
     {
         var updated = await identities.UpdateUserAsync(id, request, ct);
-        await SyncAccountsAsync(identities, peers, ct);
+        await authorizationSync.SyncAsync(ct);
         return Results.Ok(updated);
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
 });
 usersApi.MapPost("/{id:guid}/password", async (
-    Guid id, HttpContext ctx, ResetPasswordRequest request, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    Guid id, HttpContext ctx, ResetPasswordRequest request, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
@@ -335,13 +340,13 @@ usersApi.MapPost("/{id:guid}/password", async (
     try
     {
         await identities.ResetPasswordAsync(id, request.Password, ct);
-        await SyncAccountsAsync(identities, peers, ct);
+        await authorizationSync.SyncAsync(ct);
         return Results.NoContent();
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
 });
 usersApi.MapDelete("/{id:guid}", async (
-    Guid id, HttpContext ctx, IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct) =>
+    Guid id, HttpContext ctx, IdentityCoordinator identities, AuthorizationSyncService authorizationSync, CancellationToken ct) =>
 {
     var principal = await AuthorizeAsync(ctx, identities, ct);
     if (principal?.User is null) return Unauthorized();
@@ -353,7 +358,7 @@ usersApi.MapDelete("/{id:guid}", async (
     try
     {
         await identities.DeleteUserAsync(id, ct);
-        await SyncAccountsAsync(identities, peers, ct);
+        await authorizationSync.SyncAsync(ct);
         return Results.NoContent();
     }
     catch (IdentityOperationException ex) { return OperationError(ex); }
@@ -431,12 +436,6 @@ static IResult? MissingFields(params string?[] values) =>
     values.Any(string.IsNullOrEmpty)
         ? Results.BadRequest(Error(ApiErrorCodes.InvalidRequest, "缺少必填字段"))
         : null;
-
-static async Task SyncAccountsAsync(IdentityCoordinator identities, PeerRegistry peers, CancellationToken ct)
-{
-    await peers.SendAccountSyncToPluginsAsync(await identities.CreateSyncAsync(ct), ct);
-    await peers.RefreshWatchAuthorizationsAsync(ct);
-}
 
 static int CommandStatus(CommandResult result) => result.Code switch
 {

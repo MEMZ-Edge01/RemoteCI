@@ -286,6 +286,16 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
     {
         using var plugin = await ConnectPluginAsync();
         using var watch = await ConnectWatchAsync();
+        await SendAsync(plugin, Envelope.ExtensionsSync(new List<ExtensionDefinition>
+        {
+            new()
+            {
+                Id = "demo.lock",
+                DisplayName = "锁屏",
+                RequiredPermission = UserPermissions.PowerControl,
+            },
+        }));
+        await ReceivePayloadAsync<List<ExtensionDefinition>>(watch, Protocol.MessageTypeExtensionsSync);
         var request = Envelope.Command(new CommandMessage
         {
             Command = CommandKind.RunExtension,

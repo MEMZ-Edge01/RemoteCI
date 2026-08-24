@@ -76,6 +76,19 @@ public sealed class UserProfile : UserProfileLike
     [JsonPropertyName("permissions")]
     public UserPermissions Permissions { get; set; }
 
+    /// <summary>
+    /// 服务端允许该账号调用的扩展 Id。null 表示旧版服务端未下发策略，
+    /// 空列表表示当前没有可调用扩展。
+    /// </summary>
+    [JsonPropertyName("allowedExtensionIds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? AllowedExtensionIds { get; set; }
+
+    /// <summary>该账号选择在自己手表上展示的扩展 Id。</summary>
+    [JsonPropertyName("visibleExtensionIds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? VisibleExtensionIds { get; set; }
+
     [JsonPropertyName("version")]
     public long Version { get; set; }
 }
@@ -186,6 +199,14 @@ public sealed class SyncedAccount
     [JsonPropertyName("effectivePermissions")]
     public UserPermissions EffectivePermissions { get; set; }
 
+    [JsonPropertyName("allowedExtensionIds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? AllowedExtensionIds { get; set; }
+
+    [JsonPropertyName("visibleExtensionIds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? VisibleExtensionIds { get; set; }
+
     [JsonPropertyName("enabled")]
     public bool Enabled { get; set; }
 
@@ -200,6 +221,8 @@ public sealed class SyncedAccount
         Role = Role,
         GrantedPermissions = GrantedPermissions,
         Permissions = EffectivePermissions,
+        AllowedExtensionIds = AllowedExtensionIds,
+        VisibleExtensionIds = VisibleExtensionIds,
         Version = Version,
     };
 }

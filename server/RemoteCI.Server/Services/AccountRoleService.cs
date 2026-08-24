@@ -7,10 +7,6 @@ namespace RemoteCI.Server.Services;
 
 public sealed class AccountRoleService(AppDbContext db)
 {
-    private const UserPermissions Assignable = UserPermissions.AccessWebUi | UserPermissions.ManageUsers |
-        UserPermissions.SendNotifications | UserPermissions.TeacherComing |
-        UserPermissions.ManageSchedule | UserPermissions.SystemControl;
-
     public async Task<IReadOnlyList<AccountRoleInfo>> ListAsync(CancellationToken ct = default) =>
         await db.AccountRoles.AsNoTracking().OrderBy(x => x.Kind).ThenBy(x => x.Name)
             .Select(x => new AccountRoleInfo
@@ -31,7 +27,7 @@ public sealed class AccountRoleService(AppDbContext db)
         var role = new AccountRole
         {
             Id = Guid.NewGuid(), Name = name.Trim(), NormalizedName = normalized,
-            Kind = AccountRoleKind.Custom, DefaultPermissions = permissions & Assignable,
+            Kind = AccountRoleKind.Custom, DefaultPermissions = permissions & RolePermissions.Assignable,
             CreatedAt = now, UpdatedAt = now,
         };
         db.AccountRoles.Add(role);
@@ -49,7 +45,7 @@ public sealed class AccountRoleService(AppDbContext db)
         if (role.Kind == AccountRoleKind.Custom && await db.AccountRoles.AnyAsync(x => x.Id != id && x.NormalizedName == normalized, ct))
             throw new IdentityOperationException(ApiErrorCodes.InvalidRequest, "Role name already exists");
         if (role.Kind == AccountRoleKind.Custom) { role.Name = name.Trim(); role.NormalizedName = normalized; }
-        role.DefaultPermissions = permissions & Assignable;
+        role.DefaultPermissions = permissions & RolePermissions.Assignable;
         role.UpdatedAt = DateTimeOffset.UtcNow;
         var metadata = await db.SystemMetadata.SingleAsync(x => x.Id == 1, ct);
         metadata.AccountVersion++;

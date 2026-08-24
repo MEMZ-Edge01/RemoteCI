@@ -68,6 +68,25 @@ public sealed class AccountRole
     public ICollection<AppUser> Users { get; set; } = [];
 }
 
+/// <summary>管理员为插件扩展设置的服务端全局调用策略。</summary>
+public sealed class ExtensionPolicy
+{
+    public string ExtensionId { get; set; } = string.Empty;
+    public bool Enabled { get; set; } = true;
+    public bool AllowNonAdmin { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
+/// <summary>账号是否在自己的手表上展示某个扩展；没有记录时默认展示。</summary>
+public sealed class UserExtensionPreference
+{
+    public Guid UserId { get; set; }
+    public AppUser User { get; set; } = null!;
+    public string ExtensionId { get; set; } = string.Empty;
+    public bool ShowOnWatch { get; set; } = true;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public enum BackupCadence
 {
     Hourly = 1,

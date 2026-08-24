@@ -28,7 +28,7 @@ RemoteCI 插件公开了一组扩展接口，其他 ClassIsland 插件可以把�
 
 ### 扩展接口
 
-- `IRemoteCiExtension`：功能定义（`Id`、`DisplayName`、`RequiredPermission`，可选 `Icon` 与 `Parameters`，以及 `ExecuteAsync` 执行回调）。
+- `IRemoteCiExtension`：功能定义（`Id`、`DisplayName`、兼容字段 `RequiredPermission`，可选 `Icon` 与 `Parameters`，以及 `ExecuteAsync` 执行回调）。`Id` 必须非空、无首尾空白且不超过 200 个字符。
 - `IRemoteCiExtensionRegistry`：注册 / 注销 / 查询与变更事件，RemoteCI 已注册为单例服务。
 - `RemoteCiExtensionBase`：推荐基类，只需实现核心成员，其余按无图标、无参数处理。
 
@@ -44,7 +44,7 @@ public sealed class LockScreenExtension : RemoteCiExtensionBase
 {
     public override string Id => "myplugin.lock";
     public override string DisplayName => "锁屏";
-    public override UserPermissions RequiredPermission => UserPermissions.SystemControl;
+    public override UserPermissions RequiredPermission => UserPermissions.RunExtensions;
     public override string? Icon => "power";
 
     public override Task<CommandResult> ExecuteAsync(
@@ -108,7 +108,8 @@ public override IReadOnlyList<ExtensionParameter> Parameters => new[]
 
 ### 安全边界
 
-- 手表端按当前用户有效权限隐藏入口，插件执行端会再次校验 `RequiredPermission`，隐藏按钮不构成安全控制。
+- 扩展调用必须具备独立的 `RunExtensions` 权限并通过管理员为该扩展设置的开放策略；`RequiredPermission` 仅为旧扩展兼容字段，不再额外关联通知、电源等权限。账号还可在 WebUI 决定是否显示在自己的手表上。
+- 手表端只负责隐藏入口，服务端与插件执行端都会再次校验，隐藏按钮不构成安全控制。
 - 授权镜像超过 24 小时未更新时，局域网直连会拒绝执行任何扩展命令。
 - `ExecuteAsync` 抛出的异常统一转换为 `INTERNAL_ERROR` 回执，不会中断 RemoteCI 插件。
 

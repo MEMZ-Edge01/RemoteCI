@@ -27,6 +27,7 @@ class HomeVisualQaActivity : ComponentActivity() {
                     onOpenScheduleOverview = {},
                     onOpenScheduleChange = {},
                     onQuickSwapCourse = null,
+                    onQuickSwapNextCourse = null,
                     onOpenNotification = {},
                     onOpenSettings = {},
                     onRetryConnection = {},
