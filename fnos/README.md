@@ -29,7 +29,7 @@
 
    ```bash
    bash fnos/build.sh          # 使用最近 git tag
-   bash fnos/build.sh 0.3.1    # 指定版本
+   bash fnos/build.sh 3.1.0    # 指定版本
    ```
 
 产物输出到 `artifacts/release/RemoteCI-<版本>.fpk`。GitHub Actions 的 `release.yml` 会在推送 `v*` 标签时自动完成：构建并推送多架构镜像到 GHCR → 打包 fpk → 附加到 GitHub Release。

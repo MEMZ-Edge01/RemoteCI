@@ -6,7 +6,7 @@ namespace RemoteCI.Shared.Models;
 public sealed class LanDiscoveryResponse
 {
     [JsonPropertyName("protocolVersion")]
-    public string ProtocolVersion { get; set; } = Protocol.Version;
+    public int ProtocolVersion { get; set; } = Protocol.Version;
 
     [JsonPropertyName("instanceName")]
     public required string InstanceName { get; set; }

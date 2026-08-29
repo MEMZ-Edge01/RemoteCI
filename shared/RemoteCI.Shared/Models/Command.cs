@@ -85,6 +85,7 @@ public static class CommandResultCodes
     public const string Forbidden = "FORBIDDEN";
     public const string Unauthorized = "UNAUTHORIZED";
     public const string PluginOffline = "PLUGIN_OFFLINE";
+    public const string CapabilityUnsupported = "CAPABILITY_UNSUPPORTED";
     public const string Timeout = "COMMAND_TIMEOUT";
     public const string ScheduleStale = "SCHEDULE_STALE";
     public const string ScheduleUnavailable = "SCHEDULE_UNAVAILABLE";

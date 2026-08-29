@@ -89,6 +89,7 @@ fun RemoteCiApp(context: Context) {
 
     val connectionState by ConnectionManager.state.collectAsState()
     val connectedServerVersion by ConnectionManager.serverVersion.collectAsState()
+    val availableCapabilities by ConnectionManager.availableCapabilities.collectAsState()
     val currentUser by ConnectionManager.currentUser.collectAsState()
     val liveSnapshot by ConnectionManager.snapshot.collectAsState()
     val liveSchedule by ConnectionManager.schedule.collectAsState()
@@ -141,10 +142,11 @@ fun RemoteCiApp(context: Context) {
     LaunchedEffect(liveSchedule) {
         liveSchedule?.let { withContext(Dispatchers.IO) { snapshotStore.saveSchedule(it) }; cachedSchedule = it }
     }
-    LaunchedEffect(currentUser) {
+    LaunchedEffect(currentUser, availableCapabilities) {
         val user = currentUser
         if (user != null && screen == Screen.Login) screen = Screen.Home
-        if (user != null && !user.has(Protocol.PERMISSION_MANAGE_SCHEDULE) &&
+        if (user != null && (!user.has(Protocol.PERMISSION_MANAGE_SCHEDULE) ||
+                Protocol.CAP_SCHEDULE_CHANGE !in availableCapabilities) &&
             screen in listOf(
                 Screen.DayPicker,
                 Screen.Swap,
@@ -152,7 +154,8 @@ fun RemoteCiApp(context: Context) {
                 Screen.SubjectPicker,
             )
         ) screen = Screen.Home
-        if (user != null && !user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) && screen == Screen.Notification)
+        if (user != null && (!user.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) ||
+                Protocol.CAP_NOTIFICATION_SEND !in availableCapabilities) && screen == Screen.Notification)
             screen = Screen.Home
         if (user != null && !user.has(Protocol.PERMISSION_POWER_CONTROL) &&
             screen in listOf(Screen.Power, Screen.Volume))
@@ -233,7 +236,8 @@ fun RemoteCiApp(context: Context) {
             Screen.Home -> {
                 val scheduleDate = displayedSnapshot?.scheduleDate ?: today.toString()
                 val scheduleDay = displayedSchedule?.days?.firstOrNull { it.date == scheduleDate }
-                val canSwap = currentUser?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true
+                val canSwap = currentUser?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true &&
+                    Protocol.CAP_SCHEDULE_CHANGE in availableCapabilities
                 val displayedCourseIndex = if (canSwap) {
                     homeQuickSwapLessonIndex(scheduleDay, displayedSnapshot)
                 } else null
@@ -253,6 +257,7 @@ fun RemoteCiApp(context: Context) {
                     connectionState = connectionState,
                     snapshot = displayedSnapshot,
                     user = currentUser,
+                    capabilities = availableCapabilities,
                     onOpenScheduleOverview = {
                         selectedDate = initialScheduleDate(displayedSchedule, afterSchool, today)
                         screen = Screen.ScheduleOverview
@@ -274,8 +279,9 @@ fun RemoteCiApp(context: Context) {
             Screen.ScheduleOverview -> ScheduleOverviewScreen(
                 day = selectedDay,
                 today = today,
-                connectionReady = connectionState is ConnectionManager.State.LanConnected ||
-                    connectionState is ConnectionManager.State.CloudConnected,
+                connectionReady = (connectionState is ConnectionManager.State.LanConnected ||
+                    connectionState is ConnectionManager.State.CloudConnected) &&
+                    Protocol.CAP_SCHEDULE_PULL in availableCapabilities,
                 pullState = schedulePullState,
                 onRequestSchedule = ConnectionManager::requestSchedulePull,
                 onPickDate = { screen = Screen.ScheduleDatePicker },
@@ -304,8 +310,9 @@ fun RemoteCiApp(context: Context) {
                 sourceLesson = lessons.firstOrNull { it.index == sourceIndex },
                 targetLesson = lessons.firstOrNull { it.index == targetIndex },
                 replacementSubject = displayedSchedule?.subjects?.firstOrNull { it.id == replacementSubjectId }?.name,
-                connectionReady = connectionState is ConnectionManager.State.LanConnected ||
-                    connectionState is ConnectionManager.State.CloudConnected,
+                connectionReady = (connectionState is ConnectionManager.State.LanConnected ||
+                    connectionState is ConnectionManager.State.CloudConnected) &&
+                    Protocol.CAP_SCHEDULE_CHANGE in availableCapabilities,
                 resultText = commandResult?.let {
                     context.getString(if (it.success) R.string.result_success else R.string.result_failure, it.message)
                 },
@@ -353,6 +360,7 @@ fun RemoteCiApp(context: Context) {
             Screen.Control -> ControlScreen(
                 snapshot = displayedSnapshot,
                 user = currentUser,
+                capabilities = availableCapabilities,
                 extensions = liveExtensions,
                 resultText = commandResult?.let {
                     context.getString(if (it.success) R.string.result_success else R.string.result_failure, it.message)

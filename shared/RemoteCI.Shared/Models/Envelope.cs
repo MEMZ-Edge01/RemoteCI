@@ -8,7 +8,7 @@ namespace RemoteCI.Shared.Models;
 public sealed class Envelope
 {
     [JsonPropertyName("protocolVersion")]
-    public string ProtocolVersion { get; set; } = Protocol.Version;
+    public int ProtocolVersion { get; set; } = Protocol.Version;
 
     [JsonPropertyName("type")]
     public required string Type { get; set; }
@@ -81,6 +81,12 @@ public sealed class Envelope
 
     public static Envelope ConnectionBootstrap(object payload) =>
         New(Protocol.MessageTypeConnectionBootstrap, payload);
+
+    public static Envelope PeerCapabilities(object payload) =>
+        New(Protocol.MessageTypePeerCapabilities, payload);
+
+    public static Envelope CapabilitiesSync(object payload) =>
+        New(Protocol.MessageTypeCapabilitiesSync, payload);
 
     private static Envelope New(string type, object payload) => new()
     {

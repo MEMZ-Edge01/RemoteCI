@@ -1,4 +1,6 @@
 using RemoteCI.Shared;
+using RemoteCI.Shared.Models;
+using System.Text.Json;
 using Xunit;
 
 namespace RemoteCI.Plugin.Tests;
@@ -25,9 +27,18 @@ public sealed class CommandPermissionsTests
     }
 
     [Fact]
-    public void BreakingPermissionModelUsesUnifiedVersionThreePointOne()
+    public void BreakingPermissionModelUsesProtocolVersionThree()
     {
-        Assert.Equal("3.1", Protocol.Version);
-        Assert.Equal("REMOTECI_DISCOVER_V3_1", Protocol.LanDiscoveryRequest);
+        Assert.Equal(3, Protocol.Version);
+        Assert.Equal("REMOTECI_DISCOVER_V3", Protocol.LanDiscoveryRequest);
+        var json = JsonSerializer.Serialize(new Envelope { Type = Protocol.MessageTypeStatePush });
+        Assert.Contains("\"protocolVersion\":3", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryBaselineCapabilityHasChineseDiagnosticName()
+    {
+        Assert.All(RemoteCiCapabilities.Baseline, capability =>
+            Assert.NotEqual("未知能力", RemoteCiCapabilities.ChineseName(capability)));
     }
 }

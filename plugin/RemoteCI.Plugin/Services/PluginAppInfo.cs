@@ -2,12 +2,11 @@ using System.Reflection;
 using RemoteCI.Shared;
 using RemoteCI.Shared.Models;
 
-namespace RemoteCI.Server.Services;
+namespace RemoteCI.Plugin.Services;
 
-/// <summary>服务端自身版本，读取自 csproj 的 &lt;Version&gt;。</summary>
-public static class AppVersion
+internal static class PluginAppInfo
 {
-    public static string Version { get; } = typeof(AppVersion).Assembly
+    public static string Version { get; } = typeof(PluginAppInfo).Assembly
         .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         .Split('+', 2)[0] ?? "0.0.0";
 

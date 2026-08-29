@@ -35,11 +35,13 @@ public sealed class ControlModel(
     public bool PluginOnline => peers.HasPlugin;
     public ClassStateSnapshot? Snapshot { get; private set; }
     public IReadOnlyList<ExtensionControlItem> Extensions { get; private set; } = [];
-    public bool CanTeacherComing => Permissions.HasFlag(UserPermissions.TeacherComing);
-    public bool CanSendNotifications => Permissions.HasFlag(UserPermissions.SendNotifications);
-    public bool CanControlMainMenu => Permissions.HasFlag(UserPermissions.MainMenuControl);
-    public bool CanControlPower => Permissions.HasFlag(UserPermissions.PowerControl);
-    public bool CanUseExtensions => Permissions.HasFlag(UserPermissions.RunExtensions);
+    public bool CanTeacherComing => Permissions.HasFlag(UserPermissions.TeacherComing) && Supports(RemoteCiCapabilities.TeacherComing);
+    public bool CanSendNotifications => Permissions.HasFlag(UserPermissions.SendNotifications) && Supports(RemoteCiCapabilities.NotificationSend);
+    public bool CanClearNotifications => Permissions.HasFlag(UserPermissions.SendNotifications) && Supports(RemoteCiCapabilities.NotificationClear);
+    public bool CanControlMainMenu => Permissions.HasFlag(UserPermissions.MainMenuControl) && Supports(RemoteCiCapabilities.MainMenuVisibility);
+    public bool CanControlPower => Permissions.HasFlag(UserPermissions.PowerControl) && Supports(RemoteCiCapabilities.PowerControl);
+    public bool CanControlVolume => Permissions.HasFlag(UserPermissions.PowerControl) && Supports(RemoteCiCapabilities.VolumeControl);
+    public bool CanUseExtensions => Permissions.HasFlag(UserPermissions.RunExtensions) && Supports(RemoteCiCapabilities.ExtensionsRun);
     public bool IsAdmin => CurrentUser.Role == UserRole.Admin;
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
@@ -243,7 +245,8 @@ public sealed class ControlModel(
             Permissions,
             store.GetLatestExtensions() ?? [],
             ct);
-        return !CanTeacherComing && !CanSendNotifications && !CanControlMainMenu && !CanControlPower && !CanUseExtensions
+        return !CanTeacherComing && !CanSendNotifications && !CanClearNotifications && !CanControlMainMenu &&
+            !CanControlPower && !CanControlVolume && !CanUseExtensions
             ? RedirectToPage("/Denied")
             : null;
     }
@@ -262,6 +265,8 @@ public sealed class ControlModel(
 
     private bool HasCurrentExtension(string extensionId) =>
         store.GetLatestExtensions()?.Any(x => x.Id == extensionId) == true;
+
+    private bool Supports(string capability) => !peers.HasPlugin || peers.PrimaryPluginSupports(capability);
 
     private IActionResult VolumeResult(CommandResult result, bool unmuted = false)
     {

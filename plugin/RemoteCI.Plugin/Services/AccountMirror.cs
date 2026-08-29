@@ -28,6 +28,14 @@ public sealed class AccountMirror
     }
     public long Version { get { lock (_gate) return _sync.Version; } }
     public string ServerVersion { get { lock (_gate) return _sync.ServerVersion; } }
+    public IReadOnlyList<string> ServerCapabilities
+    {
+        get
+        {
+            lock (_gate)
+                return (_sync.ServerCapabilities ?? RemoteCiCapabilities.Baseline.ToList()).ToArray();
+        }
+    }
     public DateTimeOffset GeneratedAt { get { lock (_gate) return _sync.GeneratedAt; } }
     public bool AllowsPrivilegedOperations
     {

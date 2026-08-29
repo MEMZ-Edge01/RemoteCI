@@ -88,7 +88,7 @@ class ConnectionManagerFlowTest {
         deviceExpiresAt = "2099-01-01T00:00:00Z",
     )
 
-    private fun envelopeJson(type: String, protocolVersion: String = Protocol.VERSION, payload: JsonElement? = null) =
+    private fun envelopeJson(type: String, protocolVersion: Int = Protocol.VERSION, payload: JsonElement? = null) =
         json.encodeToString(
             Envelope.serializer(),
             Envelope(protocolVersion = protocolVersion, type = type, payload = payload),
@@ -221,7 +221,7 @@ class ConnectionManagerFlowTest {
         server.enqueue(
             MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    webSocket.send(envelopeJson(Protocol.TYPE_AUTH_STATE, protocolVersion = "99"))
+                    webSocket.send(envelopeJson(Protocol.TYPE_AUTH_STATE, protocolVersion = 99))
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -233,7 +233,7 @@ class ConnectionManagerFlowTest {
         ConnectionManager.connect(mockServerSettings(), "correct-password")
 
         val error = awaitState({ it is ConnectionManager.State.Error })
-        assertEquals("协议版本不兼容，需要 v3.1", (error as ConnectionManager.State.Error).message)
+        assertEquals("协议版本不兼容，需要 v3", (error as ConnectionManager.State.Error).message)
     }
 
     @Test

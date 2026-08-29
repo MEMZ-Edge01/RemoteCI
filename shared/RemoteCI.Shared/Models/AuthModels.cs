@@ -161,6 +161,11 @@ public sealed class AccountSync
     [JsonPropertyName("serverVersion")]
     public string ServerVersion { get; set; } = string.Empty;
 
+    /// <summary>服务端显式声明的能力；null 表示旧 V3 服务端，按基础能力处理。</summary>
+    [JsonPropertyName("serverCapabilities")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ServerCapabilities { get; set; }
+
     [JsonPropertyName("generatedAt")]
     public DateTimeOffset GeneratedAt { get; set; }
 

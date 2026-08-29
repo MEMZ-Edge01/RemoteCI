@@ -6,8 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RemoteCI.Server</RootNamespace>
     <LangVersion>latest</LangVersion>
-    <!-- 必须与 Protocol.Version 一致；WebUI 只允许同一版本的服务端、插件和手表协作。 -->
-    <Version>3.1</Version>
+    <!-- 软件版本与协议版本独立；任意 3.x.x 软件通过协议 V3 的能力协商互通。 -->
+    <Version>3.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

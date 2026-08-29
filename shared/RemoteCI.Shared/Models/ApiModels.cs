@@ -70,4 +70,6 @@ public static class ApiErrorCodes
     public const string LastAdmin = "LAST_ADMIN";
     /// <summary>WS 协议版本不受支持，连接被拒绝。</summary>
     public const string ProtocolVersionUnsupported = "PROTOCOL_VERSION_UNSUPPORTED";
+    /// <summary>参与端未共同声明该功能能力。</summary>
+    public const string CapabilityUnsupported = "CAPABILITY_UNSUPPORTED";
 }

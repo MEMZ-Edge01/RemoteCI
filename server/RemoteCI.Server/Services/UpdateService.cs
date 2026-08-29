@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using RemoteCI.Shared;
 
 namespace RemoteCI.Server.Services;
 
@@ -102,16 +103,25 @@ public sealed class UpdateService
 
     public string CurrentVersion => AppVersion.Version;
 
-    /// <summary>正式渠道排除预发布版；Beta 渠道同时接收正式版与预发布版。</summary>
+    /// <summary>正式渠道排除预发布版；Beta 渠道同时接收正式版与预发布版，但都不得跨协议主版本。</summary>
     public static ReleaseInfo? SelectReleaseForChannel(
         IEnumerable<ReleaseInfo> releases,
         UpdateChannel channel) =>
         releases
             .Where(release =>
-                !release.Draft && (channel == UpdateChannel.Beta || !release.Prerelease))
+                !release.Draft &&
+                IsCurrentProtocolRelease(release.Tag) &&
+                (channel == UpdateChannel.Beta || !release.Prerelease))
             .MaxBy(
                 release => release.Tag,
                 Comparer<string>.Create((left, right) => CompareVersions(left, right)));
+
+    public static bool IsCurrentProtocolRelease(string tag)
+    {
+        if (!VersionTagPattern.IsMatch(tag)) return false;
+        var core = ParseVersion(tag).Core;
+        return core.Length > 0 && core[0] == Protocol.Version;
+    }
 
     /// <summary>按更新渠道拉取最新 release；仓库暂无符合条件的版本时返回 null。</summary>
     public async Task<ReleaseInfo?> FetchLatestReleaseAsync(UpdateChannel channel, CancellationToken ct)

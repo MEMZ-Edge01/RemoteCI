@@ -27,9 +27,13 @@ jobs:
       - name: Publish 服务端压缩包
         run: |
           version="${GITHUB_REF_NAME#v}"
+          echo "$version" | grep -Eq '^3\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
           dotnet publish server/RemoteCI.Server/RemoteCI.Server.csproj -c Release -r ${{ matrix.rid }} \
             --self-contained false -p:Version="$version" -o "publish/${{ matrix.rid }}"
           grep -Fq "\"RemoteCI.Server/$version\"" "publish/${{ matrix.rid }}/RemoteCI.Server.deps.json"
+          actual_version="$(pwsh -NoProfile -Command "[Diagnostics.FileVersionInfo]::GetVersionInfo('$PWD/publish/${{ matrix.rid }}/RemoteCI.Server.dll').ProductVersion.Split('+')[0]")"
+          test "$actual_version" = "$version"
           cd "publish/${{ matrix.rid }}"
           zip -r "../RemoteCI.Server-${version}-${{ matrix.rid }}.zip" .
           cd ..
@@ -53,9 +57,16 @@ jobs:
       - name: 打包 CIPX
         run: |
           version="${GITHUB_REF_NAME#v}"
-          sed -i "s/^version: .*/version: ${version}.0/" plugin/RemoteCI.Plugin/manifest.yml
-          grep -Fxq "version: ${version}.0" plugin/RemoteCI.Plugin/manifest.yml
-          dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release -p:CreateCipx=true
+          echo "$version" | grep -Eq '^3\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
+          sed -i "s/^version: .*/version: ${version}/" plugin/RemoteCI.Plugin/manifest.yml
+          grep -Fxq "version: ${version}" plugin/RemoteCI.Plugin/manifest.yml
+          dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release \
+            -p:Version="$version" -p:CreateCipx=true
+          grep -Fq "RemoteCI.Plugin/${version}" plugin/RemoteCI.Plugin/bin/Release/net8.0/RemoteCI.Plugin.deps.json
+          actual_version="$(pwsh -NoProfile -Command "[Diagnostics.FileVersionInfo]::GetVersionInfo('$PWD/plugin/RemoteCI.Plugin/bin/Release/net8.0/RemoteCI.Plugin.dll').ProductVersion.Split('+')[0]")"
+          test "$actual_version" = "$version"
+          unzip -p plugin/RemoteCI.Plugin/cipx/RemoteCI.Plugin.cipx manifest.yml | grep -Fxq "version: ${version}"
           cp plugin/RemoteCI.Plugin/cipx/RemoteCI.Plugin.cipx "RemoteCI.Plugin-${version}.cipx"
           cp plugin/RemoteCI.Plugin/cipx/checksums.md "RemoteCI.Plugin-${version}.checksums.md"
       - uses: actions/upload-artifact@v4
@@ -99,6 +110,8 @@ jobs:
         working-directory: wearos
         run: |
           version="${GITHUB_REF_NAME#v}"
+          echo "$version" | grep -Eq '^3\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          grep -Fq 'const val VERSION = 3' app/src/main/java/com/remoteci/watch/data/Protocol.kt
           chmod +x gradlew
           ./gradlew :app:assembleRelease -PreleaseVersion="$version" --console=plain
           grep -Fq "\"versionName\": \"$version\"" app/build/outputs/apk/release/output-metadata.json
@@ -155,6 +168,8 @@ jobs:
         id: meta
         run: |
           version="${GITHUB_REF_NAME#v}"
+          echo "$version" | grep -Eq '^3\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -206,6 +221,7 @@ jobs:
           curl -fsSL -o .tools/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
           chmod +x .tools/fnpack
           REMOTECI_VERSION="${{ steps.meta.outputs.version }}" bash fnos/build.sh
+          test -f "artifacts/release/RemoteCI-${{ steps.meta.outputs.version }}.fpk"
       - uses: actions/upload-artifact@v4
         with:
           name: fnos-fpk
@@ -236,6 +252,14 @@ jobs:
         with:
           name: fnos-fpk
           path: artifacts/fnos-fpk
+      - name: 校验发布产物版本一致
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test -f "artifacts/server-linux-x64/RemoteCI.Server-${version}-linux-x64.zip"
+          test -f "artifacts/server-win-x64/RemoteCI.Server-${version}-win-x64.zip"
+          test -f "artifacts/plugin-cipx/RemoteCI.Plugin-${version}.cipx"
+          test -f "artifacts/watch-apk/RemoteCI.Watch-${version}.apk"
+          test -f "artifacts/fnos-fpk/RemoteCI-${version}.fpk"
       - name: 发布
         uses: softprops/action-gh-release@v2
         with:
@@ -246,6 +270,6 @@ jobs:
             artifacts/watch-apk/**
             artifacts/fnos-fpk/**
           generate_release_notes: true
-          # 含预发布标识（如 v0.4.0-beta.1）的 tag 必须标记为 prerelease，
+          # 含预发布标识（如 v3.2.0-beta.1）的 tag 必须标记为 prerelease，
           # 否则会被稳定渠道客户端当作正式版误装。
           prerelease: ${{ contains(github.ref, '-') }}

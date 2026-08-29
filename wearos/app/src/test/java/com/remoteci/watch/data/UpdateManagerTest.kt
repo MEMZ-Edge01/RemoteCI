@@ -55,29 +55,27 @@ class UpdateManagerTest {
     }
 
     @Test
-    fun `selectCompatibleUpdate never exceeds connected server version`() {
+    fun `selectCompatibleUpdate allows newer version within protocol three`() {
         val releases = listOf(
-            release("v0.3.2"),
-            release("v0.3.1"),
-            release("v0.3.0"),
+            release("v3.4.0"),
+            release("v3.2.0"),
+            release("v3.1.0"),
         )
 
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = releases,
-            currentVersion = "0.2.0",
-            serverVersion = "0.3.1",
+            currentVersion = "3.1.0",
         )
 
-        assertEquals("v0.3.1", selected?.release?.tagName)
-        assertEquals("RemoteCI.Watch-0.3.1.apk", selected?.asset?.name)
+        assertEquals("v3.4.0", selected?.release?.tagName)
+        assertEquals("RemoteCI.Watch-3.4.0.apk", selected?.asset?.name)
     }
 
     @Test
-    fun `selectCompatibleUpdate returns null when server has no newer compatible watch`() {
+    fun `selectCompatibleUpdate excludes protocol four`() {
         val selected = UpdateManager.selectCompatibleUpdate(
-            releases = listOf(release("v0.3.2"), release("v0.3.1")),
-            currentVersion = "0.3.1",
-            serverVersion = "0.3.1",
+            releases = listOf(release("v4.0.0")),
+            currentVersion = "3.1.0",
         )
 
         assertNull(selected)
@@ -88,84 +86,78 @@ class UpdateManagerTest {
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = listOf(
                 release("v0.3.2-beta.1", prerelease = true),
-                release("v0.3.2", draft = true),
-                release("v0.3.1"),
+                release("v3.2.0", draft = true),
+                release("v3.1.1"),
             ),
-            currentVersion = "0.3.0",
-            serverVersion = "0.3.2",
+            currentVersion = "3.1.0",
         )
 
-        assertEquals("v0.3.1", selected?.release?.tagName)
+        assertEquals("v3.1.1", selected?.release?.tagName)
     }
 
     @Test
     fun `stable channel excludes prereleases`() {
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = listOf(
-                release("v0.4.0-beta.1", prerelease = true),
-                release("v0.3.1"),
+                release("v3.2.0-beta.1", prerelease = true),
+                release("v3.1.1"),
             ),
-            currentVersion = "0.3.0",
-            serverVersion = "0.4.0-beta.1",
+            currentVersion = "3.1.0",
             channel = UpdateChannel.STABLE,
             force = false,
         )
 
-        assertEquals("v0.3.1", selected?.release?.tagName)
+        assertEquals("v3.1.1", selected?.release?.tagName)
     }
 
     @Test
     fun `beta channel includes prereleases`() {
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = listOf(
-                release("v0.5.0-beta.1", prerelease = true, draft = true),
-                release("v0.4.0-beta.1", prerelease = true),
-                release("v0.3.1"),
+                release("v3.3.0-beta.1", prerelease = true, draft = true),
+                release("v3.2.0-beta.1", prerelease = true),
+                release("v3.1.1"),
             ),
-            currentVersion = "0.3.0",
-            serverVersion = "0.4.0-beta.1",
+            currentVersion = "3.1.0",
             channel = UpdateChannel.BETA,
             force = false,
         )
 
-        assertEquals("v0.4.0-beta.1", selected?.release?.tagName)
+        assertEquals("v3.2.0-beta.1", selected?.release?.tagName)
     }
 
     @Test
     fun `force update allows same version but never downgrades`() {
         val sameVersion = UpdateManager.selectCompatibleUpdate(
-            releases = listOf(release("v0.3.1")),
-            currentVersion = "0.3.1",
-            serverVersion = "0.3.1",
+            releases = listOf(release("v3.1.0")),
+            currentVersion = "3.1.0",
             channel = UpdateChannel.STABLE,
             force = true,
         )
         val downgrade = UpdateManager.selectCompatibleUpdate(
-            releases = listOf(release("v0.3.0")),
-            currentVersion = "0.3.1",
-            serverVersion = "0.3.1",
+            releases = listOf(release("v3.0.9")),
+            currentVersion = "3.1.0",
             channel = UpdateChannel.STABLE,
             force = true,
         )
 
-        assertEquals("v0.3.1", sameVersion?.release?.tagName)
+        assertEquals("v3.1.0", sameVersion?.release?.tagName)
         assertNull(downgrade)
     }
 
     @Test
-    fun `beta channel and force update still respect server ceiling`() {
+    fun `beta channel can select newer protocol three release`() {
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = listOf(
-                release("v0.4.0"),
-                release("v0.4.0-beta.2", prerelease = true),
+                release("v3.2.0"),
+                release("v3.2.0-beta.2", prerelease = true),
             ),
-            currentVersion = "0.3.1",
-            serverVersion = "0.4.0-beta.2",
+            currentVersion = "3.1.0",
             channel = UpdateChannel.BETA,
             force = true,
         )
 
-        assertEquals("v0.4.0-beta.2", selected?.release?.tagName)
+        assertEquals("v3.2.0", selected?.release?.tagName)
     }
 
     private fun release(

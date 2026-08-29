@@ -218,6 +218,7 @@ internal fun HomeScreen(
     connectionState: ConnectionManager.State,
     snapshot: ClassStateSnapshot?,
     user: UserProfile?,
+    capabilities: Set<String> = Protocol.BASELINE_CAPABILITIES,
     onOpenScheduleOverview: () -> Unit,
     onOpenScheduleChange: () -> Unit,
     onQuickSwapCourse: (() -> Unit)?,
@@ -265,6 +266,7 @@ internal fun HomeScreen(
                 } else {
                     HomeMenuPage(
                         user = user,
+                        capabilities = capabilities,
                         onOpenScheduleOverview = onOpenScheduleOverview,
                         onOpenScheduleChange = onOpenScheduleChange,
                         onOpenNotification = onOpenNotification,
@@ -407,12 +409,13 @@ private fun HomeStatusPage(
 @Composable
 private fun HomeMenuPage(
     user: UserProfile?,
+    capabilities: Set<String>,
     onOpenScheduleOverview: () -> Unit,
     onOpenScheduleChange: () -> Unit,
     onOpenNotification: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    val actions = homeActionLabels(user).map { label ->
+    val actions = homeActionLabels(user, capabilities).map { label ->
         when (label) {
             "课表" -> HomeAction(label, Icons.AutoMirrored.Rounded.List, onOpenScheduleOverview)
             "换课" -> HomeAction(label, Icons.Rounded.SwapHoriz, onOpenScheduleChange)
@@ -584,6 +587,7 @@ internal fun SubjectPickerScreen(
 internal fun ControlScreen(
     snapshot: ClassStateSnapshot?,
     user: UserProfile?,
+    capabilities: Set<String> = Protocol.BASELINE_CAPABILITIES,
     extensions: List<ExtensionDefinition>,
     resultText: String?,
     onTeacherComing: () -> Unit,
@@ -595,16 +599,18 @@ internal fun ControlScreen(
     onRunExtension: (ExtensionDefinition) -> Unit,
     onBack: () -> Unit,
 ) = WatchList(title = stringResource(R.string.control_title)) {
-    val canTeacherComing = user?.has(Protocol.PERMISSION_TEACHER_COMING) == true
-    val canNotify = user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true
-    val canControlMainMenu = user?.has(Protocol.PERMISSION_MAIN_MENU_CONTROL) == true
-    val canControlPower = user?.has(Protocol.PERMISSION_POWER_CONTROL) == true
-    item { ActionButton(stringResource(R.string.teacher_coming), Icons.Rounded.School, canTeacherComing, onTeacherComing) }
-    item { ActionButton(stringResource(R.string.send_notification), Icons.Rounded.EditNotifications, canNotify, onOpenNotification) }
-    if (shouldShowClearNotifications(snapshot)) item {
-        ActionButton(stringResource(R.string.clear_notifications), Icons.Rounded.NotificationsOff, canNotify, onClearNotifications)
+    val canTeacherComing = user?.has(Protocol.PERMISSION_TEACHER_COMING) == true && Protocol.CAP_TEACHER_COMING in capabilities
+    val canNotify = user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true && Protocol.CAP_NOTIFICATION_SEND in capabilities
+    val canClearNotifications = user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true && Protocol.CAP_NOTIFICATION_CLEAR in capabilities
+    val canControlMainMenu = user?.has(Protocol.PERMISSION_MAIN_MENU_CONTROL) == true && Protocol.CAP_MAIN_MENU_VISIBILITY in capabilities
+    val canControlPower = user?.has(Protocol.PERMISSION_POWER_CONTROL) == true && Protocol.CAP_POWER_CONTROL in capabilities
+    val canControlVolume = user?.has(Protocol.PERMISSION_POWER_CONTROL) == true && Protocol.CAP_VOLUME_CONTROL in capabilities
+    if (canTeacherComing) item { ActionButton(stringResource(R.string.teacher_coming), Icons.Rounded.School, true, onTeacherComing) }
+    if (canNotify) item { ActionButton(stringResource(R.string.send_notification), Icons.Rounded.EditNotifications, true, onOpenNotification) }
+    if (canClearNotifications && shouldShowClearNotifications(snapshot)) item {
+        ActionButton(stringResource(R.string.clear_notifications), Icons.Rounded.NotificationsOff, true, onClearNotifications)
     }
-    item {
+    if (canControlMainMenu) item {
         ActionButton(
             mainMenuActionLabel(snapshot),
             if (snapshot?.isMainMenuVisible == false) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
@@ -612,17 +618,17 @@ internal fun ControlScreen(
             onToggleMainMenu,
         )
     }
-    item {
+    if (canControlVolume) item {
         ActionButton(
             stringResource(R.string.volume_title),
             if (snapshot?.isMuted == true) Icons.AutoMirrored.Rounded.VolumeOff else Icons.AutoMirrored.Rounded.VolumeUp,
-            canControlPower && snapshot?.isVolumeControlAvailable == true,
+            snapshot?.isVolumeControlAvailable == true,
             onOpenVolume,
         )
     }
-    item { ActionButton(stringResource(R.string.power_title), Icons.Rounded.PowerSettingsNew, canControlPower, onOpenPower) }
+    if (canControlPower) item { ActionButton(stringResource(R.string.power_title), Icons.Rounded.PowerSettingsNew, true, onOpenPower) }
     // 扩展入口同时遵守独立扩展权限、服务端策略和账号自己的展示偏好。
-    visibleExtensionsFor(user, extensions).forEach { extension ->
+    if (Protocol.CAP_EXTENSIONS_RUN in capabilities) visibleExtensionsFor(user, extensions).forEach { extension ->
         item {
             ActionButton(
                 extension.displayName,
@@ -928,7 +934,6 @@ internal fun UpdateScreen(
                 val selected = UpdateManager.selectCompatibleUpdate(
                     releases = UpdateManager.fetchReleases(),
                     currentVersion = currentVersion,
-                    serverVersion = allowedVersion,
                     channel = updateChannel,
                     force = forceUpdate,
                 )
@@ -939,7 +944,7 @@ internal fun UpdateScreen(
                         selected.asset,
                     )
                 } else {
-                    UpdateUiState.UpToDate(context.getString(R.string.update_up_to_date, allowedVersion))
+                    UpdateUiState.UpToDate(context.getString(R.string.update_up_to_date, currentVersion))
                 }
             } catch (error: Exception) {
                 UpdateUiState.Error(error.message ?: context.getString(R.string.update_check_failed))
@@ -995,18 +1000,12 @@ internal fun UpdateScreen(
                         state = UpdateUiState.Downloading
                         scope.launch {
                             state = try {
-                                val allowedVersion = serverVersion
+                                serverVersion
                                     ?: throw IllegalStateException("WebUI 连接已断开，请重新检查更新")
-                                if (UpdateManager.compareVersions(current.latestVersion, allowedVersion) > 0) {
-                                    throw IllegalStateException("手表版本不得超过已连接 WebUI v$allowedVersion")
-                                }
                                 val apk = UpdateManager.downloadApk(context, current.asset)
-                                // 下载期间连接可能断开或切换到更低版本的 WebUI，安装前必须读取实时上限。
-                                val latestAllowedVersion = ConnectionManager.serverVersion.value
+                                // 下载期间连接可能断开，安装前再次确认仍连接着协议 V3 服务端。
+                                ConnectionManager.serverVersion.value
                                     ?: throw IllegalStateException("WebUI 连接已断开，请重新检查更新")
-                                if (UpdateManager.compareVersions(current.latestVersion, latestAllowedVersion) > 0) {
-                                    throw IllegalStateException("手表版本不得超过已连接 WebUI v$latestAllowedVersion")
-                                }
                                 UpdateManager.installApk(context, apk)
                                 UpdateUiState.Installing
                             } catch (error: Exception) {
@@ -1186,14 +1185,19 @@ private fun ActionButton(
 
 private data class HomeAction(val label: String, val icon: ImageVector, val onClick: () -> Unit)
 
-internal fun homeActionLabels(user: UserProfile?): List<String> = buildList {
-    if (user != null) add("课表")
-    if (user?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true) add("换课")
-    if (user?.has(Protocol.PERMISSION_TEACHER_COMING) == true ||
-        user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true ||
-        user?.has(Protocol.PERMISSION_POWER_CONTROL) == true ||
-        user?.has(Protocol.PERMISSION_MAIN_MENU_CONTROL) == true ||
-        user?.has(Protocol.PERMISSION_RUN_EXTENSIONS) == true) add("控制")
+internal fun homeActionLabels(
+    user: UserProfile?,
+    capabilities: Set<String> = Protocol.BASELINE_CAPABILITIES,
+): List<String> = buildList {
+    if (user != null && Protocol.CAP_SCHEDULE_READ in capabilities) add("课表")
+    if (user?.has(Protocol.PERMISSION_MANAGE_SCHEDULE) == true && Protocol.CAP_SCHEDULE_CHANGE in capabilities) add("换课")
+    if (user?.has(Protocol.PERMISSION_TEACHER_COMING) == true && Protocol.CAP_TEACHER_COMING in capabilities ||
+        user?.has(Protocol.PERMISSION_SEND_NOTIFICATIONS) == true &&
+            (Protocol.CAP_NOTIFICATION_SEND in capabilities || Protocol.CAP_NOTIFICATION_CLEAR in capabilities) ||
+        user?.has(Protocol.PERMISSION_POWER_CONTROL) == true &&
+            (Protocol.CAP_POWER_CONTROL in capabilities || Protocol.CAP_VOLUME_CONTROL in capabilities) ||
+        user?.has(Protocol.PERMISSION_MAIN_MENU_CONTROL) == true && Protocol.CAP_MAIN_MENU_VISIBILITY in capabilities ||
+        user?.has(Protocol.PERMISSION_RUN_EXTENSIONS) == true && Protocol.CAP_EXTENSIONS_RUN in capabilities) add("控制")
     add("设置")
 }
 

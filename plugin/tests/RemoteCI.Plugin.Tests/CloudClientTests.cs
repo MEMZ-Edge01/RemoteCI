@@ -127,6 +127,32 @@ public sealed class CloudClientTests
     }
 
     [Fact]
+    public async Task Connect_ReportsSoftwareVersionAndCapabilities()
+    {
+        var socket = new FakeSocket();
+        var (client, _) = Create(preSeeded: socket);
+        try
+        {
+            _ = client.StartAsync();
+            await WaitUntilAsync(() => socket.SentMessages.Any(bytes =>
+                JsonSerializer.Deserialize<Envelope>(bytes, JsonDefaults.Options)?.Type ==
+                Protocol.MessageTypePeerCapabilities), 2000);
+
+            var envelope = socket.SentMessages
+                .Select(bytes => JsonSerializer.Deserialize<Envelope>(bytes, JsonDefaults.Options)!)
+                .First(value => value.Type == Protocol.MessageTypePeerCapabilities);
+            var report = JsonSerializer.Deserialize<PeerCapabilities>(
+                JsonSerializer.Serialize(envelope.Payload), JsonDefaults.Options)!;
+            Assert.Equal("3.1.0", report.SoftwareVersion);
+            Assert.Contains(RemoteCiCapabilities.ScheduleChange, report.Capabilities);
+        }
+        finally
+        {
+            client.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task ReceiveFailure_ReleasesSocketAndReconnects()
     {
         var failing = new FakeSocket { ReceiveError = new WebSocketException("connection lost") };

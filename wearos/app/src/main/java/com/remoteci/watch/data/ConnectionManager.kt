@@ -2,6 +2,7 @@ package com.remoteci.watch.data
 
 import android.content.Context
 import android.os.Build
+import com.remoteci.watch.BuildConfig
 import java.io.IOException
 import java.security.MessageDigest
 import java.time.Duration
@@ -84,6 +85,8 @@ object ConnectionManager {
     val state = MutableStateFlow<State>(State.Idle)
     /** 当前认证连接所属的 WebUI 版本；未知时禁止手表自行升级。 */
     val serverVersion = MutableStateFlow<String?>(null)
+    /** 本机、服务端与当前主插件共同支持的功能；旧 V3 端缺少声明时按基础能力回退。 */
+    val availableCapabilities = MutableStateFlow(Protocol.BASELINE_CAPABILITIES)
     val currentUser = MutableStateFlow<UserProfile?>(null)
     val snapshot = MutableStateFlow<ClassStateSnapshot?>(null)
     val schedule = MutableStateFlow<ScheduleBundle?>(null)
@@ -110,6 +113,8 @@ object ConnectionManager {
     }
 
     fun hasSavedSession(): Boolean = ::sessions.isInitialized && sessions.load() != null
+
+    fun supports(capability: String): Boolean = capability in availableCapabilities.value
 
     fun scanLanPlugins() {
         discoveryJob?.cancel()
@@ -575,6 +580,7 @@ object ConnectionManager {
                 val auth = handleEnvelope(envelope)
                 if (auth != null && continuation.isActive) {
                     if (auth.authenticated && auth.user != null) {
+                        sendCapabilitiesReport(webSocket)
                         state.value = successState
                         authenticated = true
                         reconnectDelayMs = InitialReconnectDelayMs // 连接成功即复位退避。
@@ -615,6 +621,7 @@ object ConnectionManager {
         if (webSocket !== socket) return
         webSocket = null
         serverVersion.value = null
+        availableCapabilities.value = Protocol.BASELINE_CAPABILITIES
     }
 
     private fun handleEnvelope(envelope: Envelope): AuthState? = when (envelope.type) {
@@ -653,6 +660,12 @@ object ConnectionManager {
             decodePayload(envelope.payload, PluginNetworkInfo.serializer())?.let { handlePluginNetworkInfo(it) }
             null
         }
+        Protocol.TYPE_CAPABILITIES_SYNC -> {
+            decodePayload(envelope.payload, CapabilitiesSync.serializer())?.let { sync ->
+                availableCapabilities.value = effectiveCapabilities(sync)
+            }
+            null
+        }
         Protocol.TYPE_EVENT_NOTIFY -> {
             decodePayload(envelope.payload, ClassEvent.serializer())?.let { events.tryEmit(it) }
             null
@@ -662,6 +675,23 @@ object ConnectionManager {
             null
         }
         else -> null
+    }
+
+    private fun sendCapabilitiesReport(socket: WebSocket) {
+        val report = PeerCapabilities(
+            softwareVersion = BuildConfig.VERSION_NAME,
+            capabilities = Protocol.BASELINE_CAPABILITIES.toList(),
+        )
+        socket.send(
+            json.encodeToString(
+                Envelope.serializer(),
+                Envelope(
+                    type = Protocol.TYPE_PEER_CAPABILITIES,
+                    messageId = newMessageId(),
+                    payload = json.encodeToJsonElement(PeerCapabilities.serializer(), report),
+                ),
+            ),
+        )
     }
 
     private fun applyScheduleSyncStatus(status: ScheduleSyncStatus) {
@@ -753,6 +783,11 @@ object ConnectionManager {
     private class MissingSessionException : Exception()
     private class AuthenticationException : Exception()
 }
+
+internal fun effectiveCapabilities(sync: CapabilitiesSync): Set<String> =
+    Protocol.BASELINE_CAPABILITIES
+        .intersect(sync.server.capabilities.toSet())
+        .intersect(sync.plugin?.capabilities?.toSet() ?: emptySet())
 
 internal data class ConnectionPlan(
     val bootstrapCloudAuthentication: Boolean,

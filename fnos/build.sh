@@ -32,6 +32,10 @@ sed -i "s/__REMOTECI_VERSION__/$VERSION/g" \
   "$STAGE/manifest" \
   "$STAGE/app/docker/docker-compose.yaml"
 
+# 在交给 fnpack 前验证包清单与镜像标签都来自同一个 release 版本。
+grep -Fxq "version=$VERSION" "$STAGE/manifest"
+grep -Fq "image: ghcr.io/memz-edge01/remoteci:$VERSION" "$STAGE/app/docker/docker-compose.yaml"
+
 mkdir -p "$ROOT/artifacts/release"
 cd "$STAGE"
 "$FNPACK" build

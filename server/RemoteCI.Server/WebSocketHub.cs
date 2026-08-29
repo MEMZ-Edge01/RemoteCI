@@ -79,6 +79,7 @@ public static class WebSocketHub
         var ct = session.CancellationToken;
         await session.Registry.SendAccountSyncToPluginsAsync(
             await session.Identities.CreateSyncAsync(ct), ct);
+        await session.Registry.BroadcastCapabilitiesToWatchesAsync(ct);
         await session.ScheduleSync.StartFromPluginAsync(
             session.ConnectionId, ScheduleSyncSource.Connection, ct);
     }
@@ -90,6 +91,7 @@ public static class WebSocketHub
             session.ConnectionId,
             Envelope.AuthState(ServerAuthStateFactory.CreateAuthenticated(session.Principal.User)),
             ct);
+        await session.Registry.SendCurrentCapabilitiesToWatchAsync(session.ConnectionId, ct);
         await session.Registry.SendLatestPluginNetworkInfoToWatchAsync(session.ConnectionId, ct);
 
         if (session.Store.GetLatestSnapshot() is { } snapshot)
@@ -119,6 +121,11 @@ public static class WebSocketHub
             {
                 var json = await ReceiveTextAsync(session.Socket, session.CancellationToken);
                 if (json is null) break;
+                if (TryGetNonNumericProtocolVersion(json, out var nonNumericVersion))
+                {
+                    await RejectProtocolVersionAsync(nonNumericVersion, session);
+                    break;
+                }
                 if (!TryDeserializeEnvelope(json, session, out var envelope)) continue;
                 if (!await EnsureProtocolVersionAsync(envelope, session)) break;
                 if (!await RefreshPrincipalAsync(session)) return;
@@ -166,13 +173,29 @@ public static class WebSocketHub
         Envelope envelope,
         ConnectionSession session)
     {
-        if (envelope.ProtocolVersion == Protocol.Version) return true;
+        if (envelope.ProtocolVersion == Protocol.Version)
+        {
+            if (session.Principal.IsPlugin)
+                session.Registry.ConfirmPluginProtocolCompatible();
+            return true;
+        }
+
+        await RejectProtocolVersionAsync(envelope.ProtocolVersion.ToString(), session);
+        return false;
+    }
+
+    private static async Task RejectProtocolVersionAsync(
+        string actualVersion,
+        ConnectionSession session)
+    {
+        if (session.Principal.IsPlugin)
+            session.Registry.ReportPluginProtocolMismatch(actualVersion);
 
         var versionError = Envelope.AuthState(new AuthState
         {
             Authenticated = false,
             ErrorCode = ApiErrorCodes.ProtocolVersionUnsupported,
-            Error = $"需要协议 v{Protocol.Version}，当前为 v{envelope.ProtocolVersion}",
+            Error = $"需要协议 v{Protocol.Version}，当前协议为 {FormatProtocolVersion(actualVersion)}",
         });
         if (session.Principal.IsPlugin)
         {
@@ -185,7 +208,34 @@ public static class WebSocketHub
             await session.Registry.SendToWatchAsync(
                 session.ConnectionId, versionError, session.CancellationToken);
         }
-        return false;
+    }
+
+    private static string FormatProtocolVersion(string value) =>
+        string.Equals(value, "缺失", StringComparison.Ordinal) ? value : $"v{value}";
+
+    /// <summary>整数之外的声明无法反序列化为 Envelope，先从原始 JSON 提取以便给 WebUI 留下诊断。</summary>
+    private static bool TryGetNonNumericProtocolVersion(string json, out string actualVersion)
+    {
+        actualVersion = string.Empty;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (!document.RootElement.TryGetProperty("protocolVersion", out var version))
+            {
+                actualVersion = "缺失";
+                return true;
+            }
+            if (version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out _))
+                return false;
+            actualVersion = version.ValueKind == JsonValueKind.String
+                ? version.GetString() ?? "缺失"
+                : version.GetRawText();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static async Task<bool> RefreshPrincipalAsync(ConnectionSession session)
@@ -207,6 +257,14 @@ public static class WebSocketHub
         ConnectionSession session,
         CommandRateLimiter commandRate)
     {
+        if (envelope.Type == Protocol.MessageTypePeerCapabilities)
+        {
+            if (ConvertPayload<PeerCapabilities>(envelope.Payload) is { } capabilities)
+                await session.Registry.ReportCapabilitiesAsync(
+                    session.ConnectionId, capabilities, session.CancellationToken);
+            return;
+        }
+
         if (session.Principal.IsPlugin)
         {
             await DispatchPluginAsync(envelope, session);
@@ -367,6 +425,17 @@ public static class WebSocketHub
             await SendFailureAsync(
                 envelope, session.ConnectionId, session.Registry,
                 error.Code, error.Message, session.CancellationToken);
+            return;
+        }
+
+        if (session.Registry.HasPlugin &&
+            RemoteCiCapabilities.Required(command.Command) is { } capability &&
+            !session.Registry.PrimaryPluginSupports(capability))
+        {
+            await SendFailureAsync(
+                envelope, session.ConnectionId, session.Registry,
+                CommandResultCodes.CapabilityUnsupported,
+                $"当前主插件未声明能力 {capability}", session.CancellationToken);
             return;
         }
 

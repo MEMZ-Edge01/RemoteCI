@@ -20,7 +20,10 @@ public sealed class ScheduleModel(
     public ScheduleInput Input { get; set; } = new();
     public ScheduleBundle? Bundle { get; private set; }
     public bool PluginOnline => peers.HasPlugin;
-    public bool CanManageSchedule => Permissions.HasFlag(UserPermissions.ManageSchedule);
+    public bool CanPullSchedule => !PluginOnline || peers.PrimaryPluginSupports(RemoteCiCapabilities.SchedulePull);
+    public bool CanConfigureSchedulePull => Permissions.HasFlag(UserPermissions.ManageSchedule) && CanPullSchedule;
+    public bool CanManageSchedule => Permissions.HasFlag(UserPermissions.ManageSchedule) &&
+        (!PluginOnline || peers.PrimaryPluginSupports(RemoteCiCapabilities.ScheduleChange));
     public ScheduleSyncStatus? CurrentTask => scheduleSync.Current;
     [BindProperty]
     public SchedulePullInterval PullInterval { get; set; }
@@ -36,6 +39,11 @@ public sealed class ScheduleModel(
     public async Task<IActionResult> OnPostPullAsync(CancellationToken ct)
     {
         if (await RequireAsync() is { } denied) return denied;
+        if (PluginOnline && !peers.PrimaryPluginSupports(RemoteCiCapabilities.SchedulePull))
+        {
+            TempData["Error"] = $"{CommandResultCodes.CapabilityUnsupported}：当前主插件不支持拉取课表。";
+            return RedirectToPage();
+        }
         var status = await scheduleSync.StartAndWaitAsync(ScheduleSyncSource.WebUi, ct);
         if (status.State == ScheduleSyncTaskState.Completed)
             TempData["Message"] = "已从插件拉取最新课表，并强制覆盖服务端缓存。";
@@ -47,6 +55,11 @@ public sealed class ScheduleModel(
     public async Task<IActionResult> OnPostPullIntervalAsync(CancellationToken ct)
     {
         if (await RequireAsync(UserPermissions.ManageSchedule) is { } denied) return denied;
+        if (PluginOnline && !peers.PrimaryPluginSupports(RemoteCiCapabilities.SchedulePull))
+        {
+            TempData["Error"] = $"{CommandResultCodes.CapabilityUnsupported}：当前主插件不支持拉取课表。";
+            return RedirectToPage();
+        }
         if (!Enum.IsDefined(PullInterval))
         {
             TempData["Error"] = "请选择有效的自动拉取间隔。";

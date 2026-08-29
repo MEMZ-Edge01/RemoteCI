@@ -81,11 +81,10 @@ object UpdateManager {
     fun findApkAsset(release: GitHubRelease): GitHubAsset? =
         release.assets.firstOrNull { it.name.startsWith(APK_PREFIX) && it.name.endsWith(".apk") }
 
-    /** 按渠道选择可升级或可强制覆盖、且不高于已连接服务端的最高版本。 */
+    /** 按渠道选择同一 V3 协议代内可升级或可强制覆盖的最高版本。 */
     fun selectCompatibleUpdate(
         releases: List<GitHubRelease>,
         currentVersion: String,
-        serverVersion: String,
         channel: UpdateChannel = UpdateChannel.STABLE,
         force: Boolean = false,
     ): CompatibleUpdate? = releases
@@ -95,7 +94,7 @@ object UpdateManager {
             val version = versionFromTag(candidate.release.tagName)
             val currentComparison = compareVersions(version, currentVersion)
             (currentComparison > 0 || force && currentComparison == 0) &&
-                compareVersions(version, serverVersion) <= 0
+                version.substringBefore("-").substringBefore(".").toIntOrNull() == Protocol.VERSION
         }
         .maxWithOrNull { left, right ->
             compareVersions(left.release.tagName, right.release.tagName)

@@ -91,11 +91,16 @@ public sealed class LanServerTests
 
         var types = socket.Sent.Select(message => ParseEnvelope(message).Type).ToList();
         Assert.Contains(Protocol.MessageTypeAuthState, types);
+        Assert.Contains(Protocol.MessageTypeCapabilitiesSync, types);
         Assert.Contains(Protocol.MessageTypeStatePush, types);
         var authIndex = types.FindIndex(type => type == Protocol.MessageTypeAuthState);
         var state = ConvertPayload<AuthState>(ParseEnvelope(socket.Sent[authIndex]).Payload);
         Assert.True(state.Authenticated);
         Assert.Equal(UserPermissions.All, state.User?.Permissions);
+        var capabilities = ConvertPayload<CapabilitiesSync>(ParseEnvelope(socket.Sent[
+            types.FindIndex(type => type == Protocol.MessageTypeCapabilitiesSync)]).Payload);
+        Assert.Equal("3.1.0", capabilities.Plugin?.SoftwareVersion);
+        Assert.Contains(RemoteCiCapabilities.ScheduleChange, capabilities.Server.Capabilities);
     }
 
     [Fact]

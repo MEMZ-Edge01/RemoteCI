@@ -290,6 +290,7 @@ public sealed class LanServer : IDisposable
         client.User = user;
         client.SessionId = proof.DeviceSessionId;
         SendAuthenticatedState(client, user);
+        SendCapabilities(client);
         if (_snapshotProvider() is { } snapshot) Send(client.Socket, Envelope.StatePush(snapshot));
         if (_scheduleProvider() is { } schedule) Send(client.Socket, Envelope.ScheduleSync(schedule));
         Send(client.Socket, Envelope.ExtensionsSync(VisibleExtensions(user, Volatile.Read(ref _latestExtensions))));
@@ -315,6 +316,7 @@ public sealed class LanServer : IDisposable
             }
             client.User = refreshed;
             SendAuthenticatedState(client, refreshed);
+            SendCapabilities(client);
             Send(client.Socket, Envelope.ExtensionsSync(VisibleExtensions(refreshed, Volatile.Read(ref _latestExtensions))));
         }
     }
@@ -325,6 +327,17 @@ public sealed class LanServer : IDisposable
             Authenticated = true,
             ServerVersion = _accounts.ServerVersion,
             User = user,
+        }));
+
+    private void SendCapabilities(LanClient client) =>
+        Send(client.Socket, Envelope.CapabilitiesSync(new CapabilitiesSync
+        {
+            Server = new PeerCapabilities
+            {
+                SoftwareVersion = _accounts.ServerVersion,
+                Capabilities = _accounts.ServerCapabilities,
+            },
+            Plugin = PluginAppInfo.Capabilities(),
         }));
 
     private IEnumerable<LanClient> AuthenticatedClients() =>

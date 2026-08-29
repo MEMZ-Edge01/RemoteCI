@@ -18,16 +18,91 @@ public sealed class PeerRegistry(
     private readonly ConcurrentDictionary<Guid, WsPeer> _watchPeers = new();
     private readonly ConcurrentDictionary<string, PendingCommand> _pendingCommands = new(StringComparer.Ordinal);
     private PluginNetworkInfo? _latestPluginNetworkInfo;
+    private PluginProtocolMismatch? _latestPluginProtocolMismatch;
 
     public bool HasPlugin => !_pluginPeers.IsEmpty;
     public int WatchCount => _watchPeers.Count;
     public int PluginCount => _pluginPeers.Count;
+    public PluginProtocolMismatch? LatestPluginProtocolMismatch =>
+        Volatile.Read(ref _latestPluginProtocolMismatch);
+
+    public bool PrimaryPluginSupports(string capability) =>
+        PrimaryPlugin() is { } peer && EffectiveCapabilities(peer).Contains(capability, StringComparer.Ordinal);
 
     public Guid Register(WebSocket socket, string token, AuthPrincipal principal)
     {
         var id = Guid.NewGuid();
         TableFor(principal.PeerRole)[id] = new WsPeer(id, token, principal, socket);
         return id;
+    }
+
+    /// <summary>保留最近一次插件协议错误，连接断开后 WebUI 仍能解释为什么显示离线。</summary>
+    public void ReportPluginProtocolMismatch(string actualVersion)
+    {
+        var normalized = string.IsNullOrWhiteSpace(actualVersion)
+            ? "缺失"
+            : actualVersion.Trim()[..Math.Min(actualVersion.Trim().Length, 32)];
+        Volatile.Write(ref _latestPluginProtocolMismatch, new PluginProtocolMismatch(
+            normalized,
+            Protocol.Version,
+            timeProvider.GetUtcNow()));
+    }
+
+    /// <summary>只有插件成功发送当前协议消息后才清除旧故障，避免握手成功但消息仍不兼容时误报正常。</summary>
+    public void ConfirmPluginProtocolCompatible() =>
+        Volatile.Write(ref _latestPluginProtocolMismatch, null);
+
+    /// <summary>保存当前连接显式上报的软件版本和能力；旧 V3 端未上报时继续使用基础能力。</summary>
+    public async Task ReportCapabilitiesAsync(
+        Guid connectionId,
+        PeerCapabilities report,
+        CancellationToken ct = default)
+    {
+        var peer = FindPeer(connectionId);
+        if (peer is null) return;
+        peer.SoftwareVersion = NormalizeSoftwareVersion(report.SoftwareVersion);
+        peer.Capabilities = NormalizeCapabilities(report.Capabilities);
+        peer.HasExplicitCapabilities = true;
+        if (peer.Principal.IsPlugin)
+            await BroadcastCapabilitiesToWatchesAsync(ct);
+    }
+
+    public Task SendCurrentCapabilitiesToWatchAsync(Guid connectionId, CancellationToken ct = default) =>
+        SendToWatchAsync(connectionId, Envelope.CapabilitiesSync(CreateCapabilitiesSync()), ct);
+
+    public Task BroadcastCapabilitiesToWatchesAsync(CancellationToken ct = default) =>
+        BroadcastWatchesAsync(Envelope.CapabilitiesSync(CreateCapabilitiesSync()), ct);
+
+    /// <summary>管理员状态页使用的连接级诊断，不包含令牌或凭据。</summary>
+    public IReadOnlyList<PeerCapabilityDiagnostic> GetCapabilityDiagnostics()
+    {
+        var server = RemoteCiCapabilities.Baseline.ToHashSet(StringComparer.Ordinal);
+        var primary = PrimaryPlugin();
+        var primaryCapabilities = primary is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : EffectiveCapabilities(primary).ToHashSet(StringComparer.Ordinal);
+        return _pluginPeers.Values.Concat(_watchPeers.Values)
+            .OrderBy(peer => peer.Principal.PeerRole)
+            .ThenBy(peer => peer.RegisteredAt)
+            .Select(peer =>
+            {
+                var reported = EffectiveCapabilities(peer).ToHashSet(StringComparer.Ordinal);
+                var effective = peer.Principal.IsPlugin
+                    ? server.Intersect(reported, StringComparer.Ordinal)
+                    : server.Intersect(primaryCapabilities, StringComparer.Ordinal)
+                        .Intersect(reported, StringComparer.Ordinal);
+                var effectiveArray = effective.Order(StringComparer.Ordinal).ToArray();
+                return new PeerCapabilityDiagnostic(
+                    peer.Id,
+                    peer.Principal.PeerRole,
+                    peer.Principal.User?.DisplayName ?? "ClassIsland 插件",
+                    peer.SoftwareVersion,
+                    peer.HasExplicitCapabilities,
+                    effectiveArray,
+                    server.Except(effectiveArray, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+                    ReferenceEquals(peer, primary));
+            })
+            .ToArray();
     }
 
     /// <summary>读取握手或后台刷新后缓存的连接身份，不访问数据库。</summary>
@@ -66,6 +141,7 @@ public sealed class PeerRegistry(
             : _watchPeers.TryRemove(connectionId, out var watch) ? watch
             : null;
         if (peer is null) return;
+        var wasPlugin = peer.Principal.IsPlugin;
 
         foreach (var pending in _pendingCommands.Where(x => x.Value.WatchConnectionId == connectionId).ToList())
         {
@@ -106,6 +182,8 @@ public sealed class PeerRegistry(
         {
             if (sendLockHeld) peer.SendLock.Release();
         }
+        if (wasPlugin)
+            await BroadcastCapabilitiesToWatchesAsync(CancellationToken.None);
     }
 
     public Task SendSnapshotToWatchesAsync(ClassStateSnapshot value, CancellationToken ct = default) =>
@@ -186,7 +264,9 @@ public sealed class PeerRegistry(
 
     /// <summary>请求最早接入的在线插件立即重新生成课表；返回是否成功发送。</summary>
     public Task<bool> RequestSchedulePullAsync(ScheduleSyncRequest request, CancellationToken ct = default) =>
-        SendToPluginAsync(Envelope.SchedulePull(request), ct);
+        PrimaryPluginSupports(RemoteCiCapabilities.SchedulePull)
+            ? SendToPluginAsync(Envelope.SchedulePull(request), ct)
+            : Task.FromResult(false);
 
     /// <summary>
     /// 向指定插件连接发送课表拉取请求：新插件接入时的补齐拉取必须定向发给它自己，
@@ -230,6 +310,11 @@ public sealed class PeerRegistry(
         CommandMessage command, TimeSpan timeout, CancellationToken ct = default)
     {
         if (!HasPlugin) return CommandResult.Failure(CommandResultCodes.PluginOffline, "插件未在线，操作未执行");
+        if (RemoteCiCapabilities.Required(command.Command) is { } capability &&
+            !PrimaryPluginSupports(capability))
+            return CommandResult.Failure(
+                CommandResultCodes.CapabilityUnsupported,
+                $"当前主插件未声明能力 {capability}");
         var envelope = Envelope.Command(command);
         var completion = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingCommands[envelope.MessageId] = new PendingCommand(null, completion);
@@ -327,6 +412,50 @@ public sealed class PeerRegistry(
         }
     }
 
+    private WsPeer? FindPeer(Guid connectionId) =>
+        _pluginPeers.TryGetValue(connectionId, out var plugin) ? plugin
+            : _watchPeers.TryGetValue(connectionId, out var watch) ? watch
+            : null;
+
+    private WsPeer? PrimaryPlugin() => _pluginPeers.Values
+        .Where(IsLocallyAuthorized)
+        .OrderBy(peer => peer.RegisteredAt)
+        .FirstOrDefault();
+
+    private static IReadOnlyList<string> EffectiveCapabilities(WsPeer peer) =>
+        peer.HasExplicitCapabilities ? peer.Capabilities : RemoteCiCapabilities.Baseline;
+
+    private CapabilitiesSync CreateCapabilitiesSync()
+    {
+        var plugin = PrimaryPlugin();
+        return new CapabilitiesSync
+        {
+            Server = AppVersion.Capabilities(),
+            Plugin = plugin is null
+                ? null
+                : new PeerCapabilities
+                {
+                    SoftwareVersion = plugin.SoftwareVersion ?? string.Empty,
+                    Capabilities = EffectiveCapabilities(plugin),
+                },
+        };
+    }
+
+    private static string? NormalizeSoftwareVersion(string? value)
+    {
+        var normalized = value?.Trim();
+        return string.IsNullOrEmpty(normalized) ? null : normalized[..Math.Min(normalized.Length, 64)];
+    }
+
+    private static IReadOnlyList<string> NormalizeCapabilities(IEnumerable<string>? values) =>
+        (values ?? [])
+        .Select(value => value?.Trim())
+        .Where(value => !string.IsNullOrEmpty(value) && value.Length <= 80)
+        .Distinct(StringComparer.Ordinal)
+        .Take(128)
+        .Cast<string>()
+        .ToArray();
+
     private bool IsLocallyAuthorized(WsPeer peer) =>
         peer.Principal.ValidUntil is not { } validUntil || timeProvider.GetUtcNow() < validUntil;
 
@@ -378,7 +507,25 @@ public sealed class PeerRegistry(
         public WebSocket Socket { get; } = socket;
         public SemaphoreSlim SendLock { get; } = new(1, 1);
         public SemaphoreSlim RefreshLock { get; } = new(1, 1);
+        public string? SoftwareVersion { get; set; }
+        public IReadOnlyList<string> Capabilities { get; set; } = [];
+        public bool HasExplicitCapabilities { get; set; }
         /// <summary>接入时刻（UtcNow Ticks），用于“最早接入优先”的投递排序。</summary>
         public long RegisteredAt { get; } = DateTime.UtcNow.Ticks;
     }
 }
+
+public sealed record PeerCapabilityDiagnostic(
+    Guid ConnectionId,
+    PeerRole Role,
+    string DisplayName,
+    string? SoftwareVersion,
+    bool IsExplicit,
+    IReadOnlyList<string> EffectiveCapabilities,
+    IReadOnlyList<string> MissingCapabilities,
+    bool IsPrimaryPlugin);
+
+public sealed record PluginProtocolMismatch(
+    string ActualVersion,
+    int ExpectedVersion,
+    DateTimeOffset DetectedAt);

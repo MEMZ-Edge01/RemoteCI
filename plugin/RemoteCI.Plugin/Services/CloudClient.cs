@@ -174,6 +174,7 @@ public sealed class CloudClient : IDisposable
         };
         builder.Scheme = builder.Scheme == Uri.UriSchemeHttps ? "wss" : "ws";
         await _ws.ConnectAsync(builder.Uri, ct);
+        await TrySendAsync(Envelope.PeerCapabilities(PluginAppInfo.Capabilities()), ct);
         // 每次重连都重新发现网卡，避免 DHCP 或 Wi-Fi 切换后把过期地址留给手表。
         if (await TrySendAsync(Envelope.PluginNetworkInfo(PluginNetworkInfoProvider.Create(_settings)), ct))
             Connected?.Invoke(this, EventArgs.Empty);

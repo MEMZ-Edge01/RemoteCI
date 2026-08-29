@@ -12,9 +12,22 @@ import kotlin.test.assertTrue
 
 class AuthorizationAndNotificationTest {
     @Test
-    fun `breaking permission model uses unified version three point one`() {
-        assertEquals("3.1", Protocol.VERSION)
-        assertEquals("REMOTECI_DISCOVER_V3_1", Protocol.LAN_DISCOVERY_REQUEST)
+    fun `effective capabilities require watch server and plugin support`() {
+        val effective = effectiveCapabilities(
+            CapabilitiesSync(
+                server = PeerCapabilities("3.5.0", listOf(Protocol.CAP_SCHEDULE_READ, Protocol.CAP_VOLUME_CONTROL)),
+                plugin = PeerCapabilities("3.1.0", listOf(Protocol.CAP_SCHEDULE_READ)),
+            ),
+        )
+
+        assertEquals(setOf(Protocol.CAP_SCHEDULE_READ), effective)
+        assertTrue(effectiveCapabilities(CapabilitiesSync()).isEmpty())
+    }
+
+    @Test
+    fun `breaking permission model uses protocol version three`() {
+        assertEquals(3, Protocol.VERSION)
+        assertEquals("REMOTECI_DISCOVER_V3", Protocol.LAN_DISCOVERY_REQUEST)
     }
 
     @Test
@@ -53,7 +66,7 @@ class AuthorizationAndNotificationTest {
             LanPluginCandidate("Classroom-PC", "192.168.50.8", 9123),
             lanPluginCandidate(response, "192.168.50.8"),
         )
-        assertNull(lanPluginCandidate(response.copy(protocolVersion = "99"), "192.168.50.8"))
+        assertNull(lanPluginCandidate(response.copy(protocolVersion = 99), "192.168.50.8"))
         assertNull(lanPluginCandidate(response.copy(port = 0), "192.168.50.8"))
     }
 

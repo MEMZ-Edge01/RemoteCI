@@ -974,6 +974,58 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task RazorWebUi_IncompatiblePluginProtocolShowsUpgradeGuidance()
+    {
+        await using var factory = new TestWebApplicationFactory();
+        var pluginToken = await factory.GetPluginTokenAsync();
+        var socketClient = factory.Server.CreateWebSocketClient();
+        using var plugin = await socketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(pluginToken)}"),
+            CancellationToken.None);
+        var incompatible = Envelope.SchedulePull();
+        incompatible.ProtocolVersion = 2;
+        await SendEnvelopeAsync(plugin, incompatible);
+        var error = await ReceivePayloadAsync<AuthState>(plugin, Protocol.MessageTypeAuthState);
+        Assert.Equal(ApiErrorCodes.ProtocolVersionUnsupported, error.ErrorCode);
+
+        using var browser = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+        });
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var html = WebUtility.HtmlDecode(await browser.GetStringAsync("/"));
+
+        Assert.Contains("协议不匹配", html);
+        Assert.Contains("插件协议 v2", html);
+        Assert.Contains("WebUI 协议 v3", html);
+        Assert.Contains("请升级 ClassIsland 插件", html);
+    }
+
+    [Fact]
+    public async Task RazorWebUi_CapabilityDiagnosticsShowChineseAnnotations()
+    {
+        await using var factory = new TestWebApplicationFactory();
+        var pluginToken = await factory.GetPluginTokenAsync();
+        var socketClient = factory.Server.CreateWebSocketClient();
+        using var plugin = await socketClient.ConnectAsync(
+            new Uri(factory.Server.BaseAddress, $"/ws?{Protocol.QueryToken}={Uri.EscapeDataString(pluginToken)}"),
+            CancellationToken.None);
+
+        using var browser = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+        });
+        await LoginWebUiAsync(browser, TestWebApplicationFactory.AdminUsername, TestWebApplicationFactory.AdminPassword);
+        var html = WebUtility.HtmlDecode(await browser.GetStringAsync("/"));
+
+        Assert.Contains("class-state.read（读取课堂状态）", html);
+        Assert.Contains("schedule.read（读取课表）", html);
+        Assert.Contains("extensions.run（运行扩展功能）", html);
+    }
+
+    [Fact]
     public async Task TeacherComingPermission_IsIndependentFromNotificationPermission()
     {
         var admin = await _factory.LoginAsync();
@@ -1564,6 +1616,27 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
             if (result.MessageType != WebSocketMessageType.Close) continue;
             Assert.Equal(WebSocketCloseStatus.PolicyViolation, result.CloseStatus);
             return;
+        }
+    }
+
+    private static async Task SendEnvelopeAsync(WebSocket socket, Envelope envelope)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonDefaults.Options);
+        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+
+    private static async Task<T> ReceivePayloadAsync<T>(WebSocket socket, string expectedType)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            var buffer = new byte[256 * 1024];
+            var result = await socket.ReceiveAsync(buffer, timeout.Token);
+            var envelope = JsonSerializer.Deserialize<Envelope>(
+                Encoding.UTF8.GetString(buffer, 0, result.Count), JsonDefaults.Options)!;
+            if (envelope.Type != expectedType) continue;
+            return JsonSerializer.Deserialize<T>(
+                JsonSerializer.Serialize(envelope.Payload), JsonDefaults.Options)!;
         }
     }
 

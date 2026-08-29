@@ -1,6 +1,8 @@
-# RemoteCI 协议 V3.1
+# RemoteCI 协议 V3
 
-协议 V3.1 是服务端、插件和手表必须同时升级的破坏性版本，也是三端统一的软件版本。所有 WebSocket 信封都带字符串 `protocolVersion: "3.1"`、`type`、`messageId`、可选 `replyToMessageId`、时间和 `payload`。任一端不是 V3.1 都会收到 `PROTOCOL_VERSION_UNSUPPORTED`，避免旧组件按旧权限语义继续执行命令。
+协议版本和软件版本是两个概念。当前服务端、插件和手表的软件发布版本统一为 `3.1.0`，但所有 WebSocket 信封都使用整数 `protocolVersion: 3`。任意 `v3.x.x` 软件均可建立 V3 连接，软件版本只用于更新和诊断，不参与连接拒绝；只有协议号不是 `3` 时才返回 `PROTOCOL_VERSION_UNSUPPORTED`。
+
+V3 内只能增加可选字段、新消息和新能力，未知字段与未知能力标识必须安全忽略。删除字段、改变既有字段含义或改变既有命令语义属于破坏性变更，必须升级为 V4。
 
 ## 身份与权限
 
@@ -34,7 +36,7 @@
 
 1. `verifier = SHA256(UTF8(deviceSecret))`。
 2. 生成随机 `clientNonce`。
-3. 构造 UTF-8 文本 `2|challengeId|nonce|clientNonce|deviceSessionIdWithoutHyphensLowercase`。
+3. 构造 UTF-8 文本 `3|challengeId|nonce|clientNonce|deviceSessionIdWithoutHyphensLowercase`。
 4. `proof = Base64(HMAC-SHA256(verifier, canonicalText))`。
 5. 发送 `auth_proof`，只包含挑战号、设备会话 ID、客户端随机数和证明。
 
@@ -47,7 +49,9 @@
 | `auth_challenge` | 插件 → 手表 | `AuthChallenge` |
 | `auth_proof` | 手表 → 插件 | `AuthProof` |
 | `auth_state` | 接入端 → 手表 | 当前用户、有效权限、所连接服务端的 `serverVersion`，或错误码 |
-| `account_sync` | 服务端 → 插件 | 账号元数据、有效权限、设备验证器、`serverVersion`、镜像版本和生成时间 |
+| `account_sync` | 服务端 → 插件 | 账号元数据、有效权限、设备验证器、`serverVersion`、可选服务端能力、镜像版本和生成时间 |
+| `peer_capabilities` | 插件/手表 → 服务端 | 当前端的 `softwareVersion` 和稳定字符串能力列表 |
+| `capabilities_sync` | 服务端/插件 → 手表 | 服务端能力和当前主插件能力快照 |
 | `state_push` | 插件 → 服务端/手表 | 高频当前课程、提醒播放、主界面显隐与可用电源状态，不含完整课表 |
 | `schedule_sync` | 插件 → 服务端/手表 | 今天起七天的日期、课程、科目清单和每日修订号 |
 | `schedule_pull` | 服务端/手表 → 插件 | 只读请求，载荷可含 `{taskId, source, requestedAt}`，要求插件立即重新生成并推送七日课表 |
@@ -64,7 +68,7 @@
 
 手表可以在登录页扫描同一局域网中的插件，无需手动填写电脑 IP：
 
-1. 手表向固定 UDP 端口 `48765` 发送广播串 `REMOTECI_DISCOVER_V3_1`；插件应答 JSON `{protocolVersion, instanceName, port}`，`protocolVersion` 为字符串 `"3.1"`，`port` 是插件当前局域网 WebSocket 端口。
+1. 手表向固定 UDP 端口 `48765` 发送广播串 `REMOTECI_DISCOVER_V3`；插件应答 JSON `{protocolVersion, instanceName, port}`，`protocolVersion` 为整数 `3`，`port` 是插件当前局域网 WebSocket 端口。
 2. 用户选中应答条目后，手表连接 `ws://<应答来源地址>:<port>/bootstrap`，插件返回 `connection_bootstrap` 载荷 `{instanceName, cloudServerUrl}`。该端点未认证，只提供云端地址与实例名，密码和会话凭据始终只交给云服务器。
 3. 插件每次云端重连时重新发现本机网卡，通过 `plugin_network_info`（`{lanServerEnabled, addresses[], port}`）上报服务端；服务端归一化后广播给在线手表并缓存最新一份，新连接的手表在 `auth_state` 之后立即收到。手表据此更新局域网候选地址，地址或端口变化且当前走云端中转时自动重试直连。
 
@@ -74,7 +78,13 @@
 
 插件通过云端 WebSocket 认证后，服务端必须立即发送一次 `schedule_pull`，避免插件启动时的首次 `schedule_sync` 早于云端连接建立而丢失。任何已认证手表都可以发送该只读消息：云端连接由服务端立即转发给在线插件，局域网连接直接交给插件。插件端是最终任务锁，服务端同时维护云端入口的前置锁；插件推送、WebUI 拉取、手表拉取、自动拉取和连接初始化任一正在运行时，新请求返回 `schedule_sync_status.state=Busy`，其中 `activeTaskId` 指向占用任务。Running、Completed、Failed 和 Busy 状态会广播到在线手表并供插件设置页、WebUI 展示；任务成功、失败、插件断开或 15 秒超时后释放。WebUI 收到新 `schedule_sync` 后用完整 `ScheduleBundle` 整体替换旧缓存，不做字段合并。该请求不授予换课能力，也不绕过 `ChangeSchedule` 的权限检查。插件离线期间不排队。
 
-云端服务端直接在认证成功的 `auth_state.serverVersion` 中下发自身版本；插件通过 `account_sync.serverVersion` 保存同一版本，并在局域网认证成功时转发给手表。手表按 SemVer（含预发布优先级）比较版本，只允许安装版本号不高于当前连接 WebUI 的 APK；本机选择 Beta 渠道或同版本强制覆盖时也不能绕过该上限。
+云端服务端直接在认证成功的 `auth_state.serverVersion` 中下发自身软件版本；插件通过 `account_sync.serverVersion` 保存同一版本，并在局域网认证成功时转发给手表。服务端与手表更新器只选择协议主版本相同的 `v3.x.x` Release，因此 V4 不会进入 V3 客户端的自动更新候选。手表不再以 WebUI 软件版本为上限，仍保留渠道筛选、禁止降级、同版本强制覆盖和 APK 签名校验。
+
+## 能力协商
+
+V3.1.0 的基础能力为 `class-state.read`、`schedule.read`、`schedule.pull`、`schedule.change`、`notification.send`、`notification.clear`、`teacher-coming`、`main-menu.visibility`、`power.control`、`volume.control` 和 `extensions.run`。插件和手表连接后通过 `peer_capabilities` 上报软件版本与能力；服务端通过 `capabilities_sync` 向手表发送自身和当前主插件的能力。未上报能力的旧 V3 端按上述基础能力处理，未知能力标识被忽略。
+
+WebUI 的有效能力是“服务端 ∩ 当前主插件”，手表的有效能力是“手表本地 ∩ 服务端 ∩ 当前主插件”。多插件时，当前主插件仍是最早接入的健康插件；主插件切换、断开或能力更新后，服务端重新广播能力快照。界面应隐藏缺失能力的入口，服务端转发命令前仍需按统一映射复核主插件能力，缺少能力时返回 `CAPABILITY_UNSUPPORTED`。能力声明不能绕过账号权限或扩展策略检查。
 
 `event_notify.payload.event` 的值 6 表示 ClassIsland 自动化“显示提醒”行动产生的通知，值 7 表示第三方 ClassIsland 插件产生的通知。手表分别持久化开关；内置课程、天气等通知不会被值 7 重复转发。
 

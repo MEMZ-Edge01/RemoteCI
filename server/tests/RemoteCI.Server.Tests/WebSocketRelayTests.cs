@@ -29,6 +29,92 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
         Assert.Equal(AppVersion.Version, auth.ServerVersion);
     }
 
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task WatchMessages_FromOtherProtocolVersionsAreRejected(int protocolVersion)
+    {
+        using var watch = await ConnectWatchAsync();
+        await ReceivePayloadAsync<AuthState>(watch, Protocol.MessageTypeAuthState);
+
+        var incompatible = Envelope.SchedulePull();
+        incompatible.ProtocolVersion = protocolVersion;
+        await SendAsync(watch, incompatible);
+
+        var error = await ReceivePayloadAsync<AuthState>(watch, Protocol.MessageTypeAuthState);
+        Assert.False(error.Authenticated);
+        Assert.Equal(ApiErrorCodes.ProtocolVersionUnsupported, error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task PluginStringProtocolMismatchIsRecordedUntilCompatiblePluginCommunicates()
+    {
+        using var incompatiblePlugin = await ConnectPluginAsync();
+        await ReceiveEnvelopeAsync(incompatiblePlugin, Protocol.MessageTypeSchedulePull);
+        var json = JsonSerializer.Serialize(Envelope.SchedulePull(), JsonDefaults.Options)
+            .Replace("\"protocolVersion\":3", "\"protocolVersion\":\"3.1\"", StringComparison.Ordinal);
+        await SendTextAsync(incompatiblePlugin, json);
+
+        var error = await ReceivePayloadAsync<AuthState>(
+            incompatiblePlugin, Protocol.MessageTypeAuthState);
+        Assert.Equal(ApiErrorCodes.ProtocolVersionUnsupported, error.ErrorCode);
+        Assert.Equal("3.1", _factory.Services.GetRequiredService<PeerRegistry>()
+            .LatestPluginProtocolMismatch?.ActualVersion);
+
+        using var compatiblePlugin = await ConnectPluginAsync();
+        await ReceiveEnvelopeAsync(compatiblePlugin, Protocol.MessageTypeSchedulePull);
+        await SendAsync(compatiblePlugin, Envelope.PeerCapabilities(new PeerCapabilities
+        {
+            SoftwareVersion = "3.1.0",
+            Capabilities = RemoteCiCapabilities.Baseline,
+        }));
+        await WaitUntilAsync(() => _factory.Services.GetRequiredService<PeerRegistry>()
+            .LatestPluginProtocolMismatch is null);
+    }
+
+    [Fact]
+    public async Task Capabilities_AreSynchronizedAndUnsupportedCommandIsRejected()
+    {
+        using var plugin = await ConnectPluginAsync();
+        await ReceiveEnvelopeAsync(plugin, Protocol.MessageTypeSchedulePull);
+        using var watch = await ConnectWatchAsync();
+        var fallbackSync = await ReceivePayloadAsync<CapabilitiesSync>(
+            watch, Protocol.MessageTypeCapabilitiesSync);
+        Assert.Equal(RemoteCiCapabilities.Baseline, fallbackSync.Plugin?.Capabilities);
+
+        await SendAsync(plugin, Envelope.PeerCapabilities(new PeerCapabilities
+        {
+            SoftwareVersion = "3.9.4",
+            Capabilities = [RemoteCiCapabilities.ScheduleRead, "future.experimental"],
+        }));
+        var sync = await ReceivePayloadAsync<CapabilitiesSync>(watch, Protocol.MessageTypeCapabilitiesSync);
+        Assert.Equal("3.9.4", sync.Plugin?.SoftwareVersion);
+        Assert.Contains(RemoteCiCapabilities.ScheduleRead, sync.Plugin!.Capabilities);
+        Assert.Contains("future.experimental", sync.Plugin.Capabilities);
+
+        await SendAsync(watch, Envelope.PeerCapabilities(new PeerCapabilities
+        {
+            SoftwareVersion = "3.1.0",
+            Capabilities = [RemoteCiCapabilities.ScheduleRead],
+        }));
+        await SendAsync(watch, Envelope.Command(new CommandMessage
+        {
+            Command = CommandKind.Volume,
+            Volume = new VolumeControlRequest { Level = 50 },
+        }));
+        var result = await ReceivePayloadAsync<CommandResult>(watch, Protocol.MessageTypeCommandResult);
+        Assert.False(result.Success);
+        Assert.Equal(CommandResultCodes.CapabilityUnsupported, result.Code);
+
+        var diagnostics = _factory.Services.GetRequiredService<PeerRegistry>().GetCapabilityDiagnostics();
+        var watchDiagnostic = Assert.Single(diagnostics, item => item.Role == PeerRole.Watch);
+        Assert.True(watchDiagnostic.IsExplicit);
+        Assert.Equal("3.1.0", watchDiagnostic.SoftwareVersion);
+        Assert.Contains(RemoteCiCapabilities.VolumeControl, watchDiagnostic.MissingCapabilities);
+        var pluginDiagnostic = Assert.Single(diagnostics, item => item.Role == PeerRole.Plugin);
+        Assert.DoesNotContain("future.experimental", pluginDiagnostic.EffectiveCapabilities);
+    }
+
     [Fact]
     public async Task PluginConnection_ImmediatelyRequestsFreshSchedule()
     {
@@ -525,6 +611,19 @@ public sealed class WebSocketRelayTests : IClassFixture<TestWebApplicationFactor
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, JsonDefaults.Options);
         await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+
+    private static async Task SendTextAsync(WebSocket socket, string json)
+    {
+        var bytes = Encoding.UTF8.GetBytes(json);
+        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!condition())
+            await Task.Delay(20, timeout.Token);
     }
 
     private static async Task AssertWebSocketClosedAsync(WebSocket socket)

@@ -19,8 +19,13 @@ public sealed class IndexModel(UserManager<AppUser> users, PeerRegistry peers, I
     public ScheduleBundle? Schedule { get; private set; }
     public string? PairCode { get; private set; }
     public IReadOnlyList<PluginCredentialInfo> PluginCredentials { get; private set; } = [];
+    public IReadOnlyList<PeerCapabilityDiagnostic> CapabilityDiagnostics { get; private set; } = [];
+    public PluginProtocolMismatch? PluginProtocolMismatch => peers.LatestPluginProtocolMismatch;
     public bool IsAdmin => CurrentUser.Role == UserRole.Admin;
     public string ServerVersion => AppVersion.Version;
+    public bool Supports(string capability) => !PluginOnline || peers.PrimaryPluginSupports(capability);
+    public string FormatCapabilities(IReadOnlyList<string> capabilities) => string.Join(
+        "、", capabilities.Select(capability => $"{capability}（{RemoteCiCapabilities.ChineseName(capability)}）"));
 
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
@@ -73,6 +78,9 @@ public sealed class IndexModel(UserManager<AppUser> users, PeerRegistry peers, I
         Snapshot = state.GetLatestSnapshot();
         Schedule = state.GetLatestSchedule();
         if (CurrentUser.Role == UserRole.Admin)
+        {
             PluginCredentials = await identities.ListPluginCredentialsAsync(ct);
+            CapabilityDiagnostics = peers.GetCapabilityDiagnostics();
+        }
     }
 }

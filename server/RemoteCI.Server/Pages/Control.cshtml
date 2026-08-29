@@ -51,6 +51,8 @@
             </div>
         </section>
 
+        @if (Model.CanClearNotifications)
+        {
         <section class="panel control-card" id="clear-notifications">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi bi-bell-slash" aria-hidden="true"></i></span>
@@ -60,6 +62,7 @@
                 <button class="ghost" type="submit" disabled="@(!Model.PluginOnline || snapshot?.IsNotificationPlaying != true)">清除当前提醒</button>
             </form>
         </section>
+        }
     }
 
     @if (Model.CanControlMainMenu)
@@ -76,7 +79,7 @@
         </section>
     }
 
-    @if (Model.CanControlPower)
+    @if (Model.CanControlVolume)
     {
         <section class="panel control-card control-card-wide" id="volume">
             <div class="control-card-head">
@@ -106,6 +109,10 @@
             }
         </section>
 
+    }
+
+    @if (Model.CanControlPower)
+    {
         <section class="panel control-card control-card-wide" id="power">
             <div class="control-card-head">
                 <span class="feature-icon"><i class="bi bi-power" aria-hidden="true"></i></span>

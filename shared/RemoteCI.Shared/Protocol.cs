@@ -1,13 +1,9 @@
 namespace RemoteCI.Shared;
 
-/// <summary>三端共同使用的 V3.1 版本与协议常量。</summary>
+/// <summary>三端共同使用的 V3 协议常量。</summary>
 public static class Protocol
 {
-    /// <summary>
-    /// 发布版本和协议版本共用同一个不可变标识。
-    /// 任一端不是此版本都必须拒绝连接，避免按不同语义同步课表或执行命令。
-    /// </summary>
-    public const string Version = "3.1";
+    public const int Version = 3;
 
     public const string MessageTypeStatePush = "state_push";
     public const string MessageTypeScheduleSync = "schedule_sync";
@@ -24,9 +20,11 @@ public static class Protocol
     public const string MessageTypeSettingsSync = "settings_sync";
     public const string MessageTypePluginNetworkInfo = "plugin_network_info";
     public const string MessageTypeConnectionBootstrap = "connection_bootstrap";
+    public const string MessageTypePeerCapabilities = "peer_capabilities";
+    public const string MessageTypeCapabilitiesSync = "capabilities_sync";
 
     public const int LanDiscoveryPort = 48765;
-    public const string LanDiscoveryRequest = "REMOTECI_DISCOVER_V3_1";
+    public const string LanDiscoveryRequest = "REMOTECI_DISCOVER_V3";
 
     public const string QueryToken = "token";
     public const string HeaderAuthorization = "Authorization";
@@ -146,6 +144,68 @@ public static class CommandPermissions
         CommandKind.SetMainMenuVisibility => UserPermissions.MainMenuControl,
         CommandKind.Power or CommandKind.Volume => UserPermissions.PowerControl,
         _ => UserPermissions.None,
+    };
+}
+
+/// <summary>V3 协议内稳定、可追加的功能能力标识。</summary>
+public static class RemoteCiCapabilities
+{
+    public const string ClassStateRead = "class-state.read";
+    public const string ScheduleRead = "schedule.read";
+    public const string SchedulePull = "schedule.pull";
+    public const string ScheduleChange = "schedule.change";
+    public const string NotificationSend = "notification.send";
+    public const string NotificationClear = "notification.clear";
+    public const string TeacherComing = "teacher-coming";
+    public const string MainMenuVisibility = "main-menu.visibility";
+    public const string PowerControl = "power.control";
+    public const string VolumeControl = "volume.control";
+    public const string ExtensionsRun = "extensions.run";
+
+    /// <summary>没有上报能力列表的旧 V3 端自动获得的基础能力。</summary>
+    public static IReadOnlyList<string> Baseline { get; } =
+    [
+        ClassStateRead,
+        ScheduleRead,
+        SchedulePull,
+        ScheduleChange,
+        NotificationSend,
+        NotificationClear,
+        TeacherComing,
+        MainMenuVisibility,
+        PowerControl,
+        VolumeControl,
+        ExtensionsRun,
+    ];
+
+    /// <summary>面向管理员诊断界面的中文说明；未知标识仍保留原值并标注为未知能力。</summary>
+    public static string ChineseName(string capability) => capability switch
+    {
+        ClassStateRead => "读取课堂状态",
+        ScheduleRead => "读取课表",
+        SchedulePull => "拉取课表",
+        ScheduleChange => "修改课表",
+        NotificationSend => "发送通知",
+        NotificationClear => "清除通知",
+        TeacherComing => "老师来了",
+        MainMenuVisibility => "控制主界面显示",
+        PowerControl => "电源控制",
+        VolumeControl => "音量控制",
+        ExtensionsRun => "运行扩展功能",
+        _ => "未知能力",
+    };
+
+    public static string? Required(CommandKind command) => command switch
+    {
+        CommandKind.ChangeSchedule => ScheduleChange,
+        CommandKind.SendNotification => NotificationSend,
+        CommandKind.ClearNotifications => NotificationClear,
+        CommandKind.TeacherComing => TeacherComing,
+        CommandKind.SetMainMenuVisibility => MainMenuVisibility,
+        CommandKind.Power => PowerControl,
+        CommandKind.Volume => VolumeControl,
+        CommandKind.RunExtension => ExtensionsRun,
+        _ => null,
     };
 }
 
