@@ -8,7 +8,7 @@ namespace RemoteCI.Shared.Models;
 public sealed class Envelope
 {
     [JsonPropertyName("protocolVersion")]
-    public int ProtocolVersion { get; set; } = Protocol.Version;
+    public string ProtocolVersion { get; set; } = Protocol.Version;
 
     [JsonPropertyName("type")]
     public required string Type { get; set; }

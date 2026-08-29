@@ -21,7 +21,7 @@ RemoteCI 是 ClassIsland 2.x、ASP.NET Core 服务端和 Wear OS 手表组成的
 
 | 目录 | 内容 |
 | --- | --- |
-| `shared/` | C# 协议 v3 与共享 DTO |
+| `shared/` | C# V3.1 协议与共享 DTO |
 | `server/` | ASP.NET Core 服务端、Razor WebUI、Identity/SQLite |
 | `plugin/` | ClassIsland 2.x 插件与 CIPX 构建 |
 | `wearos/` | Kotlin/Compose for Wear OS 应用 |
@@ -44,7 +44,7 @@ $env:JAVA_HOME="C:\path\to\jdk-17"
 
 手表构建需要 JDK 17 和 Android SDK；本机开发脚本见 `wearos/dev.ps1`。
 
-部署和首次配对见 [部署文档](docs/deployment.md)，消息格式见 [协议 v3](docs/protocol.md)。
+部署和首次配对见 [部署文档](docs/deployment.md)，消息格式见 [协议 V3.1](docs/protocol.md)。
 
 飞牛 fnOS 用户可以从 GitHub Releases 下载 `RemoteCI-<版本>.fpk` 直接在应用中心安装，
 安装、更新与开发说明见 [fnos/README.md](fnos/README.md)。

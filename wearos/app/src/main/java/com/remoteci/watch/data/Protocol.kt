@@ -5,7 +5,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 object Protocol {
-    const val VERSION = 3
+    // 必须与 shared/RemoteCI.Shared/Protocol.cs 的 Protocol.Version 一致。
+    const val VERSION = "3.1"
     const val TYPE_STATE_PUSH = "state_push"
     const val TYPE_SCHEDULE_SYNC = "schedule_sync"
     const val TYPE_SCHEDULE_PULL = "schedule_pull"
@@ -21,7 +22,7 @@ object Protocol {
     const val TYPE_PLUGIN_NETWORK_INFO = "plugin_network_info"
     const val TYPE_CONNECTION_BOOTSTRAP = "connection_bootstrap"
     const val LAN_DISCOVERY_PORT = 48765
-    const val LAN_DISCOVERY_REQUEST = "REMOTECI_DISCOVER_V3"
+    const val LAN_DISCOVERY_REQUEST = "REMOTECI_DISCOVER_V3_1"
 
     const val STATE_NONE = 0
     const val STATE_CLASS = 1
@@ -84,7 +85,7 @@ object Protocol {
 
 @Serializable
 data class Envelope(
-    @SerialName("protocolVersion") val protocolVersion: Int = Protocol.VERSION,
+    @SerialName("protocolVersion") val protocolVersion: String = Protocol.VERSION,
     val type: String,
     @SerialName("messageId") val messageId: String = "",
     @SerialName("replyToMessageId") val replyToMessageId: String? = null,
@@ -210,7 +211,7 @@ data class PluginNetworkInfo(
 
 @Serializable
 data class LanDiscoveryResponse(
-    @SerialName("protocolVersion") val protocolVersion: Int = Protocol.VERSION,
+    @SerialName("protocolVersion") val protocolVersion: String = Protocol.VERSION,
     @SerialName("instanceName") val instanceName: String,
     val port: Int,
 )

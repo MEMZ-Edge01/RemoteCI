@@ -3,6 +3,6 @@ name: RemoteCI
 description: 为 ClassIsland 提供更丰富的远程控制功能
 entranceAssembly: "RemoteCI.Plugin.dll"
 url: https://github.com/MEMZ-Edge01/RemoteCI
-version: 0.3.2.0
+version: 3.1
 apiVersion: 2.0.0.0
 author: MEMZ-Edge01

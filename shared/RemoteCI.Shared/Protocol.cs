@@ -1,9 +1,13 @@
 namespace RemoteCI.Shared;
 
-/// <summary>三端共同使用的 v3 协议常量。</summary>
+/// <summary>三端共同使用的 V3.1 版本与协议常量。</summary>
 public static class Protocol
 {
-    public const int Version = 3;
+    /// <summary>
+    /// 发布版本和协议版本共用同一个不可变标识。
+    /// 任一端不是此版本都必须拒绝连接，避免按不同语义同步课表或执行命令。
+    /// </summary>
+    public const string Version = "3.1";
 
     public const string MessageTypeStatePush = "state_push";
     public const string MessageTypeScheduleSync = "schedule_sync";
@@ -22,7 +26,7 @@ public static class Protocol
     public const string MessageTypeConnectionBootstrap = "connection_bootstrap";
 
     public const int LanDiscoveryPort = 48765;
-    public const string LanDiscoveryRequest = "REMOTECI_DISCOVER_V3";
+    public const string LanDiscoveryRequest = "REMOTECI_DISCOVER_V3_1";
 
     public const string QueryToken = "token";
     public const string HeaderAuthorization = "Authorization";

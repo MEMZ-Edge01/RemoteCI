@@ -1,6 +1,7 @@
 import java.util.Properties
 
-val releaseVersion = providers.gradleProperty("releaseVersion").orNull ?: "0.3.2"
+// 必须与 shared/RemoteCI.Shared/Protocol.cs 的 Protocol.Version 一致。
+val releaseVersion = providers.gradleProperty("releaseVersion").orNull ?: "3.1"
 // versionCode 由版本号推导（major*10000 + minor*100 + patch），随发布自然递增：
 // 避免硬编码导致各版本 APK 携带相同 versionCode、依赖“同版本码覆盖”的脆弱行为。
 val releaseVersionCode = releaseVersion

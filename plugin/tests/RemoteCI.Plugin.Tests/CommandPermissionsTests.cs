@@ -25,9 +25,9 @@ public sealed class CommandPermissionsTests
     }
 
     [Fact]
-    public void BreakingPermissionModelUsesProtocolVersionThree()
+    public void BreakingPermissionModelUsesUnifiedVersionThreePointOne()
     {
-        Assert.Equal(3, Protocol.Version);
-        Assert.Equal("REMOTECI_DISCOVER_V3", Protocol.LanDiscoveryRequest);
+        Assert.Equal("3.1", Protocol.Version);
+        Assert.Equal("REMOTECI_DISCOVER_V3_1", Protocol.LanDiscoveryRequest);
     }
 }

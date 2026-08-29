@@ -1,6 +1,6 @@
-# RemoteCI 协议 v3
+# RemoteCI 协议 V3.1
 
-协议 v3 是服务端、插件和手表必须同时升级的破坏性版本。所有 WebSocket 信封都带 `protocolVersion: 3`、`type`、`messageId`、可选 `replyToMessageId`、时间和 `payload`。v3 拆分了主界面与电源权限，并增加独立扩展权限和逐扩展策略；v1/v2 客户端会收到 `PROTOCOL_VERSION_UNSUPPORTED`，避免旧组件按旧权限语义继续执行命令。
+协议 V3.1 是服务端、插件和手表必须同时升级的破坏性版本，也是三端统一的软件版本。所有 WebSocket 信封都带字符串 `protocolVersion: "3.1"`、`type`、`messageId`、可选 `replyToMessageId`、时间和 `payload`。任一端不是 V3.1 都会收到 `PROTOCOL_VERSION_UNSUPPORTED`，避免旧组件按旧权限语义继续执行命令。
 
 ## 身份与权限
 
@@ -64,7 +64,7 @@
 
 手表可以在登录页扫描同一局域网中的插件，无需手动填写电脑 IP：
 
-1. 手表向固定 UDP 端口 `48765` 发送广播串 `REMOTECI_DISCOVER_V3`；插件应答 JSON `{protocolVersion, instanceName, port}`，`protocolVersion` 为 `3`，`port` 是插件当前局域网 WebSocket 端口。
+1. 手表向固定 UDP 端口 `48765` 发送广播串 `REMOTECI_DISCOVER_V3_1`；插件应答 JSON `{protocolVersion, instanceName, port}`，`protocolVersion` 为字符串 `"3.1"`，`port` 是插件当前局域网 WebSocket 端口。
 2. 用户选中应答条目后，手表连接 `ws://<应答来源地址>:<port>/bootstrap`，插件返回 `connection_bootstrap` 载荷 `{instanceName, cloudServerUrl}`。该端点未认证，只提供云端地址与实例名，密码和会话凭据始终只交给云服务器。
 3. 插件每次云端重连时重新发现本机网卡，通过 `plugin_network_info`（`{lanServerEnabled, addresses[], port}`）上报服务端；服务端归一化后广播给在线手表并缓存最新一份，新连接的手表在 `auth_state` 之后立即收到。手表据此更新局域网候选地址，地址或端口变化且当前走云端中转时自动重试直连。
 
