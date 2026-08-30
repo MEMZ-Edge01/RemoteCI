@@ -26,6 +26,10 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
     private readonly TextBox _pairCodeBox;
     private readonly TextBlock _httpWarning;
     private readonly Button _pushScheduleButton;
+    private readonly Button _testConnectionButton;
+    private readonly TextBlock _connectionStatus;
+    private readonly TextBlock _connectionError;
+    private readonly TextBlock _connectionTestHint;
     private readonly TextBlock _hint;
 
     public RemoteCiSettingsPage(PluginSettings settings, RemoteCiService? service = null)
@@ -52,6 +56,30 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         saveButton.Click += OnSaveClick;
         _pushScheduleButton = new Button { Content = "立即推送当前课表" };
         _pushScheduleButton.Click += OnPushScheduleClick;
+        _testConnectionButton = new Button
+        {
+            Content = "测试服务器连接",
+            IsEnabled = service is not null,
+        };
+        _testConnectionButton.Click += OnTestConnectionClick;
+        _connectionStatus = new TextBlock
+        {
+            Text = "服务器状态：RemoteCI 服务尚未启动",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            FontWeight = Avalonia.Media.FontWeight.SemiBold,
+        };
+        _connectionError = new TextBlock
+        {
+            Text = string.Empty,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Foreground = Avalonia.Media.Brushes.OrangeRed,
+            IsVisible = false,
+        };
+        _connectionTestHint = new TextBlock
+        {
+            Text = service is null ? "打开设置页时未取得 RemoteCI 服务，需重启 ClassIsland 后再测试。" : string.Empty,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
         _hint = new TextBlock { Text = string.Empty, TextWrapping = Avalonia.Media.TextWrapping.Wrap };
 
         var panel = new StackPanel
@@ -62,6 +90,18 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
             {
                 new TextBlock { Text = "RemoteCI 课表手表联动", FontSize = 20, FontWeight = Avalonia.Media.FontWeight.Bold },
                 new TextBlock { Text = "把当前状态和七日课表推送到 Wear OS，支持按权限换课与发送通知。", TextWrapping = Avalonia.Media.TextWrapping.Wrap },
+                new StackPanel
+                {
+                    Spacing = 6,
+                    Children =
+                    {
+                        new TextBlock { Text = "服务器连接", FontSize = 16, FontWeight = Avalonia.Media.FontWeight.SemiBold },
+                        _connectionStatus,
+                        _connectionError,
+                        _testConnectionButton,
+                        _connectionTestHint,
+                    },
+                },
                 new StackPanel
                 {
                     Spacing = 6,
@@ -92,7 +132,9 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         if (_service is not null)
         {
             _service.ScheduleSyncStatusChanged += OnScheduleSyncStatusChanged;
+            _service.CloudConnectionStatusChanged += OnCloudConnectionStatusChanged;
             if (_service.CurrentScheduleSyncStatus is { } current) ApplyScheduleSyncStatus(current);
+            ApplyCloudConnectionStatus(_service.CurrentCloudConnectionStatus);
         }
     }
 
@@ -135,7 +177,29 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
         _settings.PluginPairCode = _pairCodeBox.Text?.Trim() ?? string.Empty;
         // 属性变更已由 Plugin.cs 的 PropertyChanged 订阅自动落盘，无需重复写 Settings.json。
 
-        _hint.Text = "已保存。连接与端口设置在重启 ClassIsland 后生效，云端配对码即时生效。";
+        _hint.Text = "已保存。服务器地址与端口在重启 ClassIsland 后生效；配对码保存后可点击“测试服务器连接”立即尝试配对。";
+    }
+
+    private async void OnTestConnectionClick(object? sender, RoutedEventArgs e)
+    {
+        if (_service is null) return;
+        _testConnectionButton.IsEnabled = false;
+        _connectionTestHint.Text = "正在使用当前已生效的设置测试真实 WebSocket 连接……";
+        try
+        {
+            var result = await _service.TestCloudConnectionAsync();
+            ApplyCloudConnectionStatus(result.Status);
+            _connectionTestHint.Text = result.Message;
+        }
+        catch (Exception ex)
+        {
+            // 非预期 UI 调用异常不泄漏凭据；连接客户端仍会把完整异常写入日志。
+            _connectionTestHint.Text = $"测试失败：{ex.GetType().Name}，请查看 ClassIsland 日志。";
+        }
+        finally
+        {
+            _testConnectionButton.IsEnabled = true;
+        }
     }
 
     private void OnPushScheduleClick(object? sender, RoutedEventArgs e)
@@ -151,6 +215,19 @@ public sealed class RemoteCiSettingsPage : SettingsPageBase
 
     private void OnScheduleSyncStatusChanged(ScheduleSyncStatus status) =>
         Dispatcher.UIThread.Post(() => ApplyScheduleSyncStatus(status));
+
+    private void OnCloudConnectionStatusChanged(CloudConnectionStatus status) =>
+        Dispatcher.UIThread.Post(() => ApplyCloudConnectionStatus(status));
+
+    internal static string ConnectionStatusText(CloudConnectionStatus status) =>
+        $"服务器状态：{status.Summary}";
+
+    private void ApplyCloudConnectionStatus(CloudConnectionStatus status)
+    {
+        _connectionStatus.Text = ConnectionStatusText(status);
+        _connectionError.Text = status.Error is null ? string.Empty : $"最近错误：{status.Error}";
+        _connectionError.IsVisible = status.Error is not null;
+    }
 
     internal static string ScheduleStatusText(ScheduleSyncStatus status) => status.State switch
     {

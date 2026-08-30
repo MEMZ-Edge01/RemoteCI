@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using RemoteCI.Plugin.Services;
 using RemoteCI.Plugin.Settings;
 using RemoteCI.Plugin.Views.SettingsPages;
 using RemoteCI.Shared;
@@ -24,6 +25,28 @@ public sealed class SettingsPageTests
         var page = new RemoteCiSettingsPage(new PluginSettings());
 
         Assert.Contains("立即推送当前课表", ButtonLabels(page.Content));
+    }
+
+    [Fact]
+    public void StandardSettings_ExposesServerConnectionTest()
+    {
+        var page = new RemoteCiSettingsPage(new PluginSettings());
+
+        Assert.Contains("测试服务器连接", ButtonLabels(page.Content));
+    }
+
+    [Fact]
+    public void ConnectionStatusText_ShowsCurrentServerState()
+    {
+        var status = new CloudConnectionStatus(
+            CloudConnectionState.WaitingToRetry,
+            "连接失败，将在 5 秒后自动重试",
+            "WebSocket 连接失败",
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(
+            "服务器状态：连接失败，将在 5 秒后自动重试",
+            RemoteCiSettingsPage.ConnectionStatusText(status));
     }
 
     [Fact]

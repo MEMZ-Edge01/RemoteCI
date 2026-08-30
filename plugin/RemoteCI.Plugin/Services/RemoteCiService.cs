@@ -54,8 +54,11 @@ public sealed class RemoteCiService : IDisposable
     }
 
     public event Action<ScheduleSyncStatus>? ScheduleSyncStatusChanged;
+    public event Action<CloudConnectionStatus>? CloudConnectionStatusChanged;
 
     public ScheduleSyncStatus? CurrentScheduleSyncStatus => _scheduleSync.Current;
+    public CloudConnectionStatus CurrentCloudConnectionStatus =>
+        _cloudClient?.CurrentStatus ?? CloudConnectionStatus.Stopped();
 
     public void Start()
     {
@@ -94,18 +97,17 @@ public sealed class RemoteCiService : IDisposable
             _lanServer.Start();
         }
 
-        if (_settings.EnableCloud)
-        {
-            _cloudClient = new CloudClient(
-                _settings,
-                _accounts,
-                _commandHandler,
-                RequestScheduleSync,
-                _loggerFactory.CreateLogger<CloudClient>(),
-                tokenStore: _tokenStore);
-            _cloudClient.Connected += OnCloudConnected;
-            _ = _cloudClient.StartAsync(_cts.Token);
-        }
+        // 即使云端被开发者开关禁用，也保留客户端状态对象，让普通设置页能明确显示“已关闭”。
+        _cloudClient = new CloudClient(
+            _settings,
+            _accounts,
+            _commandHandler,
+            RequestScheduleSync,
+            _loggerFactory.CreateLogger<CloudClient>(),
+            tokenStore: _tokenStore);
+        _cloudClient.Connected += OnCloudConnected;
+        _cloudClient.ConnectionStatusChanged += OnCloudConnectionStatusChanged;
+        _ = _cloudClient.StartAsync(_cts.Token);
 
         _collector.Start();
         PublishExtensions(); // 注册表可能在连接建立前已就绪，启动时先推送一次当前快照。
@@ -132,8 +134,10 @@ public sealed class RemoteCiService : IDisposable
         _commandHandler.CancelPendingPowerActions();
         if (_cloudClient is { } cloudClient)
         {
+            // Dispose 会发布最终的“已停止”状态，先保留转发订阅供设置页刷新。
             cloudClient.Connected -= OnCloudConnected;
             cloudClient.Dispose();
+            cloudClient.ConnectionStatusChanged -= OnCloudConnectionStatusChanged;
         }
         _cloudClient = null;
         _lanServer?.Dispose();
@@ -161,6 +165,15 @@ public sealed class RemoteCiService : IDisposable
 
         return RequestScheduleSync(ScheduleSyncRequest.Create(ScheduleSyncSource.Plugin));
     }
+
+    /// <summary>由插件设置页发起一次真实 WebSocket 通道测试，并在断线时立即跳过自动重连退避。</summary>
+    public Task<CloudConnectionTestResult> TestCloudConnectionAsync(CancellationToken ct = default) =>
+        _cloudClient is { } cloudClient
+            ? cloudClient.TestConnectionAsync(ct)
+            : Task.FromResult(new CloudConnectionTestResult(
+                false,
+                "测试失败：RemoteCI 服务尚未启动，请重启 ClassIsland。",
+                CloudConnectionStatus.Stopped()));
 
     private void OnSnapshotPushed(ClassStateSnapshot snapshot)
     {
@@ -264,6 +277,9 @@ public sealed class RemoteCiService : IDisposable
 
     // 首次连接或重连时补发当前扩展快照，避免注册早于 WebSocket 就绪时丢失 extensions_sync。
     private void OnCloudConnected(object? sender, EventArgs e) => PublishExtensions();
+
+    private void OnCloudConnectionStatusChanged(CloudConnectionStatus status) =>
+        CloudConnectionStatusChanged?.Invoke(status);
 
     private void PublishExtensions()
     {
