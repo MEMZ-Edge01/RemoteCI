@@ -1,6 +1,6 @@
 id: remoteci.plugin
 name: RemoteCI
-description: 将 ClassIsland 接入 RemoteCI 服务端，使已授权用户可通过 WebUI 或 Wear OS 设备查看课程与七日课表，并执行换课、通知、主界面、音量、电源及插件扩展控制。
+description: 用于接入 RemoteCI 服务端，支持在WearOS手表App上执行换课、通知、主界面显示隐藏、音量、电源及扩展控制。
 entranceAssembly: "RemoteCI.Plugin.dll"
 icon: icon.png
 readme: README.md
@@ -15,3 +15,4 @@ artifactName: RemoteCI.Plugin.cipx
 tagPattern: "3.*.*.*"
 supportedOSPlatforms:
   - Windows
+
