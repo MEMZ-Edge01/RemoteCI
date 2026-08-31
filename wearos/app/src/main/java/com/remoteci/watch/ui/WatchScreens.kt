@@ -923,8 +923,7 @@ internal fun UpdateScreen(
     var state by remember { mutableStateOf<UpdateUiState>(UpdateUiState.Idle) }
 
     fun checkUpdate(): Unit {
-        val allowedVersion = serverVersion
-        if (allowedVersion.isNullOrBlank()) {
+        if (serverVersion.isNullOrBlank()) {
             state = UpdateUiState.Error(context.getString(R.string.update_need_webui))
             return
         }

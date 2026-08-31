@@ -68,10 +68,10 @@ public sealed class SystemConfigModel(
             var comparison = UpdateService.CompareVersions(latestVersion, CurrentVersion);
             CheckMessage = comparison switch
             {
-                > 0 => $"发现新版本 v{latestVersion}。",
-                0 when UpdateOptions.Force => $"当前已是 v{CurrentVersion}，可强制重新下载并覆盖安装。",
-                0 => $"当前已是最新版本 v{CurrentVersion}。",
-                _ => $"所选渠道最新版本 v{latestVersion} 低于当前版本，拒绝降级。",
+                > 0 => $"发现新版本 {latestVersion}。",
+                0 when UpdateOptions.Force => $"当前已是 {CurrentVersion}，可强制重新下载并覆盖安装。",
+                0 => $"当前已是最新版本 {CurrentVersion}。",
+                _ => $"所选渠道最新版本 {latestVersion} 低于当前版本，拒绝降级。",
             };
         }
         catch (Exception ex)
@@ -114,8 +114,8 @@ public sealed class SystemConfigModel(
             var mode = await updates.BeginApplyAsync(prepared, installDirectory, ct);
 
             CheckMessage = mode == UpdateApplyMode.ExternalInstaller
-                ? $"v{latestVersion} 更新包已准备，服务端退出后将完成替换并自动重启，请稍后刷新页面。"
-                : $"v{latestVersion} 更新包已应用，服务端即将重启，请稍后刷新页面。";
+                ? $"{latestVersion} 更新包已准备，服务端退出后将完成替换并自动重启，请稍后刷新页面。"
+                : $"{latestVersion} 更新包已应用，服务端即将重启，请稍后刷新页面。";
             UpdateSucceeded = true;
             _ = Task.Run(async () =>
             {

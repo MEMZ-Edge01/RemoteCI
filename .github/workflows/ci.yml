@@ -24,6 +24,32 @@ jobs:
         run: dotnet build RemoteCI.slnx -c Release
       - name: 测试
         run: dotnet test RemoteCI.slnx -c Release --no-build
+      - name: 验证发布标签解析
+        shell: bash
+        run: |
+          stable_output="$(bash .github/scripts/resolve-release-version.sh 3.2.1.0)"
+          beta_output="$(bash .github/scripts/resolve-release-version.sh v3.2.2-beta.1)"
+          grep -Fxq 'version=3.2.1.0' <<<"$stable_output"
+          grep -Fxq 'channel=stable' <<<"$stable_output"
+          grep -Fxq 'prerelease=false' <<<"$stable_output"
+          grep -Fxq 'version=3.2.2-beta.1' <<<"$beta_output"
+          grep -Fxq 'channel=beta' <<<"$beta_output"
+          grep -Fxq 'prerelease=true' <<<"$beta_output"
+          if bash .github/scripts/resolve-release-version.sh v3.2.1; then
+            echo '旧三段稳定标签不应通过解析' >&2
+            exit 1
+          fi
+      - name: 验证 ClassIsland 市场包
+        run: |
+          market_version="3.2.1.0"
+          cmp -s remoteci.plugin.yml plugin/RemoteCI.Plugin/manifest.yml
+          grep -Fxq "version: ${market_version}" plugin/RemoteCI.Plugin/manifest.yml
+          dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release -t:Rebuild \
+            -p:Version="$market_version" -p:CreateCipx=true
+          pwsh -NoProfile -File plugin/RemoteCI.Plugin/scripts/Test-ClassIslandMarketPackage.ps1 \
+            -PackagePath plugin/RemoteCI.Plugin/cipx/RemoteCI.Plugin.cipx \
+            -ChecksumPath plugin/RemoteCI.Plugin/cipx/checksums.md \
+            -ExpectedVersion "$market_version"
 
   wearos:
     name: wearos
@@ -45,10 +71,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 下载 fnpack 并打包 fpk
+      - name: 下载 fnpack 并打包三种 fpk
         run: |
+          version="0.0.0-fpk-ci"
+          image="ghcr.io/memz-edge01/remoteci:${version}"
           mkdir -p .tools
           curl -fsSL -o .tools/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
           chmod +x .tools/fnpack
-          # 用 0.0.0 做占位版本，只验证打包流程与包结构。
-          REMOTECI_VERSION=0.0.0 bash fnos/build.sh
+          python3 fnos/tests/create-fixture-image.py artifacts/fixture-amd64.tar.gz "$image" amd64
+          python3 fnos/tests/create-fixture-image.py artifacts/fixture-arm64.tar.gz "$image" arm64
+
+          REMOTECI_VERSION="$version" bash fnos/build.sh
+          REMOTECI_VERSION="$version" REMOTECI_FPK_MODE=offline \
+            REMOTECI_FPK_ARCH=amd64 REMOTECI_IMAGE_ARCHIVE=artifacts/fixture-amd64.tar.gz \
+            bash fnos/build.sh
+          REMOTECI_VERSION="$version" REMOTECI_FPK_MODE=offline \
+            REMOTECI_FPK_ARCH=arm64 REMOTECI_IMAGE_ARCHIVE=artifacts/fixture-arm64.tar.gz \
+            bash fnos/build.sh
+
+          python3 fnos/tests/verify-package.py "artifacts/release/RemoteCI-${version}.fpk" "$version" online all
+          python3 fnos/tests/verify-package.py \
+            "artifacts/release/RemoteCI-${version}-fnos-x86_64-offline.fpk" "$version" offline amd64
+          python3 fnos/tests/verify-package.py \
+            "artifacts/release/RemoteCI-${version}-fnos-arm64-offline.fpk" "$version" offline arm64
+          bash fnos/tests/test-offline-lifecycle.sh \
+            "artifacts/release/RemoteCI-${version}.fpk" \
+            "artifacts/release/RemoteCI-${version}-fnos-x86_64-offline.fpk" \
+            "artifacts/release/RemoteCI-${version}-fnos-arm64-offline.fpk" \
+            "$version"

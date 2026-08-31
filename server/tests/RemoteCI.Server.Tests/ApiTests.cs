@@ -702,7 +702,7 @@ public sealed class ApiTests : IClassFixture<TestWebApplicationFactory>
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             var responseHtml = WebUtility.HtmlDecode(await response.Content.ReadAsStringAsync());
-            Assert.Contains("由fnOS应用商店管理", responseHtml);
+            Assert.Contains("由 fnOS 应用中心管理，请从 GitHub Releases 下载 FPK 手动升级。", responseHtml);
         }
         finally
         {

@@ -1,12 +1,13 @@
 name: Release
 
-# 推送 v* 标签时构建四端产物并发布 GitHub Release。
-# 产物：服务端压缩包、插件 CIPX、手表 APK、飞牛 fnOS 应用（.fpk）与 GHCR 多架构镜像。
+# 推送 ClassIsland 四段稳定标签或保留的 Beta 标签时构建四端产物并发布 GitHub Release。
+# 产物：服务端压缩包、插件 CIPX、手表 APK、三种飞牛 fnOS 应用（在线/双架构离线）与 GHCR 多架构镜像。
 # 手表 APK 使用仓库 Secrets 中的签名密钥（ANDROID_KEYSTORE_B64 等）。
 
 on:
   push:
     tags:
+      - "3.*.*.*"
       - "v*"
 
 permissions:
@@ -26,8 +27,7 @@ jobs:
           dotnet-version: "10.0.x"
       - name: Publish 服务端压缩包
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          echo "$version" | grep -Eq '^3\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
           grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
           dotnet publish server/RemoteCI.Server/RemoteCI.Server.csproj -c Release -r ${{ matrix.rid }} \
             --self-contained false -p:Version="$version" -o "publish/${{ matrix.rid }}"
@@ -56,25 +56,32 @@ jobs:
           dotnet-version: "10.0.x"
       - name: 打包 CIPX
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          echo "$version" | grep -Eq '^3\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
           grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
           sed -i "s/^version: .*/version: ${version}/" plugin/RemoteCI.Plugin/manifest.yml
           grep -Fxq "version: ${version}" plugin/RemoteCI.Plugin/manifest.yml
-          dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release \
+          dotnet build plugin/RemoteCI.Plugin/RemoteCI.Plugin.csproj -c Release -t:Rebuild \
             -p:Version="$version" -p:CreateCipx=true
           grep -Fq "RemoteCI.Plugin/${version}" plugin/RemoteCI.Plugin/bin/Release/net8.0/RemoteCI.Plugin.deps.json
           actual_version="$(pwsh -NoProfile -Command "[Diagnostics.FileVersionInfo]::GetVersionInfo('$PWD/plugin/RemoteCI.Plugin/bin/Release/net8.0/RemoteCI.Plugin.dll').ProductVersion.Split('+')[0]")"
           test "$actual_version" = "$version"
           unzip -p plugin/RemoteCI.Plugin/cipx/RemoteCI.Plugin.cipx manifest.yml | grep -Fxq "version: ${version}"
-          cp plugin/RemoteCI.Plugin/cipx/RemoteCI.Plugin.cipx "RemoteCI.Plugin-${version}.cipx"
-          cp plugin/RemoteCI.Plugin/cipx/checksums.md "RemoteCI.Plugin-${version}.checksums.md"
+          cp plugin/RemoteCI.Plugin/cipx/RemoteCI.Plugin.cipx RemoteCI.Plugin.cipx
+          cp plugin/RemoteCI.Plugin/cipx/checksums.md checksums.md
+          cp plugin/RemoteCI.Plugin/manifest.yml remoteci.plugin.yml
+          if [[ "$channel" == "stable" ]]; then
+            pwsh -NoProfile -File plugin/RemoteCI.Plugin/scripts/Test-ClassIslandMarketPackage.ps1 \
+              -PackagePath RemoteCI.Plugin.cipx \
+              -ChecksumPath checksums.md \
+              -ExpectedVersion "$version"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: plugin-cipx
           path: |
-            RemoteCI.Plugin-*.cipx
-            RemoteCI.Plugin-*.checksums.md
+            RemoteCI.Plugin.cipx
+            checksums.md
+            remoteci.plugin.yml
 
   build-wearos:
     name: 手表 APK
@@ -109,8 +116,7 @@ jobs:
       - name: 构建 Release APK
         working-directory: wearos
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          echo "$version" | grep -Eq '^3\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          eval "$(bash ../.github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
           grep -Fq 'const val VERSION = 3' app/src/main/java/com/remoteci/watch/data/Protocol.kt
           chmod +x gradlew
           ./gradlew :app:assembleRelease -PreleaseVersion="$version" --console=plain
@@ -119,7 +125,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
           cp wearos/app/build/outputs/apk/release/app-release.apk "RemoteCI.Watch-${version}.apk"
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           "$apksigner" verify --print-certs "RemoteCI.Watch-${version}.apk"
@@ -167,10 +173,11 @@ jobs:
       - name: 提取版本号
         id: meta
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          echo "$version" | grep -Eq '^3\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$'
+          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
           grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: 登录 GHCR
@@ -212,16 +219,78 @@ jobs:
             -H 'Accept: application/vnd.oci.image.index.v1+json' \
             "https://ghcr.io/v2/memz-edge01/remoteci/manifests/$version" \
             >/dev/null || {
-              echo "::error::GHCR 镜像 $version 无法匿名拉取，fnOS 将无法安装"
+              echo "::error::GHCR 镜像 $version 无法匿名拉取，fnOS 在线 FPK 将无法安装"
               exit 1
             }
-      - name: 下载 fnpack 并打包 fpk
+      - name: 验证两种架构镜像并导出离线归档
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          image="ghcr.io/memz-edge01/remoteci:${version}"
+          mkdir -p artifacts/fnos-images
+          container=""
+          cleanup() {
+            if [ -n "$container" ]; then docker rm -f "$container" >/dev/null 2>&1 || true; fi
+            docker image rm "$image" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for arch in amd64 arm64; do
+            docker pull --platform "linux/${arch}" "$image"
+            test "$(docker image inspect --format '{{.Architecture}}' "$image")" = "$arch"
+
+            container="remoteci-release-${arch}"
+            docker run --rm -d --platform "linux/${arch}" --name "$container" \
+              -e REMOTECI_ADMIN_PASSWORD=ReleaseSmokeAdmin \
+              -e REMOTECI_PLUGIN_PAIR_CODE=ReleaseSmokePair \
+              -p 127.0.0.1::8080 "$image"
+            host_port="$(docker port "$container" 8080/tcp | sed -n 's/.*://p' | head -n 1)"
+            ready=0
+            for _ in $(seq 1 90); do
+              if curl -fsS "http://127.0.0.1:${host_port}/api/health" >/dev/null; then
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$ready" -ne 1 ]; then
+              docker logs "$container"
+              echo "::error::${arch} 容器未在 90 秒内通过 /api/health"
+              exit 1
+            fi
+            docker rm -f "$container" >/dev/null
+            container=""
+
+            docker save "$image" | gzip -1 > "artifacts/fnos-images/remoteci-${version}-${arch}.tar.gz"
+            gzip -t "artifacts/fnos-images/remoteci-${version}-${arch}.tar.gz"
+            docker image rm "$image" >/dev/null
+          done
+      - name: 下载 fnpack 并打包三种 fpk
         run: |
           mkdir -p .tools
           curl -fsSL -o .tools/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
           chmod +x .tools/fnpack
-          REMOTECI_VERSION="${{ steps.meta.outputs.version }}" bash fnos/build.sh
-          test -f "artifacts/release/RemoteCI-${{ steps.meta.outputs.version }}.fpk"
+          version="${{ steps.meta.outputs.version }}"
+          REMOTECI_VERSION="$version" bash fnos/build.sh
+          REMOTECI_VERSION="$version" REMOTECI_FPK_MODE=offline \
+            REMOTECI_FPK_ARCH=amd64 \
+            REMOTECI_IMAGE_ARCHIVE="artifacts/fnos-images/remoteci-${version}-amd64.tar.gz" \
+            bash fnos/build.sh
+          REMOTECI_VERSION="$version" REMOTECI_FPK_MODE=offline \
+            REMOTECI_FPK_ARCH=arm64 \
+            REMOTECI_IMAGE_ARCHIVE="artifacts/fnos-images/remoteci-${version}-arm64.tar.gz" \
+            bash fnos/build.sh
+
+          python3 fnos/tests/verify-package.py "artifacts/release/RemoteCI-${version}.fpk" "$version" online all
+          python3 fnos/tests/verify-package.py \
+            "artifacts/release/RemoteCI-${version}-fnos-x86_64-offline.fpk" "$version" offline amd64
+          python3 fnos/tests/verify-package.py \
+            "artifacts/release/RemoteCI-${version}-fnos-arm64-offline.fpk" "$version" offline arm64
+          REMOTECI_TEST_FAILURE_CASES=0 bash fnos/tests/test-offline-lifecycle.sh \
+            "artifacts/release/RemoteCI-${version}.fpk" \
+            "artifacts/release/RemoteCI-${version}-fnos-x86_64-offline.fpk" \
+            "artifacts/release/RemoteCI-${version}-fnos-arm64-offline.fpk" \
+            "$version"
       - uses: actions/upload-artifact@v4
         with:
           name: fnos-fpk
@@ -254,22 +323,30 @@ jobs:
           path: artifacts/fnos-fpk
       - name: 校验发布产物版本一致
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
           test -f "artifacts/server-linux-x64/RemoteCI.Server-${version}-linux-x64.zip"
           test -f "artifacts/server-win-x64/RemoteCI.Server-${version}-win-x64.zip"
-          test -f "artifacts/plugin-cipx/RemoteCI.Plugin-${version}.cipx"
+          test -f artifacts/plugin-cipx/RemoteCI.Plugin.cipx
+          test -f artifacts/plugin-cipx/checksums.md
+          test -f artifacts/plugin-cipx/remoteci.plugin.yml
           test -f "artifacts/watch-apk/RemoteCI.Watch-${version}.apk"
           test -f "artifacts/fnos-fpk/RemoteCI-${version}.fpk"
+          test -f "artifacts/fnos-fpk/RemoteCI-${version}-fnos-x86_64-offline.fpk"
+          test -f "artifacts/fnos-fpk/RemoteCI-${version}-fnos-arm64-offline.fpk"
+          grep -Fq '<!-- CLASSISLAND_PKG_MD5 {"RemoteCI.Plugin.cipx":"' artifacts/plugin-cipx/checksums.md
       - name: 发布
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/server-linux-x64/**
             artifacts/server-win-x64/**
-            artifacts/plugin-cipx/**
+            artifacts/plugin-cipx/RemoteCI.Plugin.cipx
+            artifacts/plugin-cipx/checksums.md
+            artifacts/plugin-cipx/remoteci.plugin.yml
             artifacts/watch-apk/**
             artifacts/fnos-fpk/**
+          body_path: artifacts/plugin-cipx/checksums.md
           generate_release_notes: true
-          # 含预发布标识（如 v3.2.0-beta.1）的 tag 必须标记为 prerelease，
-          # 否则会被稳定渠道客户端当作正式版误装。
-          prerelease: ${{ contains(github.ref, '-') }}
+          fail_on_unmatched_files: true
+          # 只有 v3.x.x-beta.y 是预发布，稳定四段标签必须进入正式渠道。
+          prerelease: ${{ contains(github.ref_name, '-') }}

@@ -147,7 +147,7 @@
     <section class="dashboard-panel system-panel">
         <header class="panel-heading"><div><p class="eyebrow">SYSTEM</p><h2>系统信息</h2></div></header>
         <dl class="system-table">
-            <div><dt>服务端版本</dt><dd>v@(Model.ServerVersion)</dd></div><div><dt>协议版本</dt><dd>v@(Protocol.Version)</dd></div>
+            <div><dt>服务端版本</dt><dd>@(Model.ServerVersion)</dd></div><div><dt>协议版本</dt><dd>v@(Protocol.Version)</dd></div>
             <div><dt>在线手表</dt><dd>@Model.WatchConnections</dd></div><div><dt>账号数量</dt><dd>@Model.AccountCount</dd></div>
             <div><dt>插件状态</dt><dd><span class="inline-status @(Model.PluginOnline ? "online" : "offline")">@(Model.PluginOnline ? "在线" : Model.PluginProtocolMismatch is null ? "离线" : "协议不匹配")</span></dd></div>
         </dl>
@@ -169,7 +169,7 @@
                         <article>
                             <div>
                                 <strong>@(peer.Role == PeerRole.Plugin ? "插件" : "手表") · @peer.DisplayName @(peer.IsPrimaryPlugin ? "（主插件）" : "")</strong>
-                                <small>软件 v@(peer.SoftwareVersion ?? "未知") · @(peer.IsExplicit ? "显式上报" : "V3 基础回退") · 连接 @(peer.ConnectionId.ToString("N")[..8])</small>
+                                <small>软件 @(peer.SoftwareVersion ?? "未知") · @(peer.IsExplicit ? "显式上报" : "V3 基础回退") · 连接 @(peer.ConnectionId.ToString("N")[..8])</small>
                                 <small>有效：@(peer.EffectiveCapabilities.Count == 0 ? "无" : Model.FormatCapabilities(peer.EffectiveCapabilities))</small>
                                 @if (peer.MissingCapabilities.Count > 0)
                                 {
@@ -208,4 +208,4 @@
     }
 </div>
 
-<footer class="workspace-footer"><span><strong>RemoteCI <small>v@(Model.ServerVersion)</small></strong> 远程课堂控制系统</span><span>@DateTimeOffset.Now.ToLocalTime().ToString("yyyy-MM-dd")</span></footer>
+<footer class="workspace-footer"><span><strong>RemoteCI <small>@(Model.ServerVersion)</small></strong> 远程课堂控制系统</span><span>@DateTimeOffset.Now.ToLocalTime().ToString("yyyy-MM-dd")</span></footer>

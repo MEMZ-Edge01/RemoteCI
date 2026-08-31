@@ -20,6 +20,9 @@ class UpdateManagerTest {
         assertTrue(UpdateManager.isNewer("0.10.0", "0.9.0"))
         assertFalse(UpdateManager.isNewer("0.2.0", "0.2.0"))
         assertFalse(UpdateManager.isNewer("0.2.0", "0.3.0"))
+        assertTrue(UpdateManager.isNewer("3.2.1.0", "3.2.0.9"))
+        assertTrue(UpdateManager.isNewer("3.2.1.1", "3.2.1.0"))
+        assertFalse(UpdateManager.isNewer("3.2.1.0", "3.2.1"))
     }
 
     @Test
@@ -57,28 +60,40 @@ class UpdateManagerTest {
     @Test
     fun `selectCompatibleUpdate allows newer version within protocol three`() {
         val releases = listOf(
-            release("v3.4.0"),
-            release("v3.2.0"),
-            release("v3.1.0"),
+            release("3.4.0.0"),
+            release("3.2.0.0"),
+            release("3.1.0.0"),
         )
 
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = releases,
-            currentVersion = "3.1.0",
+            currentVersion = "3.1.0.0",
         )
 
-        assertEquals("v3.4.0", selected?.release?.tagName)
-        assertEquals("RemoteCI.Watch-3.4.0.apk", selected?.asset?.name)
+        assertEquals("3.4.0.0", selected?.release?.tagName)
+        assertEquals("RemoteCI.Watch-3.4.0.0.apk", selected?.asset?.name)
     }
 
     @Test
     fun `selectCompatibleUpdate excludes protocol four`() {
         val selected = UpdateManager.selectCompatibleUpdate(
-            releases = listOf(release("v4.0.0")),
-            currentVersion = "3.1.0",
+            releases = listOf(release("4.0.0.0")),
+            currentVersion = "3.1.0.0",
         )
 
         assertNull(selected)
+    }
+
+    @Test
+    fun `selectCompatibleUpdate accepts canonical stable and rejects legacy v tag`() {
+        val legacyRelease = release("v3.2.0")
+
+        val selected = UpdateManager.selectCompatibleUpdate(
+            releases = listOf(release("3.2.0.0"), legacyRelease),
+            currentVersion = "3.1.0.0",
+        )
+
+        assertEquals("3.2.0.0", selected?.release?.tagName)
     }
 
     @Test
@@ -86,13 +101,13 @@ class UpdateManagerTest {
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = listOf(
                 release("v0.3.2-beta.1", prerelease = true),
-                release("v3.2.0", draft = true),
-                release("v3.1.1"),
+                release("3.2.0.0", draft = true),
+                release("3.1.1.0"),
             ),
-            currentVersion = "3.1.0",
+            currentVersion = "3.1.0.0",
         )
 
-        assertEquals("v3.1.1", selected?.release?.tagName)
+        assertEquals("3.1.1.0", selected?.release?.tagName)
     }
 
     @Test
@@ -100,14 +115,14 @@ class UpdateManagerTest {
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = listOf(
                 release("v3.2.0-beta.1", prerelease = true),
-                release("v3.1.1"),
+                release("3.1.1.0"),
             ),
-            currentVersion = "3.1.0",
+            currentVersion = "3.1.0.0",
             channel = UpdateChannel.STABLE,
             force = false,
         )
 
-        assertEquals("v3.1.1", selected?.release?.tagName)
+        assertEquals("3.1.1.0", selected?.release?.tagName)
     }
 
     @Test
@@ -116,9 +131,9 @@ class UpdateManagerTest {
             releases = listOf(
                 release("v3.3.0-beta.1", prerelease = true, draft = true),
                 release("v3.2.0-beta.1", prerelease = true),
-                release("v3.1.1"),
+                release("3.1.1.0"),
             ),
-            currentVersion = "3.1.0",
+            currentVersion = "3.1.0.0",
             channel = UpdateChannel.BETA,
             force = false,
         )
@@ -129,19 +144,19 @@ class UpdateManagerTest {
     @Test
     fun `force update allows same version but never downgrades`() {
         val sameVersion = UpdateManager.selectCompatibleUpdate(
-            releases = listOf(release("v3.1.0")),
-            currentVersion = "3.1.0",
+            releases = listOf(release("3.1.0.0")),
+            currentVersion = "3.1.0.0",
             channel = UpdateChannel.STABLE,
             force = true,
         )
         val downgrade = UpdateManager.selectCompatibleUpdate(
-            releases = listOf(release("v3.0.9")),
-            currentVersion = "3.1.0",
+            releases = listOf(release("3.0.9.0")),
+            currentVersion = "3.1.0.0",
             channel = UpdateChannel.STABLE,
             force = true,
         )
 
-        assertEquals("v3.1.0", sameVersion?.release?.tagName)
+        assertEquals("3.1.0.0", sameVersion?.release?.tagName)
         assertNull(downgrade)
     }
 
@@ -149,15 +164,15 @@ class UpdateManagerTest {
     fun `beta channel can select newer protocol three release`() {
         val selected = UpdateManager.selectCompatibleUpdate(
             releases = listOf(
-                release("v3.2.0"),
+                release("3.2.0.0"),
                 release("v3.2.0-beta.2", prerelease = true),
             ),
-            currentVersion = "3.1.0",
+            currentVersion = "3.1.0.0",
             channel = UpdateChannel.BETA,
             force = true,
         )
 
-        assertEquals("v3.2.0", selected?.release?.tagName)
+        assertEquals("3.2.0.0", selected?.release?.tagName)
     }
 
     private fun release(
