@@ -28,7 +28,7 @@ else
   exit 1
 fi
 
-# 输出经过严格校验的 shell 赋值，调用方用 eval 接收。
+# 直接执行时输出经过严格校验的 shell 赋值；Release workflow 通过 source 读取同名变量。
 printf 'version=%q\n' "$version"
 printf 'channel=%q\n' "$channel"
 printf 'prerelease=%q\n' "$prerelease"

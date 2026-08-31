@@ -15,4 +15,3 @@ artifactName: RemoteCI.Plugin.cipx
 tagPattern: "3.*.*.*"
 supportedOSPlatforms:
   - Windows
-

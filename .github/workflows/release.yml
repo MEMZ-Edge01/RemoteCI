@@ -27,7 +27,7 @@ jobs:
           dotnet-version: "10.0.x"
       - name: Publish 服务端压缩包
         run: |
-          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
+          source .github/scripts/resolve-release-version.sh "$GITHUB_REF_NAME" >/dev/null
           grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
           dotnet publish server/RemoteCI.Server/RemoteCI.Server.csproj -c Release -r ${{ matrix.rid }} \
             --self-contained false -p:Version="$version" -o "publish/${{ matrix.rid }}"
@@ -56,7 +56,7 @@ jobs:
           dotnet-version: "10.0.x"
       - name: 打包 CIPX
         run: |
-          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
+          source .github/scripts/resolve-release-version.sh "$GITHUB_REF_NAME" >/dev/null
           grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
           sed -i "s/^version: .*/version: ${version}/" plugin/RemoteCI.Plugin/manifest.yml
           grep -Fxq "version: ${version}" plugin/RemoteCI.Plugin/manifest.yml
@@ -116,7 +116,7 @@ jobs:
       - name: 构建 Release APK
         working-directory: wearos
         run: |
-          eval "$(bash ../.github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
+          source ../.github/scripts/resolve-release-version.sh "$GITHUB_REF_NAME" >/dev/null
           grep -Fq 'const val VERSION = 3' app/src/main/java/com/remoteci/watch/data/Protocol.kt
           chmod +x gradlew
           ./gradlew :app:assembleRelease -PreleaseVersion="$version" --console=plain
@@ -125,7 +125,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
+          source .github/scripts/resolve-release-version.sh "$GITHUB_REF_NAME" >/dev/null
           cp wearos/app/build/outputs/apk/release/app-release.apk "RemoteCI.Watch-${version}.apk"
           apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
           "$apksigner" verify --print-certs "RemoteCI.Watch-${version}.apk"
@@ -173,7 +173,7 @@ jobs:
       - name: 提取版本号
         id: meta
         run: |
-          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
+          source .github/scripts/resolve-release-version.sh "$GITHUB_REF_NAME" >/dev/null
           grep -Fq 'public const int Version = 3;' shared/RemoteCI.Shared/Protocol.cs
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
@@ -323,7 +323,7 @@ jobs:
           path: artifacts/fnos-fpk
       - name: 校验发布产物版本一致
         run: |
-          eval "$(bash .github/scripts/resolve-release-version.sh \"$GITHUB_REF_NAME\")"
+          source .github/scripts/resolve-release-version.sh "$GITHUB_REF_NAME" >/dev/null
           test -f "artifacts/server-linux-x64/RemoteCI.Server-${version}-linux-x64.zip"
           test -f "artifacts/server-win-x64/RemoteCI.Server-${version}-win-x64.zip"
           test -f artifacts/plugin-cipx/RemoteCI.Plugin.cipx

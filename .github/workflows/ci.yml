@@ -35,6 +35,13 @@ jobs:
           grep -Fxq 'version=3.2.2-beta.1' <<<"$beta_output"
           grep -Fxq 'channel=beta' <<<"$beta_output"
           grep -Fxq 'prerelease=true' <<<"$beta_output"
+          (
+            GITHUB_REF_NAME=3.2.1.1
+            source .github/scripts/resolve-release-version.sh "$GITHUB_REF_NAME" >/dev/null
+            test "$version" = '3.2.1.1'
+            test "$channel" = 'stable'
+            test "$prerelease" = 'false'
+          )
           if bash .github/scripts/resolve-release-version.sh v3.2.1; then
             echo '旧三段稳定标签不应通过解析' >&2
             exit 1
