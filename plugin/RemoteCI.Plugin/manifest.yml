@@ -1,5 +1,5 @@
 id: remoteci.plugin
-name: 远程控制RemoteCI
+name: RemoteCI
 description: 在手表上查看与操控你的课表
 entranceAssembly: "RemoteCI.Plugin.dll"
 icon: icon.png
