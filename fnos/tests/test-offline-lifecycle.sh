@@ -11,7 +11,7 @@ ONLINE_FPK="$(realpath "$1")"
 X86_FPK="$(realpath "$2")"
 ARM_FPK="$(realpath "$3")"
 VERSION="$4"
-IMAGE_TAG="ghcr.io/memz-edge01/remoteci:$VERSION"
+IMAGE_TAG="ghcr.io/edge-hh/remoteci:$VERSION"
 WORK="$(mktemp -d)"
 trap 'docker image rm "$IMAGE_TAG" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 

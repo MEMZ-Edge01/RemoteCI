@@ -35,8 +35,8 @@
 3. 构建单架构离线包时，先用 `docker save` 导出带有正式版本标签的镜像，再指定模式、架构和归档路径：
 
    ```bash
-   docker pull --platform linux/amd64 ghcr.io/memz-edge01/remoteci:3.2.1.2
-   docker save ghcr.io/memz-edge01/remoteci:3.2.1.2 | gzip -1 > remoteci-amd64.tar.gz
+   docker pull --platform linux/amd64 ghcr.io/edge-hh/remoteci:3.2.1.2
+   docker save ghcr.io/edge-hh/remoteci:3.2.1.2 | gzip -1 > remoteci-amd64.tar.gz
    REMOTECI_VERSION=3.2.1.2 \
      REMOTECI_FPK_MODE=offline \
      REMOTECI_FPK_ARCH=amd64 \

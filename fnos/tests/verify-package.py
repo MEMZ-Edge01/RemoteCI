@@ -34,7 +34,7 @@ def main() -> None:
     package_path = pathlib.Path(sys.argv[1])
     version, mode, expected_arch = sys.argv[2:]
     expected_platform = {"all": "all", "amd64": "x86", "arm64": "arm"}[expected_arch]
-    expected_tag = f"ghcr.io/memz-edge01/remoteci:{version}"
+    expected_tag = f"ghcr.io/edge-hh/remoteci:{version}"
 
     with tarfile.open(package_path, "r:*") as package:
         package_names = package.getnames()

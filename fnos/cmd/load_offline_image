@@ -56,14 +56,14 @@ IMAGE_ID="$(metadata_value IMAGE_ID)"
 IMAGE_ARCHIVE_SHA256="$(metadata_value IMAGE_ARCHIVE_SHA256)"
 
 case "$IMAGE_TAG" in
-  ghcr.io/memz-edge01/remoteci:*) ;;
+  ghcr.io/edge-hh/remoteci:*) ;;
   *) fail "镜像标签不属于 RemoteCI：$IMAGE_TAG" ;;
 esac
 printf '%s\n' "$IMAGE_ID" | grep -Eq '^sha256:[0-9a-f]{64}$' \
   || fail "镜像 ID 格式无效"
 printf '%s\n' "$IMAGE_ARCHIVE_SHA256" | grep -Eq '^[0-9a-f]{64}$' \
   || fail "镜像归档 SHA-256 格式无效"
-if [ -n "${TRIM_APPVER:-}" ] && [ "$IMAGE_TAG" != "ghcr.io/memz-edge01/remoteci:$TRIM_APPVER" ]; then
+if [ -n "${TRIM_APPVER:-}" ] && [ "$IMAGE_TAG" != "ghcr.io/edge-hh/remoteci:$TRIM_APPVER" ]; then
   fail "镜像版本与应用版本 $TRIM_APPVER 不一致"
 fi
 

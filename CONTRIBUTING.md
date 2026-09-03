@@ -1,7 +1,7 @@
 # 贡献指南
 
 感谢帮助改进 RemoteCI。本仓库包含服务端、Wear OS 手表端与 ClassIsland 插件；
-用户文档位于独立的 [RemoteCI-Docs](https://github.com/MEMZ-Edge01/RemoteCI-Docs) 仓库。
+用户文档位于独立的 [RemoteCI-Docs](https://github.com/Edge-HH/RemoteCI-Docs) 仓库。
 
 ## 开发环境
 

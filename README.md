@@ -1,7 +1,7 @@
 # RemoteCI
 
-[![CI](https://github.com/MEMZ-Edge01/RemoteCI/actions/workflows/ci.yml/badge.svg)](https://github.com/MEMZ-Edge01/RemoteCI/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/MEMZ-Edge01/RemoteCI?include_prereleases)](https://github.com/MEMZ-Edge01/RemoteCI/releases)
+[![CI](https://github.com/Edge-HH/RemoteCI/actions/workflows/ci.yml/badge.svg)](https://github.com/Edge-HH/RemoteCI/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Edge-HH/RemoteCI?include_prereleases)](https://github.com/Edge-HH/RemoteCI/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 > 把 ClassIsland 的课表、通知和受控操作，安全地延伸到 Web 与 Wear OS。
@@ -60,7 +60,7 @@ ASP.NET Core 服务端 ─── WebUI
 
 ### 1. 获取发布包
 
-前往 [GitHub Releases](https://github.com/MEMZ-Edge01/RemoteCI/releases) 下载与你的平台对应的组件：
+前往 [GitHub Releases](https://github.com/Edge-HH/RemoteCI/releases) 下载与你的平台对应的组件：
 
 - `RemoteCI.Plugin.cipx`：ClassIsland 插件市场使用的固定名称插件包。
 - `RemoteCI.Watch-<版本>.apk`：Wear OS 应用。

@@ -22,7 +22,7 @@ FNPACK="${2:-${FNPACK:-$ROOT/.tools/fnpack}}"
 FPK_MODE="${REMOTECI_FPK_MODE:-online}"
 FPK_ARCH="${REMOTECI_FPK_ARCH:-}"
 IMAGE_ARCHIVE="${REMOTECI_IMAGE_ARCHIVE:-}"
-IMAGE_TAG="ghcr.io/memz-edge01/remoteci:$VERSION"
+IMAGE_TAG="ghcr.io/edge-hh/remoteci:$VERSION"
 
 case "$FPK_MODE" in
   online)

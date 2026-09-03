@@ -81,7 +81,7 @@ jobs:
       - name: 下载 fnpack 并打包三种 fpk
         run: |
           version="0.0.0-fpk-ci"
-          image="ghcr.io/memz-edge01/remoteci:${version}"
+          image="ghcr.io/edge-hh/remoteci:${version}"
           mkdir -p .tools
           curl -fsSL -o .tools/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
           chmod +x .tools/fnpack

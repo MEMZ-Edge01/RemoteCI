@@ -94,7 +94,7 @@ docker compose start remoteci
 ### 7.1 WebUI（服务端）更新
 
 管理员登录后在“系统配置 → 系统更新”中点击“检查更新”，页面会从 GitHub 仓库
-`MEMZ-Edge01/RemoteCI` 读取版本和更新说明。默认“正式版”渠道只检查非预发布 release；
+`Edge-HH/RemoteCI` 读取版本和更新说明。默认“正式版”渠道只检查非预发布 release；
 选择“Beta 版”后会同时检查正式版和预发布 release。发现新版本后点击
 “下载并更新”，服务端会下载当前平台（linux-x64 / win-x64）的更新包并就地覆盖，
 然后自动退出进程。Docker 的 `restart: unless-stopped` 策略会以新文件重新启动容器；
